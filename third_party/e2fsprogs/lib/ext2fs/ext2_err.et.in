@@ -1,0 +1,231 @@
+#
+# ext2_err.et.in --- error table for the ext2fs library
+#
+	error_table ext2
+
+ec	EXT2_ET_BASE,
+	"EXT2FS Library version 1.47.2"
+
+ec	EXT2_ET_MAGIC_EXT2FS_FILSYS,
+	"Wrong magic number for ext2_filsys structure"
+
+ec	EXT2_ET_MAGIC_BADBLOCKS_LIST,
+	"Wrong magic number for badblocks_list structure"
+
+ec	EXT2_ET_MAGIC_BADBLOCKS_ITERATE,
+	"Wrong magic number for badblocks_iterate structure"
+
+ec	EXT2_ET_MAGIC_INODE_SCAN,
+	"Wrong magic number for inode_scan structure"
+
+ec	EXT2_ET_MAGIC_IO_CHANNEL,
+	"Wrong magic number for io_channel structure"
+
+ec	EXT2_ET_MAGIC_IO_MANAGER,
+	"Wrong magic number for io_manager structure"
+
+ec	EXT2_ET_MAGIC_BLOCK_BITMAP,
+	"Wrong magic number for block_bitmap structure"
+
+ec	EXT2_ET_MAGIC_INODE_BITMAP,
+	"Wrong magic number for inode_bitmap structure"
+
+ec	EXT2_ET_MAGIC_GENERIC_BITMAP,
+	"Wrong magic number for generic_bitmap structure"
+
+ec	EXT2_ET_MAGIC_TEST_IO_CHANNEL,
+	"Wrong magic number for test_io_channel structure"
+
+ec	EXT2_ET_MAGIC_DBLIST,
+	"Wrong magic number for ext2_dblist structure"
+
+ec	EXT2_ET_MAGIC_ICOUNT,
+	"Wrong magic number for icount structure"
+
+ec	EXT2_ET_MAGIC_PQ_IO_CHANNEL,
+	"Wrong magic number for powerquest_io_channel structure"
+
+ec	EXT2_ET_MAGIC_EXT2_FILE,
+	"Wrong magic number for ext2_file_t structure"
+
+ec	EXT2_ET_MAGIC_E2IMAGE,
+	"Wrong magic number for e2image header"
+
+ec	EXT2_ET_MAGIC_INODE_IO_CHANNEL,
+	"Wrong magic number for inode_io_channel structure"
+
+ec	EXT2_ET_MAGIC_EXTENT_HANDLE,
+	"Wrong magic number for ext2_extent_handle structure"
+
+ec	EXT2_ET_BAD_MAGIC,
+	"Bad magic number in super-block"
+
+ec	EXT2_ET_REV_TOO_HIGH,
+	"Filesystem revision too high"
+
+ec	EXT2_ET_RO_FILSYS,
+	"Attempt to write to filesystem opened read-only"
+
+ec	EXT2_ET_GDESC_READ,
+	"Can't read group descriptors"
+
+ec	EXT2_ET_GDESC_WRITE,
+	"Can't write group descriptors"
+
+ec	EXT2_ET_GDESC_BAD_BLOCK_MAP,
+	"Corrupt group descriptor: bad block for block bitmap"
+
+ec	EXT2_ET_GDESC_BAD_INODE_MAP,
+	"Corrupt group descriptor: bad block for inode bitmap"
+
+ec	EXT2_ET_GDESC_BAD_INODE_TABLE,
+	"Corrupt group descriptor: bad block for inode table"
+
+ec	EXT2_ET_UNEXPECTED_BLOCK_SIZE,
+	"Unexpected block size in superblock"
+
+ec	EXT2_ET_DIR_CORRUPTED,
+	"Ext2 directory block appears corrupted"
+
+ec	EXT2_ET_SHORT_READ,
+	"Attempt to read block from filesystem resulted in short read"
+
+ec	EXT2_ET_SHORT_WRITE,
+	"Attempt to write block from filesystem resulted in short write"
+
+ec	EXT2_ET_DIR_NO_SPACE,
+	"No free space in the directory"
+
+ec	EXT2_ET_NO_INODE_BITMAP,
+	"Inode bitmap not loaded"
+
+ec	EXT2_ET_NO_BLOCK_BITMAP,
+	"Block bitmap not loaded"
+
+ec	EXT2_ET_BAD_INODE_NUM,
+	"Illegal inode number"
+
+ec	EXT2_ET_BAD_BLOCK_NUM,
+	"Illegal block number"
+
+ec	EXT2_ET_EXPAND_DIR_ERR,
+	"Internal error in ext2fs_expand_dir"
+
+ec	EXT2_ET_TOOBIG,
+	"File too big"
+
+ec	EXT2_ET_NO_DIRECTORY,
+	"Not a directory"
+
+ec	EXT2_ET_INVALID_ARGUMENT,
+	"Invalid argument passed to ext2 library"
+
+ec	EXT2_ET_NO_MEMORY,
+	"Memory allocation failed"
+
+ec	EXT2_ET_UNIMPLEMENTED,
+	"Function not implemented"
+
+ec	EXT2_ET_CANCEL_REQUESTED,
+	"Operation cancelled"
+
+ec	EXT2_ET_FILE_NOT_FOUND,
+	"File not found"
+
+ec	EXT2_ET_DIR_EXISTS,
+	"Directory entry already exists"
+
+ec	EXT2_ET_FILE_EXISTS,
+	"File already exists"
+
+ec	EXT2_ET_LLSEEK_FAILED,
+	"Seek outside bounds or llseek failed"
+
+ec	EXT2_ET_NO_FREE_SPACE,
+	"Could not allocate block in ext2 filesystem"
+
+ec	EXT2_ET_INODE_ALLOC_FAIL,
+	"Could not allocate inode in ext2 filesystem"
+
+ec	EXT2_ET_BLOCK_ALLOC_FAIL,
+	"Could not allocate block in ext2 filesystem"
+
+ec	EXT2_ET_INODE_UNINIT,
+	"Inode bitmap not initialized"
+
+ec	EXT2_ET_BLOCK_UNINIT,
+	"Block bitmap not initialized"
+
+ec	EXT2_ET_SYMLINK_LOOP,
+	"Too many symbolic links encountered"
+
+ec	EXT2_ET_FILE_TOO_BIG,
+	"File size exceeds filesystem limits"
+
+ec	EXT2_ET_IS_A_DIR,
+	"Is a directory"
+
+ec	EXT2_ET_DIR_NOT_EMPTY,
+	"Directory not empty"
+
+ec	EXT2_ET_EXTENT_HEADER_BAD,
+	"Corrupt extent header"
+
+ec	EXT2_ET_EXTENT_INDEX_BAD,
+	"Corrupt extent index"
+
+ec	EXT2_ET_EXTENT_LEAF_BAD,
+	"Corrupt extent leaf"
+
+ec	EXT2_ET_EXTENT_NO_SPACE,
+	"No free space in extent node"
+
+ec	EXT2_ET_INODE_NOT_EXTENT,
+	"Inode does not use extents"
+
+ec	EXT2_ET_EXTENT_NOT_FOUND,
+	"Extent not found"
+
+ec	EXT2_ET_OP_NOT_SUPPORTED,
+	"Operation not supported"
+
+ec	EXT2_ET_UNSUPP_FEATURE,
+	"Filesystem has unsupported feature(s)"
+
+ec	EXT2_ET_RO_UNSUPP_FEATURE,
+	"Filesystem has unsupported read-only feature(s)"
+
+ec	EXT2_ET_SB_CSUM_INVALID,
+	"Superblock checksum does not match superblock"
+
+ec	EXT2_ET_GDESC_CSUM_INVALID,
+	"Group descriptor checksum does not match group descriptor"
+
+ec	EXT2_ET_INODE_CSUM_INVALID,
+	"Inode checksum does not match inode"
+
+ec	EXT2_ET_EXTENT_CSUM_INVALID,
+	"Extent block checksum does not match extent block"
+
+ec	EXT2_ET_DIR_CSUM_INVALID,
+	"Directory block checksum does not match directory block"
+
+ec	EXT2_ET_BLOCK_BITMAP_CSUM_INVALID,
+	"Block bitmap checksum does not match block bitmap"
+
+ec	EXT2_ET_INODE_BITMAP_CSUM_INVALID,
+	"Inode bitmap checksum does not match inode bitmap"
+
+ec	EXT2_ET_JOURNAL_UNSUPP_INCOMPAT,
+	"Journal has dirty/unsupported state requiring recovery"
+
+ec	EXT2_ET_IO_CHANNEL_NO_SUPPORT_64,
+	"I/O Channel does not support 64-bit block numbers"
+
+ec	EXT2_ET_FILE_RO,
+	"File opened read-only"
+
+ec	EXT2_ET_INLINE_DATA_NO_SPACE,
+	"No space left in inline data"
+
+	end

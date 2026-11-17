@@ -1,0 +1,136 @@
+#ifndef LIBEXT2FS_WIN_EXT4_VFS_H
+#define LIBEXT2FS_WIN_EXT4_VFS_H
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <ext2fs/ext2fs.h>
+#include "../disk/superblock_probe.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct ext4_mount_config {
+    const char *source_path;
+    uint32_t    partition_number;     /* 0 = auto / raw */
+    uint64_t    partition_offset;     /* explicit override if > 0 */
+    uint64_t    partition_size;       /* explicit override if > 0 */
+    uint32_t    sector_size;          /* 0 = default/auto */
+    uint32_t    max_cache_blocks;     /* 0 = default 1024 */
+    int         read_only;            /* 1 = RO mount */
+    int         ro_fallback_on_dirty; /* 1 = automatically fall back to RO when dirty */
+    int         force_rw_on_dirty;    /* 1 = allow RW even if dirty journal detected */
+    int         ignore_csum_errors;   /* 1 = set EXT2_FLAG_IGNORE_CSUM_ERRORS */
+    int         case_insensitive;     /* 1 = fallback case-insensitive lookup (Windows default) */
+} ext4_mount_config_t;
+
+typedef struct ext4_vfs_ctx {
+    ext2_filsys          fs;
+    SRWLOCK              rwlock;
+    int                  read_only;
+    int                  dirty_detected;
+    int                  fell_back_to_ro;
+    int                  case_insensitive;
+    ext4_journal_state_t journal_state;
+    char                 source_path[1024];
+    uint64_t             partition_offset;
+    uint64_t             partition_size;
+    char                 volume_label[32];
+} ext4_vfs_ctx_t;
+
+typedef struct ext4_stat {
+    ext2_ino_t ino;
+    uint16_t   mode;
+    uint32_t   file_attributes; /* Windows FILE_ATTRIBUTE_* */
+    uint64_t   size;
+    uint64_t   alloc_size;
+    uint64_t   creation_time;   /* Windows FILETIME (100ns) */
+    uint64_t   last_access_time;
+    uint64_t   last_write_time;
+    uint64_t   change_time;
+    uint32_t   hard_links;
+    uint32_t   uid;
+    uint32_t   gid;
+    int        is_dir;
+    int        is_symlink;
+} ext4_stat_t;
+
+typedef struct ext4_volume_stat {
+    uint64_t total_bytes;
+    uint64_t free_bytes;
+    uint32_t block_size;
+    uint32_t serial_number;
+    int      read_only;
+    char     volume_label[32];
+} ext4_volume_stat_t;
+
+typedef struct ext4_file_handle {
+    ext2_ino_t ino;
+    int        is_dir;
+    int        open_writable;
+    int        delete_on_close;
+    uint32_t   create_options;
+    char       path[1024];
+} ext4_file_handle_t;
+
+typedef int (*ext4_readdir_cb)(const char *name, const ext4_stat_t *st, void *user_ctx);
+
+/* Lifecycle & mkfs (op_init.c) */
+int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx);
+int ext4_vfs_unmount(ext4_vfs_ctx_t *ctx);
+int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label);
+
+/* Internal helpers (op_init.c / op_getattr.c) */
+int ext4_vfs_normalize_path(const char *in_path, char *out_path, size_t out_sz);
+int ext4_vfs_split_parent(const char *norm_path, char *out_parent, size_t parent_sz,
+                          char *out_name, size_t name_sz);
+int ext4_vfs_lookup_locked(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_ino_t *out_ino);
+void ext4_fill_stat_from_inode(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
+                               const struct ext2_inode_large *ino_st,
+                               const char *leaf_name, ext4_stat_t *out_st);
+uint64_t ext4_now_filetime(void);
+void ext4_inode_touch_times(struct ext2_inode_large *ino_st, int touch_atime,
+                            int touch_mtime, int touch_ctime);
+
+/* Metadata & getattr (op_getattr.c) */
+int ext4_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st);
+int ext4_vfs_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st);
+int ext4_vfs_set_times(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint32_t win_attrs,
+                       uint64_t ctime_ft, uint64_t atime_ft, uint64_t mtime_ft, uint64_t chgtime_ft);
+
+/* Directory enumeration (op_readdir.c) */
+int ext4_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx);
+
+/* Handle open/close (op_open.c) */
+int ext4_vfs_open(ext4_vfs_ctx_t *ctx, const char *path, int writable, ext4_file_handle_t **out_handle);
+void ext4_vfs_close_handle(ext4_file_handle_t *handle);
+
+/* File read/write (op_read.c / op_write.c) */
+int ext4_vfs_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t offset,
+                  uint32_t length, uint32_t *out_read);
+int ext4_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint64_t offset,
+                   uint32_t length, int write_to_eof, uint32_t *out_written, uint64_t *out_new_size);
+
+/* Creation, mkdir, delete, rename, truncate, symlink, statfs, flush */
+int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t mode,
+                    uint32_t win_attrs, ext2_ino_t *out_ino);
+int ext4_vfs_mkdir(ext4_vfs_ctx_t *ctx, const char *path, uint16_t mode, ext2_ino_t *out_ino);
+int ext4_vfs_can_delete(ext4_vfs_ctx_t *ctx, ext2_ino_t ino);
+int ext4_vfs_unlink(ext4_vfs_ctx_t *ctx, const char *path);
+int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_path, int replace_if_exists);
+int ext4_vfs_truncate(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint64_t new_size);
+int ext4_vfs_symlink(ext4_vfs_ctx_t *ctx, const char *link_path, const char *target_path);
+int ext4_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_target, size_t out_sz);
+int ext4_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol);
+int ext4_vfs_set_label(ext4_vfs_ctx_t *ctx, const char *label);
+int ext4_vfs_flush(ext4_vfs_ctx_t *ctx);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* LIBEXT2FS_WIN_EXT4_VFS_H */

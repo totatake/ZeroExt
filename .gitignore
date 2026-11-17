@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+out/
+cmake-build-*/
+.vs/
+
+# Compiled binaries and debug symbols
+*.obj
+*.o
+*.pdb
+*.ilk
+*.idb
+*.exe
+*.dll
+*.lib
+*.exp
+
+# Test and temporary disk images
+*.img
+*.vhdx
+*.vhd
+*.raw
+*.log
+*.tmp
