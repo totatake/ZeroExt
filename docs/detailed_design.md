@@ -16,7 +16,8 @@ d:\libext2fs-win\
 │   ├── architecture.md                   # アーキテクチャ設計書・ADR
 │   ├── detailed_design.md                # 本詳細設計書
 │   ├── testing_and_usage.md              # テスト報告書・利用ガイド
-│   └── performance_evaluation.md         # `--direct-io` 性能評価報告書
+│   ├── performance_evaluation.md         # `--direct-io` 性能評価報告書
+│   └── future_roadmap.md                 # 今後の構想（GUI / Perfettoトレース）
 ├── scripts/
 │   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> generated headers
 │   ├── update_e2fsprogs.ps1              # e2fsprogs 更新＆ビルド検証自動化スクリプト

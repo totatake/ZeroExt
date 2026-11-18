@@ -48,3 +48,14 @@ Windows 11 環境において、別ドライブや仮想イメージファイル
 | **NFR-02** | **安全性・耐障害性** | ユーザー空間プロセスとして動作し、Windows 11 のドライバ署名（Attestation Signing）不要で動作し、異常時も OS クラッシュ（BSOD）を起こさない。 |
 | **NFR-03** | **アップストリーム追従性** | `third_party/e2fsprogs` へ Windows 固有パッチ（`#ifdef _MSC_VER` 等）を混入させず、`compat/` と自動ヘッダ生成スクリプトへ完全分離することで、将来の `e2fsprogs` 新バージョンへの追従・ビルド検証を容易にする。 |
 | **NFR-04** | **ビルド可搬性・自己完結性** | Cygwin / MSYS2 ランタイム DLL（`cygwin1.dll` 等）に依存せず、Visual Studio 2022 (`cl.exe` / CMake / Ninja) のみで純粋なネイティブ Windows バイナリとしてビルドできること。 |
+
+---
+
+## 5. 今後の拡張構想（ロードマップ）
+
+現行スコープ外ながら、今後の機能拡張・性能可視化に向けて以下 2 項目を構想として位置づけている。詳細方針は [今後の構想・ロードマップ](future_roadmap.md) を参照。
+
+1. **GUI アプリケーションの追加**:
+   - ディスク／パーティション／JBD2 ジャーナル状態の可視化、マウントモード（既定 RO / `--overlay` / `--rw` / `--direct-io`）設定およびトレイ監視を行う GUI フロントエンド（コア `ext4fsp.exe` とはプロセス疎結合を維持）。
+2. **性能解析用 Perfetto トレース出力機能の追加**:
+   - WinFsp コールバック、`ctx->rwlock` / `cache_lock` 競合、`extent_cache` / LRU キャッシュヒット、I/O レイテンシ、Overlay Copy-up 等を [Perfetto UI](https://ui.perfetto.dev/) でタイムライン解析できる明示オプション型トレース出力機能。

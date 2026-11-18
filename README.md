@@ -23,6 +23,7 @@ Windows 11 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース ext2 / e
 - [詳細設計書](docs/detailed_design.md)
 - [テスト報告書・利用ガイド](docs/testing_and_usage.md)
 - [性能評価報告書 (`--direct-io` 比較)](docs/performance_evaluation.md)
+- [今後の構想・ロードマップ](docs/future_roadmap.md)
 
 ## ビルドとテスト
 
