@@ -1,6 +1,5 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
-#include "../extent/extent_map.h"
 #include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
@@ -146,9 +145,6 @@ int ext4_vfs_unlink_locked(ext4_vfs_ctx_t *ctx, ext2_ino_t parent_ino, const cha
             target_ino_st.i_ctime = (__u32)time(NULL);
             ext2fs_write_inode(ctx->fs, fctx.ino, &target_ino_st);
         }
-    }
-    if (ctx->extent_cache) {
-        ext4_extent_cache_invalidate(ctx->extent_cache, fctx.ino);
     }
 
     return 0;

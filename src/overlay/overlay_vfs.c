@@ -7,7 +7,10 @@
 
 #define OV_SYNTHETIC_INO_BASE 0x80000000U
 #define OV_WHITEOUT_PREFIX    ".wh."
+#define OV_OPAQUE_NAME        ".wh.__dir_opaque"
 #define OV_OPAQUE_NAME_W      L".wh.__dir_opaque"
+#define OV_LOWER_ID_NAME      ".wh.__ext4_lower_id"
+#define OV_LOWER_ID_NAME_W    L".wh.__ext4_lower_id"
 
 typedef struct ov_ino_entry {
     ext2_ino_t           ino;
@@ -639,6 +642,79 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
     return overlay_resolve(ctx, norm_path, NULL, 0, res);
 }
 
+static int upper_dir_has_entries_w(const wchar_t *dir_w) {
+    wchar_t pattern[1040];
+    WIN32_FIND_DATAW fd;
+    HANDLE hfind;
+    int non_empty = 0;
+
+    _snwprintf_s(pattern, _countof(pattern), _TRUNCATE, L"%ls\\*", dir_w);
+    hfind = FindFirstFileW(pattern, &fd);
+    if (hfind != INVALID_HANDLE_VALUE) {
+        do {
+            if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0) {
+                non_empty = 1;
+                break;
+            }
+        } while (FindNextFileW(hfind, &fd));
+        FindClose(hfind);
+    }
+    return non_empty;
+}
+
+static int overlay_validate_lower_id(const ext4_overlay_ctx_t *ov, ext4_vfs_ctx_t *lower_ctx) {
+    wchar_t id_w[1040];
+    char expected[128];
+    const __u8 *u;
+    HANDLE hr;
+
+    if (!ov || !lower_ctx || !lower_ctx->fs || !lower_ctx->fs->super) return 0;
+
+    u = lower_ctx->fs->super->s_uuid;
+    _snprintf_s(expected, sizeof(expected), _TRUNCATE,
+                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x:%llu:%u",
+                u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
+                u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+                (unsigned long long)ext2fs_blocks_count(lower_ctx->fs->super),
+                (unsigned)lower_ctx->fs->blocksize);
+
+    _snwprintf_s(id_w, _countof(id_w), _TRUNCATE, L"%ls\\%ls", ov->upper_dir_w, OV_LOWER_ID_NAME_W);
+    hr = CreateFileW(id_w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hr != INVALID_HANDLE_VALUE) {
+        char stored[128] = {0};
+        DWORD got = 0;
+        BOOL ok = ReadFile(hr, stored, sizeof(stored) - 1, &got, NULL);
+        CloseHandle(hr);
+        if (!ok || got == 0 || strcmp(stored, expected) != 0) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "Overlay upperdir '%ls' belongs to a different lower ext4 filesystem "
+                     "(expected='%s', found='%s'). Clean or choose a separate upperdir.",
+                     ov->upper_dir_w, expected, stored);
+            return -EINVAL;
+        }
+        return 0;
+    }
+
+    if (upper_dir_has_entries_w(ov->upper_dir_w)) {
+        ext4_log(EXT4_LOG_WARN,
+                 "Overlay upperdir '%ls' is not empty and has no %s marker; "
+                 "existing files will shadow lower ext4 entries.",
+                 ov->upper_dir_w, OV_LOWER_ID_NAME);
+    }
+
+    {
+        HANDLE hw = CreateFileW(id_w, GENERIC_WRITE, FILE_SHARE_READ,
+                                NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, NULL);
+        if (hw != INVALID_HANDLE_VALUE) {
+            DWORD put = 0;
+            WriteFile(hw, expected, (DWORD)strlen(expected), &put, NULL);
+            CloseHandle(hw);
+        }
+    }
+    return 0;
+}
+
 /* ---- Lifecycle ---- */
 
 int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
@@ -649,7 +725,6 @@ int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
     DWORD full_len;
     size_t len;
     int rc;
-    (void)lower_ctx;
 
     if (!upper_dir_utf8 || !upper_dir_utf8[0] || !out_ov) return -EINVAL;
     *out_ov = NULL;
@@ -682,6 +757,12 @@ int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
     InitializeSRWLock(&ov->map_lock);
     InitializeCriticalSection(&ov->mut_cs);
     ov->next_synth_ino = OV_SYNTHETIC_INO_BASE;
+
+    rc = overlay_validate_lower_id(ov, lower_ctx);
+    if (rc != 0) {
+        overlay_vfs_destroy(ov);
+        return rc;
+    }
 
     *out_ov = ov;
     return 0;
@@ -719,7 +800,7 @@ int overlay_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st)
         *out_st = res.lower_st;
         out_st->ino = overlay_assign_ino(ctx, norm, res.lower_st.ino);
         /* In an active RW overlay, lower-only files are logically writable via copy-up
-         * unless the POSIX mode lacks write bits or the overlay itself is --ro. */
+         * unless the POSIX mode lacks write bits or the context is configured read-only. */
         if (ctx->read_only) {
             out_st->file_attributes |= FILE_ATTRIBUTE_READONLY;
         } else if (out_st->mode & 0222) {
@@ -924,7 +1005,10 @@ int overlay_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb
                     continue;
                 }
                 if (strncmp(utf8_name, OV_WHITEOUT_PREFIX, 4) == 0) {
-                    ov_name_list_add(&whiteouts, utf8_name + 4);
+                    if (strcmp(utf8_name, OV_OPAQUE_NAME) != 0 &&
+                        strcmp(utf8_name, OV_LOWER_ID_NAME) != 0) {
+                        ov_name_list_add(&whiteouts, utf8_name + 4);
+                    }
                     continue;
                 }
                 if (strlen(utf8_name) > EXT2_NAME_LEN) continue;

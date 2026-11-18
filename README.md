@@ -6,8 +6,8 @@ Windows 11 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース ext2 / e
 
 - **本家 `e2fsprogs` (`libext2fs`) 採用**: 64bit ブロック番号、ext4 エクステント (`EXT4_EXTENTS_FL`)、256B+ iノード（ナノ秒タイムスタンプ・`crtime`）、`metadata_csum` (CRC32C)、HTree ディレクトリに対応。
 - **WinFsp による高速・安全なユーザー空間 FSD**: Windows の Cache Manager (`Cc`) / Memory Manager (`Mm`) 連携による高速シーケンシャル Read / `mmap` に対応しつつ、ドライバ署名不要・BSOD リスクゼロで動作。
-- **ダイレクト・エクステント I/O エンジン (`src/extent/`)**: ファイルオープン/初回 Read 時にエクステントマップ（多段ツリー・間接ブロック・インラインデータ対応）をキャッシュし、以降の `Read` を `O(log N)` 二分探索＋ロックレス物理セクタ直読 (`win32_io_pread_direct`) で高速化（GGUF モデル等の大容量 `mmap` 読み込みに最適）。
-- **非破壊 NTFS Overlay マウント (`--overlay`)**: Lower 側の ext4 を厳密 Read-Only に保ったまま NTFS ディレクトリを上層に重ね合わせ、Copy-up 書込・新規作成・ホワイトアウト削除を透過的に実現。
+- **ダイレクト・エクステント I/O モード (`--direct-io`・RO / Overlay 専用)**: 既定の Read-Only マウントまたは `--overlay` 時に `--direct-io` を明示指定した場合、エクステントマップ（多段ツリー・間接ブロック・インラインデータ対応）をキャッシュし、以降の `Read` を `O(log N)` 二分探索＋ロックレス物理セクタ直読 (`win32_io_pread_direct`) で高速化（GGUF モデル等の大容量 `mmap` 読み込みに最適）。
+- **非破壊 NTFS Overlay マウント (`--overlay`)**: Lower 側の ext4 を厳密 Read-Only に保ったまま NTFS ディレクトリを上層に重ね合わせ、Copy-up 書込・新規作成・ホワイトアウト削除を透過的に実現（`.wh.__ext4_lower_id` による別 Lower 誤流用ガード付き）。
 - **Windows ネイティブ I/O マネージャ (`win32_io_manager`)**:
   - `CreateFileW` + `OVERLAPPED` によるスレッドセーフなオフセット指定 I/O
   - 4KB セクタ境界の自動 Read-Modify-Write (RMW)
@@ -66,11 +66,17 @@ ext4fsp.exe ls test.img /data
 ext4fsp.exe cat test.img /data/hello.txt
 ext4fsp.exe extents test.img /data/hello.txt
 
-# WinFsp で Windows ドライブへマウント (WinFsp ランタイム要)
+# WinFsp で Windows ドライブへマウント (WinFsp ランタイム要・既定は安全な Read-Only)
+ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M:
+
+# Read-Only + 高速ダイレクトエクステント直読 (--direct-io は既定の RO / --overlay 時のみ指定可)
+ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --direct-io
+
+# Read-Write マウント（明示的に --rw を指定）
 ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
 
-# ext4 は Read-Only に保ち、書き込みだけ Windows NTFS フォルダへ逃がす Overlay マウント
-ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
+# ext4 は Read-Only + 直読に保ち、書き込みだけ Windows NTFS フォルダへ逃がす Overlay マウント
+ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper --direct-io
 ```
 
 ## ライセンス

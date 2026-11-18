@@ -79,23 +79,27 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 #### マウント実行コマンド
 
 ```powershell
-# Read-Only マウント（既定：Direct Extent I/O 有効・最も安全）
-.\build\ext4fsp.exe mount --source test.img --mountpoint M: --ro
+# Read-Only マウント（既定動作：フラグ不要・最も安全）
+.\build\ext4fsp.exe mount --source test.img --mountpoint M:
 
-# Read-Write マウント（Dirty Journal 検出時は自動拒否）
+# Read-Only + Direct Extent I/O モード（GGUF 等の大容量 mmap 読み取りを高速化、RO / Overlay 時のみ指定可）
+.\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --direct-io
+
+# Read-Write マウント（明示的に --rw を指定、Dirty Journal 検出時は自動拒否、--direct-io とは併用不可）
 .\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
 
-# 非破壊 Overlay マウント（Lower の ext4 は常に RO、作成/変更は NTFS Upperdir へ保存）
-# ※ GGUF モデル等を ext4 からゼロオーバーヘッド直読しつつ、Windows 側へ設定・ログ・生成物を書込可能
-.\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
+# 非破壊 Overlay マウント（Lower の ext4 は常に RO、作成/変更は NTFS Upperdir へ保存、--direct-io 併用可）
+# ※ 初回利用時に Upperdir に .wh.__ext4_lower_id を記録し、別の ext4 への誤再利用を自動ブロックします
+.\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper --direct-io
 
 # NTFS の空きディレクトリへ直接マウントすることも可能
 # （親ディレクトリは通常の NTFS 書き込み領域、サブフォルダ配下だけを Overlay/ext4 として公開）
-.\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint C:\models\linux_ext4 --ro
+.\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint C:\models\linux_ext4 --direct-io
 
 # オプション
-#   --overlay <dir>    : NTFS Upperdir を指定して Overlay RW マウント（Lower ext4 は厳密 RO）
-#   --no-direct-io     : Direct Extent I/O を無効化し、従来の libext2fs 経由 Read に切替
+#   --rw               : ext4 への直接 Read-Write マウントを有効化（未指定時は Read-Only、--overlay とは併用不可）
+#   --overlay <dir>    : NTFS Upperdir を指定して非破壊 Overlay RW マウント（Lower ext4 は厳密 RO、--rw とは併用不可）
+#   --direct-io        : Direct Extent I/O を有効化（既定 RO または --overlay モード専用）
 #   --cache-blocks <N> : LRU ブロックキャッシュ数（既定 2048 ブロック = 8MB @ 4KB）
 #   --force-dirty      : Dirty Journal 検出時でも強制的に RW オープン（非推奨・上級者向け）
 #   --debug            : WinFsp デバッグログ有効化
@@ -145,9 +149,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update_e2fsprogs.ps1 -Upstrea
 | `vfs_operations` | `test_multiblock_directory_expansion` | 120 ファイル作成による `ext2fs_expand_dir` 複数ブロックディレクトリ拡張・部分削除・再マウント検証 | PASS |
 | `vfs_operations` | `test_gpt_partition_rw_isolation` | GPT Partition 2 への RW マウント書込時に Partition 1 の保護バイト (`0x5A`) が不変であること | PASS |
 | `winfsp_callbacks` | `test_winfsp_interface_e2e` | `FSP_FILE_SYSTEM_INTERFACE` 全主要コールバック（`GetVolumeInfo`, `SetVolumeLabel`, `GetSecurityByName`, `Create`, `Open`, `Overwrite`, `Read`/`EOF`, `Write`, `Flush`, `SetBasicInfo`, `SetFileSize`, `CanDelete`, `SetDelete`, `Rename`, `ReadDirectory` Marker ページング, `Cleanup`, `Close`） | PASS |
-| `extent_and_overlay` | `test_direct_extent_deep_tree_and_holes` | 8 断片・多段エクステント木 (`eh_depth >= 1`) 抽出、スパースホール横断・非アライン直読 (`disable_direct_io` 比較一致)、書込/縮小時のキャッシュ無効化 | PASS |
-| `extent_and_overlay` | `test_extent_indirect_uninit_and_inline` | 従来型間接ブロック (`EXT4_STORAGE_INDIRECT`)、インラインデータ (`EXT4_INLINE_DATA_FL`)、未初期化エクステント (`is_uninit`) ゼロ埋め直読 | PASS |
-| `extent_and_overlay` | `test_overlay_vfs_and_persistence` | Dirty ext4 の RO 下位マウント、Direct Extent 読取、Copy-up 書込・追記・再マウント永続性、ホワイトアウト (`.wh.*`) 隠蔽・不透過ディレクトリ再作成、下位 ext4 非破壊検証 | PASS |
+| `extent_and_overlay` | `test_direct_extent_deep_tree_and_holes` | RW＋`--direct-io` 拒否 (`-EINVAL`)、既定無効確認、RO＋`--direct-io` での 8 断片・多段エクステント木 (`eh_depth >= 1`) 抽出＆スパース横断非アライン直読一致 | PASS |
+| `extent_and_overlay` | `test_extent_indirect_uninit_and_inline` | RO＋`--direct-io` での従来型間接ブロック (`EXT4_STORAGE_INDIRECT`)、インラインデータ (`EXT4_INLINE_DATA_FL`)、未初期化エクステント (`is_uninit`) ゼロ埋め直読 | PASS |
+| `extent_and_overlay` | `test_overlay_vfs_and_persistence` | Dirty ext4 の RO 下位マウント＋`--direct-io` 併用、Copy-up 書込・追記・再マウント永続性、ホワイトアウト (`.wh.*`)・不透過ディレクトリ、別 UUID イメージに対する `.wh.__ext4_lower_id` 拒否 (`-EINVAL`)、下位非破壊検証 | PASS |
 
 ### 4.2 実行ログ抜粋（Release・MSVC 19.44.35228 x64）
 
@@ -157,19 +161,19 @@ Test project D:/libext2fs-win/build
     Start 1: win32_io
 1/5 Test #1: win32_io .........................   Passed    0.09 sec
     Start 2: partition_and_probe
-2/5 Test #2: partition_and_probe ..............   Passed    0.09 sec
+2/5 Test #2: partition_and_probe ..............   Passed    0.10 sec
     Start 3: vfs_operations
 3/5 Test #3: vfs_operations ...................   Passed    0.17 sec
     Start 4: winfsp_callbacks
 4/5 Test #4: winfsp_callbacks .................   Passed    0.04 sec
     Start 5: extent_and_overlay
-5/5 Test #5: extent_and_overlay ...............   Passed    0.08 sec
+5/5 Test #5: extent_and_overlay ...............   Passed    0.10 sec
 
 100% tests passed, 0 tests failed out of 5
-Total Test time (real) =   0.49 sec
+Total Test time (real) =   0.52 sec
 ```
 
-`ext4fsp_tests.exe` 直接実行結果：`Summary: failures=0, assertions=35395`（全 16 テスト関数成功）。
+`ext4fsp_tests.exe` 直接実行結果：`Summary: failures=0, assertions=35400`（全 16 テスト関数成功）。
 
 ### 4.3 CLI & WinFsp 実動作検証結果
 

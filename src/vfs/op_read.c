@@ -15,7 +15,7 @@ int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t
     if (length == 0) return 0;
     if (!buf) return -EINVAL;
 
-    if (!ctx->disable_direct_io && ctx->extent_cache) {
+    if (ctx->enable_direct_io && ctx->lower_read_only && ctx->extent_cache) {
         ext4_extent_map_t *map = ext4_extent_cache_get(ctx->extent_cache, ino);
         int rc = 0;
         if (!map) {

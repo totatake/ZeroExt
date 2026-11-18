@@ -31,7 +31,7 @@ typedef struct ext4_mount_config {
     int         ignore_csum_errors;   /* 1 = set EXT2_FLAG_IGNORE_CSUM_ERRORS */
     int         case_insensitive;     /* 1 = fallback case-insensitive lookup (Windows default) */
     const char *overlay_upper_dir;    /* Optional NTFS upperdir for Overlay mount (lower opens RO) */
-    int         disable_direct_io;    /* 1 = force ext2fs_file_read instead of direct extent I/O */
+    int         enable_direct_io;     /* 1 = enable direct extent I/O (RO / Overlay only) */
 } ext4_mount_config_t;
 
 typedef struct ext4_vfs_ctx {
@@ -42,7 +42,7 @@ typedef struct ext4_vfs_ctx {
     int                       dirty_detected;
     int                       fell_back_to_ro;
     int                       case_insensitive;
-    int                       disable_direct_io;
+    int                       enable_direct_io;
     ext4_journal_state_t      journal_state;
     char                      source_path[1024];
     uint64_t                  partition_offset;

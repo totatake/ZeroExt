@@ -1,6 +1,5 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
-#include "../extent/extent_map.h"
 #include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
@@ -35,8 +34,5 @@ int ext4_vfs_truncate(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint64_t new_size) {
         }
     }
     ReleaseSRWLockExclusive(&ctx->rwlock);
-    if (ctx->extent_cache) {
-        ext4_extent_cache_invalidate(ctx->extent_cache, ino);
-    }
     return ext4_errcode_to_errno(retval);
 }

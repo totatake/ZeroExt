@@ -38,7 +38,6 @@ static int test_direct_extent_deep_tree_and_holes(void) {
     ext4_mount_config_t cfg;
     ext4_vfs_ctx_t *ctx = NULL;
     ext2_ino_t ino = 0;
-    ext4_file_handle_t *h = NULL;
     ext4_extent_map_t *map = NULL;
     uint32_t w = 0, r = 0;
     uint8_t blk[4096];
@@ -48,11 +47,19 @@ static int test_direct_extent_deep_tree_and_holes(void) {
     DeleteFileA(img_path);
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 32ULL * 1024ULL * 1024ULL, "EXTTEST"));
 
+    /* 1. Direct Extent I/O must be rejected in non-overlay RW mode */
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
+    cfg.enable_direct_io = 1;
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx == NULL);
+
+    /* 2. Default RW mount disables extent_cache */
+    cfg.enable_direct_io = 0;
     cfg.case_insensitive = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx->extent_cache == NULL);
 
     /* Create a fragmented file with 8 non-contiguous extents (exceeds inline eh_max=4 -> eh_depth >= 1).
      * Also place data on another file in between so physical blocks cannot coalesce. */
@@ -69,6 +76,18 @@ static int test_direct_extent_deep_tree_and_holes(void) {
             TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, sep_ino, blk, (uint64_t)i * 4096ULL, 4096, 0, &w, NULL));
         }
     }
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    /* 3. Explicit RO + Direct I/O mount enables extent_cache & lockless direct read */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    cfg.enable_direct_io = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx->extent_cache != NULL);
+    TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
 
     TEST_ASSERT_EQ_INT(0, ext4_vfs_get_extents(ctx, "/frag.bin", &map));
     TEST_ASSERT_EQ_INT(EXT4_STORAGE_EXTENTS, map->kind);
@@ -77,38 +96,28 @@ static int test_direct_extent_deep_tree_and_holes(void) {
 
     /* Unaligned cross-hole direct read covering part of extent 2, sparse hole 2, and part of extent 3 */
     memset(read_buf, 0xAA, sizeof(read_buf));
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, ino, read_buf, 2ULL * 8192ULL + 2000ULL, 7000U, &r));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, map->ino, read_buf, 2ULL * 8192ULL + 2000ULL, 7000U, &r));
     TEST_ASSERT_EQ_INT(7000, r);
     for (int j = 0; j < 2096; j++) TEST_ASSERT_EQ_INT(0x32, read_buf[j]);         /* tail of extent 2 */
     for (int j = 2096; j < 2096 + 4096; j++) TEST_ASSERT_EQ_INT(0x00, read_buf[j]); /* sparse hole */
     for (int j = 2096 + 4096; j < 7000; j++) TEST_ASSERT_EQ_INT(0x33, read_buf[j]); /* head of extent 3 */
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
 
-    /* Verify exact match with disable_direct_io = 1 */
+    /* Verify exact match with default (non-direct-io) RO mount */
     {
         uint8_t cmp_buf[8192];
         uint32_t r2 = 0;
-        ctx->disable_direct_io = 1;
-        TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, ino, cmp_buf, 2ULL * 8192ULL + 2000ULL, 7000U, &r2));
-        ctx->disable_direct_io = 0;
+        cfg.enable_direct_io = 0;
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+        TEST_ASSERT(ctx->extent_cache == NULL);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, map->ino, cmp_buf, 2ULL * 8192ULL + 2000ULL, 7000U, &r2));
         TEST_ASSERT_EQ_INT(r, r2);
         TEST_ASSERT(memcmp(read_buf, cmp_buf, r) == 0);
+        ext4_vfs_unmount(ctx);
     }
 
-    /* Verify extent cache invalidation on write & truncate */
-    memset(blk, 0x7E, sizeof(blk));
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, blk, 0, 16, 1, &w, NULL)); /* append at EOF */
-    TEST_ASSERT_EQ_INT(16, w);
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, ino, read_buf, 7ULL * 8192ULL + 4096ULL, 16, &r));
-    TEST_ASSERT_EQ_INT(16, r);
-    TEST_ASSERT_EQ_INT(0x7E, read_buf[0]);
-
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_truncate(ctx, ino, 4096ULL));
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, ino, read_buf, 4096ULL, 64, &r));
-    TEST_ASSERT_EQ_INT(0, r); /* truncated EOF */
-
     ext4_extent_map_release(map);
-    (void)h;
-    ext4_vfs_unmount(ctx);
     DeleteFileA(img_path);
     return 0;
 }
@@ -126,6 +135,7 @@ static int test_extent_indirect_uninit_and_inline(void) {
     DeleteFileA(img_path);
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 16ULL * 1024ULL * 1024ULL, "EXTKIND"));
 
+    /* Populate legacy indirect & inline test inodes in RW mode */
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
@@ -151,16 +161,6 @@ static int test_extent_indirect_uninit_and_inline(void) {
         ReleaseSRWLockExclusive(&ctx->rwlock);
     }
 
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_get_extents(ctx, "/indirect.bin", &map));
-    TEST_ASSERT_EQ_INT(EXT4_STORAGE_INDIRECT, map->kind);
-    TEST_ASSERT_EQ_INT(1, (long long)map->run_count);
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, ind_ino, buf, 100, 512, &r));
-    TEST_ASSERT_EQ_INT(512, r);
-    TEST_ASSERT_EQ_INT(0x5A, buf[0]);
-    TEST_ASSERT_EQ_INT(0x5A, buf[511]);
-    ext4_extent_map_release(map);
-    map = NULL;
-
     /* 2. Inline-data file (EXT4_INLINE_DATA_FL) */
     TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/inline.txt", 0, 0644, 0, &inl_ino));
     {
@@ -176,6 +176,23 @@ static int test_extent_indirect_uninit_and_inline(void) {
         TEST_ASSERT_EQ_INT(0, ext2fs_write_inode(ctx->fs, inl_ino, &inode));
         ReleaseSRWLockExclusive(&ctx->rwlock);
     }
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    /* Remount in RO + Direct Extent I/O mode */
+    cfg.read_only = 1;
+    cfg.enable_direct_io = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_get_extents(ctx, "/indirect.bin", &map));
+    TEST_ASSERT_EQ_INT(EXT4_STORAGE_INDIRECT, map->kind);
+    TEST_ASSERT_EQ_INT(1, (long long)map->run_count);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, ind_ino, buf, 100, 512, &r));
+    TEST_ASSERT_EQ_INT(512, r);
+    TEST_ASSERT_EQ_INT(0x5A, buf[0]);
+    TEST_ASSERT_EQ_INT(0x5A, buf[511]);
+    ext4_extent_map_release(map);
+    map = NULL;
 
     TEST_ASSERT_EQ_INT(0, ext4_vfs_get_extents(ctx, "/inline.txt", &map));
     TEST_ASSERT_EQ_INT(EXT4_STORAGE_INLINE, map->kind);
@@ -268,15 +285,17 @@ static int test_overlay_vfs_and_persistence(void) {
     ext4_vfs_unmount(ctx);
     ctx = NULL;
 
-    /* Mount with Overlay enabled even though lower ext4 has dirty state */
+    /* Mount with Overlay + explicit Direct Extent I/O enabled even though lower ext4 has dirty state */
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
     cfg.case_insensitive = 1;
     cfg.overlay_upper_dir = upper_dir;
+    cfg.enable_direct_io = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT_EQ_INT(1, ctx->lower_read_only);
     TEST_ASSERT_EQ_INT(0, ctx->read_only);
+    TEST_ASSERT(ctx->extent_cache != NULL);
 
     /* 1. Direct Extent read of lower-only file through overlay */
     TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/models/llama.gguf", 0, &h));
@@ -371,6 +390,23 @@ static int test_overlay_vfs_and_persistence(void) {
     TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/old_dir/secret.txt", &st));
     ext4_vfs_unmount(ctx);
     ctx = NULL;
+
+    /* 7. Different lower image reusing the same upperdir must be rejected (.wh.__ext4_lower_id guard) */
+    {
+        char other_img[MAX_PATH];
+        ext4_vfs_ctx_t *bad_ctx = NULL;
+        test_make_temp_path(other_img, sizeof(other_img), "ov_lower_other.img");
+        DeleteFileA(other_img);
+        /* Create with same 16MB size to ensure distinct UUIDs alone catch mismatch */
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(other_img, 16ULL * 1024ULL * 1024ULL, "OTHER"));
+        cfg.source_path = other_img;
+        cfg.read_only = 0;
+        cfg.overlay_upper_dir = upper_dir;
+        TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &bad_ctx));
+        TEST_ASSERT(bad_ctx == NULL);
+        DeleteFileA(other_img);
+        cfg.source_path = img_path;
+    }
 
     /* Check lower alone (RO) -> original lower-v1 and old_dir/secret.txt are intact */
     cfg.overlay_upper_dir = NULL;

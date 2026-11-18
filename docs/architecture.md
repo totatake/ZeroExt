@@ -170,11 +170,13 @@ sequenceDiagram
 - **決定**: `FSP_FSCTL_VOLUME_PARAMS.UmFileContextIsUserContext2` を `1` に設定し、`FspOpen` / `FspCreate` が返す `ext4_file_handle_t *` を WinFsp の `UserContext2`（オープンハンドル／`FILE_OBJECT` 単位の `FileDesc`）として扱う。
 - **根拠**: `UmFileContextIsUserContext2 = 0`（既定）では `UserContext`（`FileNode` スロット）が使われ、並列アクセス時に同一パスに対する複数のクローズ要求が同一ポインタへ配送されて二重解放 (`STATUS_HEAP_CORRUPTION` / `0xC0000374`) および解放済みポインタ参照が発生する。`ext4_file_handle_t` は `create_options` / `delete_on_close` / `open_writable` を保持するオープン単位の構造体であるため、`UserContext2` に割り当てることで 1 オープン＝1 クローズが保証される。
 
-### ADR-012: ロックレス・エクステント直結パススルー I/O (`src/extent/`)
-- **決定**: 通常 Read 時（`--no-direct-io` 未指定）は、inode のエクステント配列（多段エクステント木・従来型間接ブロック・インラインデータ・Fast シンボリックリンク・未初期化エクステント・スパースホールすべてに対応し隣接連続領域を自動結合）をキャッシュし、参照カウント (`InterlockedIncrement`/`Decrement`) 付き `ext4_extent_map_t` を取り出した後に `ctx->rwlock` およびブロックキャッシュロックを取らず `win32_io_pread_direct` で連続物理ブロックを一括読み出しする。RW マウントで `write` / `truncate` / `unlink` が発生した際は対象 inode のキャッシュを即時無効化する。
-- **根拠**: 大容量ファイル（GGUF モデルの `mmap` ロードや VM イメージ等）に対する大量ページイン時に毎回 `ext2fs_file_open` / `llseek` / ブロック単位の `cache_lock` を通過すると競合とシステムコール回数が増大する。`O(log N)` 二分探索＋一括 `OVERLAPPED` `ReadFile` により、読み取りパスから VFS ロック競合を完全に排除できる。また多段ツリー（`eh_depth >= 1`）走査時は `EXT2_EXTENT_ROOT` 直後に `EXT2_EXTENT_DOWN` で最初のリーフまで降りてから `EXT2_EXTENT_NEXT_LEAF` を呼ぶことでインデックス枝 0 のスキップを防ぐ。
+### ADR-012: 明示指定かつ RO 専用のロックレス・エクステント直結 I/O (`src/extent/`, `--direct-io`)
+- **決定**: ダイレクト・エクステント I/O エンジンは `--direct-io`（`enable_direct_io = 1`）を明示的に指定した場合に限り、かつ下位 ext4 ボリュームが Read-Only（既定の RO マウントまたは `--overlay`）で開かれている場合のみ有効化する。非 Overlay の `--rw` マウントと `--direct-io` の同時指定はマウント時に `-EINVAL` で拒否し、既定状態（`enable_direct_io = 0`）および RW 時は `extent_cache` を生成せず `ext2fs_file_read` 経由で処理する。
+- **根拠**:
+  1. 大容量ファイル（GGUF モデルの `mmap` ロードや VM イメージ等）に対する大量ページイン時に毎回 `ext2fs_file_open` / `llseek` / ブロック単位の `cache_lock` を通過するコストをなくすため、有効化時は inode のエクステント配列（多段ツリー・間接ブロック・インライン・未初期化・スパースに対応し隣接連続領域を結合）をキャッシュし、`O(log N)` 二分探索＋`ctx->rwlock` を保持しない `win32_io_pread_direct` へ流す（多段ツリーは `EXT2_EXTENT_ROOT` 直後に `EXT2_EXTENT_DOWN` で最初のリーフへ降りて枝 0 のスキップを防ぐ）。
+  2. 一方、RW マウント下でロックレス直読を行うと、`libext2fs` 内部ファイルバッファ（`file->buf`）の未フラッシュデータとディスク上の旧データ・エクステントヘッダ書換中間状態との間で Read-after-Write 不整合リスクが生じるため、RW 時を最初から抑止して設計・検証を単純かつ安全に保つ。
 
-### ADR-013: NTFS を Upper 層とする非破壊 Overlay マウント (`src/overlay/`)
-- **決定**: `--overlay <upper_ntfs_dir>` 指定時は、Lower の ext4 ボリュームを常に厳密 Read-Only (`GENERIC_READ`、Dirty Journal でも安全オープン可) に固定し、Windows NTFS 上の指定フォルダを Upper 層とする OverlayFS 互換 VFS（`src/overlay/overlay_vfs.c`）を有効化する。
-- **根拠**: デュアルブート環境や Linux ワークスペース上の大容量ファイル（GGUF モデルや Linux ソースコード）へゼロコピーに近い速度でアクセスしつつ、Windows 側の出力物（ログ・ビルド生成物・設定変更）だけを NTFS に安全に逃がす用途では、ext4 本体への直接書き込みリスクを完全にゼロにする必要がある。ホワイトアウト (`.wh.<name>`) と不透過ディレクトリマーカー (`.wh.__dir_opaque`)、変更時自動 Copy-up、および `ino <-> path` 双方向マッピングにより、Lower を 1 バイトも汚さず完全な Read-Write 体験を実現できる。
+### ADR-013: NTFS を Upper 層とする非破壊 Overlay マウント (`src/overlay/`) と Lower-ID 照合
+- **決定**: `--overlay <upper_ntfs_dir>` 指定時は、Lower の ext4 ボリュームを常に厳密 Read-Only (`GENERIC_READ`、Dirty Journal でも安全オープン可) に固定し、Windows NTFS 上の指定フォルダを Upper 層とする OverlayFS 互換 VFS（`src/overlay/overlay_vfs.c`）を有効化する。さらに Upperdir ルートに隠しマーカー `.wh.__ext4_lower_id`（Lower の `s_uuid` + ブロック数 + ブロックサイズ）を記録し、既存 Upperdir 再利用時に別 Lower との不一致を検出した場合はマウントを拒否 (`-EINVAL`) する。またマーカー未設定の非空ディレクトリに対しては警告ログを出した上で ID を記録する。
+- **根拠**: デュアルブート環境や Linux ワークスペース上の大容量ファイルへ高速アクセス（`--direct-io` 併用可）しつつ Windows 側出力物を NTFS に逃がす用途では、Lower への書き込みリスクをゼロに保つ必要がある。同一 Upperdir を誤って別 Lower に流用すると古いホワイトアウト (`.wh.<name>`) や `.wh.__dir_opaque`、古い Copy-up ファイル、inode 衝突が新 Lower へ誤適用される危険があるため、マウント時に Lower の UUID 等で拘束・検証する。
 

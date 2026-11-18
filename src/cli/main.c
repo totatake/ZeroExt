@@ -97,8 +97,8 @@ static void print_usage(void) {
         "  ext4fsp rm <image_path> <ext4_path> [--partition <N>]\n"
         "  ext4fsp mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
         "  ext4fsp extents <image_or_disk> <ext4_path> [--partition <N>]\n"
-        "  ext4fsp mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw|--ro]\n"
-        "                [--overlay <ntfs_upper_dir>] [--no-direct-io] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
+        "  ext4fsp mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
+        "                [--direct-io] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
         "  ext4fsp unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
         "  A mount stays active while the 'mount' process runs; press Ctrl+C in that console to unmount.\n"
@@ -543,13 +543,23 @@ static int cmd_mount(int argc, char **argv) {
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     uint32_t cache_blocks = parse_u32_opt(argc, argv, "--cache-blocks", 2048);
     int rw = has_flag(argc, argv, "--rw");
-    int ro = has_flag(argc, argv, "--ro");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
-    int no_direct_io = has_flag(argc, argv, "--no-direct-io");
+    int direct_io = has_flag(argc, argv, "--direct-io");
     uint32_t debug_log = has_flag(argc, argv, "--debug") ? (uint32_t)-1 : 0;
 
     if (!src || !mp) {
         print_usage();
+        return 1;
+    }
+
+    if (rw && overlay_dir && overlay_dir[0] != '\0') {
+        fprintf(stderr, "Error: --rw and --overlay cannot be used together "
+                        "(--overlay writes to the NTFS upperdir while keeping lower ext4 read-only).\n");
+        return 1;
+    }
+
+    if (direct_io && rw) {
+        fprintf(stderr, "Error: --direct-io is only supported in Read-Only (default) or --overlay mode.\n");
         return 1;
     }
 
@@ -559,16 +569,17 @@ static int cmd_mount(int argc, char **argv) {
     cfg.partition_number = part;
     cfg.max_cache_blocks = cache_blocks;
     if (overlay_dir && overlay_dir[0] != '\0') {
-        /* Overlay keeps lower ext4 strictly RO while permitting writes to upperdir unless --ro is forced */
-        cfg.read_only = ro ? 1 : 0;
+        /* Overlay keeps lower ext4 strictly RO while permitting writes to upperdir */
+        cfg.read_only = 0;
         cfg.overlay_upper_dir = overlay_dir;
     } else {
-        cfg.read_only = (ro || !rw) ? 1 : 0;
+        /* Read-Only by default; pass --rw to enable Read-Write mode */
+        cfg.read_only = rw ? 0 : 1;
     }
     cfg.ro_fallback_on_dirty = cfg.read_only;
     cfg.force_rw_on_dirty = force_dirty;
     cfg.case_insensitive = 1;
-    cfg.disable_direct_io = no_direct_io;
+    cfg.enable_direct_io = direct_io ? 1 : 0;
 
     ext4_vfs_ctx_t *ctx = NULL;
     int rc = ext4_vfs_mount(&cfg, &ctx);
@@ -595,7 +606,7 @@ static int cmd_mount(int argc, char **argv) {
                                ? (ctx->read_only ? "OVERLAY-RO" : "OVERLAY-RW(lower=RO)")
                                : (ctx->read_only ? "RO" : "RW");
     printf("Mounted '%s' (partition=%u, mode=%s, direct_io=%s%s%s) at %s. Press Ctrl+C to unmount...\n",
-           src, part, mode_str, ctx->disable_direct_io ? "off" : "on",
+           src, part, mode_str, ctx->enable_direct_io ? "on" : "off",
            overlay_dir ? ", upper=" : "", overlay_dir ? overlay_dir : "", mp);
     fflush(stdout);
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);

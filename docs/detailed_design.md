@@ -161,7 +161,7 @@ typedef struct ext4_vfs_ctx {
     int                       dirty_detected;
     int                       fell_back_to_ro;
     int                       case_insensitive;
-    int                       disable_direct_io;
+    int                       enable_direct_io;
     ext4_journal_state_t      journal_state;
     char                      source_path[1024];
     uint64_t                  partition_offset;
@@ -180,8 +180,8 @@ typedef struct ext4_vfs_ctx {
 | `op_getattr.c` | `ext4_vfs_stat`, `ext4_vfs_stat_ino`, `ext4_vfs_set_times` | Shared / Exclusive | パス正規化・大小文字フォールバック解決、64bit サイズ、100ns `FILETIME` 相互変換、`FILE_ATTRIBUTE_*`（ドットファイル `HIDDEN`、RO 時 `READONLY`）算出。 |
 | `op_readdir.c` | `ext4_vfs_readdir` | Shared | `ext2fs_dir_iterate2` で各エントリ名と `ext4_stat_t` をコールバック返却。 |
 | `op_open.c` | `ext4_vfs_open`, `ext4_vfs_close_handle` | Shared | `ext4_file_handle_t` 確保・種別・RO 書き込み権限確認。 |
-| `op_read.c` | `ext4_vfs_read`, `ext4_vfs_lower_read`, `ext4_vfs_get_extents` | Extent Cache Hit: ロックレス / Miss: Shared | `extent_cache` ヒット時は `ext4_extent_pread` で物理セクタ直読（`--no-direct-io` 時は `ext2fs_file_read` フォールバック）。`ctx->overlay` 有効時は `overlay_vfs_read` へ委譲。 |
-| `op_write.c` | `ext4_vfs_write` | Exclusive | `write_to_eof` 対応書き込み、エクステント拡張、`mtime`/`ctime` 更新、対象 iノードの `extent_cache` 無効化。 |
+| `op_read.c` | `ext4_vfs_read`, `ext4_vfs_lower_read`, `ext4_vfs_get_extents` | Direct I/O Hit: ロックレス / Miss・通常: Shared | `--direct-io` かつ Lower RO 時のみ `extent_cache` + `ext4_extent_pread` で物理セクタ直読（既定・RW 時は `ext2fs_file_read`）。`ctx->overlay` 有効時は `overlay_vfs_read` へ委譲。 |
+| `op_write.c` | `ext4_vfs_write` | Exclusive | `write_to_eof` 対応書き込み、エクステント拡張、`mtime`/`ctime` 更新。 |
 | `op_create.c` | `ext4_vfs_create` | Exclusive | 親確認・重複検査・`ext2fs_new_inode`・256B iノード初期化（`EXT4_EXTENTS_FL`）・`ext2fs_link` 登録後に親 iノードを再読込して時刻更新（`ext2fs_expand_dir` 後の上書き防止）。 |
 | `op_mkdir.c` | `ext4_vfs_mkdir`, `ext4_vfs_can_delete` | Exclusive / Shared | `ext2fs_mkdir` によるディレクトリ作成、および `.` と `..` 以外のエントリ不在検証 (`-ENOTEMPTY`)。 |
 | `op_unlink.c` | `ext4_vfs_unlink` | Exclusive | 空チェック、`ext2fs_unlink`、リンクカウント 0 時の全ブロック解放（`ext2fs_punch`）および iノード解放。 |
@@ -196,6 +196,7 @@ typedef struct ext4_vfs_ctx {
 ## 6. ダイレクト・エクステント ＆ Overlay 層詳細 (`src/extent/`, `src/overlay/`)
 
 ### 6.1 `src/extent/extent_map.h` / `.c`
+- **有効条件**: `enable_direct_io != 0` かつ `lower_read_only != 0`（既定の RO マウントまたは `--overlay` で `--direct-io` 明示時のみ有効、`--rw` 時併用は `-EINVAL`）。
 - **抽出対象 (`ext4_extent_extract`)**:
   - `EXT4_INLINE_DATA_FL` / 60B 未満 Fast Symlink: `EXT4_STORAGE_INLINE` としてバイト列を保持し、メモリから即返却。
   - `EXT4_EXTENTS_FL`: `ext2fs_extent_open2` + `EXT2_EXTENT_ROOT` → `while (!(e_flags & LEAF)) EXT2_EXTENT_DOWN` → `EXT2_EXTENT_NEXT_LEAF` で全リーフノードを走査し、連続物理エクステントを統合（`is_uninit` も正確に維持）。
@@ -203,10 +204,10 @@ typedef struct ext4_vfs_ctx {
 - **参照・読み取り (`ext4_extent_resolve`, `ext4_extent_pread`)**:
   - 論理オフセットで昇順ソートされた `runs[]` を `O(log N)` 二分探索。スパースホールや `is_uninit` 領域は I/O 発行せず `memset(0)`、実ブロック領域は `win32_io_pread_direct` へ渡す。
 - **キャッシュ (`ext4_extent_cache_t`)**:
-  - 最大 4096 エントリの LRU ＋ 4096 バケットハッシュ表。各 `ext4_extent_map_t` は `InterlockedIncrement` / `InterlockedDecrement` による `ref_count` 管理を行い、evict や RW 無効化 (`ext4_extent_cache_invalidate`) と並列 Read の競合を完全に防止する。
+  - 最大 4096 エントリの LRU ＋ 4096 バケットハッシュ表。各 `ext4_extent_map_t` は `InterlockedIncrement` / `InterlockedDecrement` による `ref_count` 管理を行い、evict と並列 Read の競合を防止する。
 
 ### 6.2 `src/overlay/overlay_vfs.h` / `.c`
-- **基本原則**: `cfg.overlay_upper_dir` 指定時、Lower (`ctx->fs`) は強制的に Read-Only でオープンし、すべての更新系操作は NTFS 上の `upper_dir` に向ける。
+- **基本原則 & Lower-ID 照合**: `cfg.overlay_upper_dir` 指定時、Lower (`ctx->fs`) は強制的に Read-Only でオープンし、すべての更新系操作は NTFS 上の `upper_dir` に向ける。`overlay_vfs_create` 時に `<upper_dir>\.wh.__ext4_lower_id`（UUID・総ブロック数・ブロックサイズ）を検査／記録し、異なる Lower ボリュームへの誤流用を `-EINVAL` でブロックする（未マーカーの非空ディレクトリに対しては警告ログを出力）。
 - **解決規則 (`overlay_resolve`)**:
   - ルート `/` からパス要素ごとにたどり、`upper_dir` 上の `.wh.<name>`（ホワイトアウト）およびディレクトリ内 `.wh.__dir_opaque`（削除後再作成による不透過ディレクトリ）を判定した上で Upper 優先 → Lower フォールバックを行う。Upper に通常ファイルが存在する場合は同名の Lower ディレクトリおよび配下を遮蔽する。
 - **iノード安定性 (`overlay_assign_ino` / `overlay_lookup_ino`)**:

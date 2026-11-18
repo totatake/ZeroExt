@@ -187,6 +187,12 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
                  probe.journal_state == EXT4_JOURNAL_HAS_ERRORS);
     int fell_back = 0;
 
+    if (cfg->enable_direct_io && !lower_ro) {
+        ext4_log(EXT4_LOG_ERROR,
+                 "Direct extent I/O (--direct-io) is only supported in Read-Only (default) or --overlay mode.");
+        return -EINVAL;
+    }
+
     if (!lower_ro && dirty && !cfg->force_rw_on_dirty) {
         if (cfg->ro_fallback_on_dirty) {
             ext4_log(EXT4_LOG_WARN,
@@ -212,7 +218,7 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     ctx->dirty_detected = dirty;
     ctx->fell_back_to_ro = fell_back;
     ctx->case_insensitive = cfg->case_insensitive;
-    ctx->disable_direct_io = cfg->disable_direct_io;
+    ctx->enable_direct_io = cfg->enable_direct_io ? 1 : 0;
     ctx->journal_state = probe.journal_state;
     ctx->partition_offset = part_offset;
     ctx->partition_size = part_size;
@@ -251,7 +257,9 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
         return ext4_errcode_to_errno(retval);
     }
 
-    ctx->extent_cache = ext4_extent_cache_create(4096);
+    if (ctx->enable_direct_io && ctx->lower_read_only) {
+        ctx->extent_cache = ext4_extent_cache_create(4096);
+    }
     if (has_overlay) {
         int orc = overlay_vfs_create(ctx, cfg->overlay_upper_dir, &ctx->overlay);
         if (orc != 0) {
@@ -338,6 +346,26 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
                                 EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE |
                                 EXT4_FEATURE_RO_COMPAT_METADATA_CSUM;
     ext2fs_blocks_count_set(&param, blocks_count);
+    {
+        static volatile LONG64 s_uuid_seq = 0;
+        LARGE_INTEGER qpc;
+        ULONGLONG ticks = GetTickCount64();
+        LONG64 seq = InterlockedIncrement64(&s_uuid_seq);
+        uint64_t a, b;
+        QueryPerformanceCounter(&qpc);
+        a = (uint64_t)qpc.QuadPart ^ ((uint64_t)GetCurrentProcessId() << 32) ^ (uint64_t)seq;
+        b = (uint64_t)ticks ^ ((uint64_t)seq * 0x9E3779B97F4A7C15ULL);
+        a = (a ^ (a >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        a = (a ^ (a >> 27)) * 0x94D049BB133111EBULL;
+        a ^= (a >> 31);
+        b = (b ^ (b >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        b = (b ^ (b >> 27)) * 0x94D049BB133111EBULL;
+        b ^= (b >> 31);
+        memcpy(param.s_uuid, &a, 8);
+        memcpy(param.s_uuid + 8, &b, 8);
+        param.s_uuid[6] = (param.s_uuid[6] & 0x0F) | 0x40; /* UUID v4 */
+        param.s_uuid[8] = (param.s_uuid[8] & 0x3F) | 0x80; /* RFC 4122 variant */
+    }
 
     if (label && *label) {
         size_t llen = strlen(label);

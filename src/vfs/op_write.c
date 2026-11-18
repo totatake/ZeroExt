@@ -1,6 +1,5 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
-#include "../extent/extent_map.h"
 #include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
@@ -54,9 +53,6 @@ int ext4_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint64_
         }
     }
     ReleaseSRWLockExclusive(&ctx->rwlock);
-    if (ctx->extent_cache) {
-        ext4_extent_cache_invalidate(ctx->extent_cache, ino);
-    }
 
     if (retval != 0) return ext4_errcode_to_errno(retval);
     *out_written = (uint32_t)written;
