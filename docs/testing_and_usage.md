@@ -20,6 +20,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1 -Clean
 - `build/ext4fsp_core.lib`: `win32_io` / `disk` / `vfs` / `winfsp_driver` コア静的ライブラリ
 - `build/ext4fsp.exe`: CLI ＆ WinFsp マウント実行ファイル
 - `build/ext4fsp_tests.exe`: 単体・結合テスト実行ファイル
+- `build/ext4fsp_bench.exe`: `--direct-io` 性能評価ベンチマーク実行ファイル（`tests/bench_direct_io.c`）
 
 ---
 
@@ -181,3 +182,9 @@ Total Test time (real) =   0.52 sec
 2. **WinFsp ドライブマウント & 並列負荷**: テストイメージへの WinFsp 経由 RO/RW マウント＋6 スレッド並列アクセス、実物理ディスク (`\\.\PhysicalDrive2`, partition 2) の RW マウントおよび Explorer 参照を確認。
 3. **WinFsp Overlay マウント (`--overlay`)**: `W:` へ Overlay マウントした状態で Lower ファイルの読み取り・Upper 新規作成・Lower ファイルへの追記 (Copy-up) を実行し、Lower イメージが変更前 (`LOWER-BASE-DATA`) のまま不変であることを確認。
 4. **Upstream 分離検証**: `third_party/e2fsprogs/` 配下に `_MSC_VER` / `_WIN32` / `windows.h` 等の Windows 固有記述が 0 件であることを確認。
+
+---
+
+## 性能ベンチマーク (`ext4fsp_bench.exe`)
+
+`--direct-io` 有無による VFS 単体層および WinFsp 実マウント経由の読み取りスループット比較には `.\build\ext4fsp_bench.exe` を使用する。詳細な測定結果・考察・再現手順は [性能評価報告書 (`--direct-io` 比較)](performance_evaluation.md) を参照。

@@ -178,3 +178,10 @@ add_test(NAME partition_and_probe COMMAND ext4fsp_tests --suite partition_and_pr
 add_test(NAME vfs_operations      COMMAND ext4fsp_tests --suite vfs_operations)
 add_test(NAME winfsp_callbacks    COMMAND ext4fsp_tests --suite winfsp_callbacks)
 add_test(NAME extent_and_overlay  COMMAND ext4fsp_tests --suite extent_and_overlay)
+
+# Benchmark executable: ext4fsp_bench.exe (Direct I/O vs standard VFS/WinFsp read)
+add_executable(ext4fsp_bench tests/bench_direct_io.c)
+target_link_libraries(ext4fsp_bench PRIVATE ext4fsp_core ext2fs)
+if(MSVC)
+    target_compile_options(ext4fsp_bench PRIVATE /W4 /wd4100 /wd4200)
+endif()

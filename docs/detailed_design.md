@@ -15,7 +15,8 @@ d:\libext2fs-win\
 │   ├── requirements.md                   # 要件定義書
 │   ├── architecture.md                   # アーキテクチャ設計書・ADR
 │   ├── detailed_design.md                # 本詳細設計書
-│   └── testing_and_usage.md              # テスト報告書・利用ガイド
+│   ├── testing_and_usage.md              # テスト報告書・利用ガイド
+│   └── performance_evaluation.md         # `--direct-io` 性能評価報告書
 ├── scripts/
 │   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> generated headers
 │   ├── update_e2fsprogs.ps1              # e2fsprogs 更新＆ビルド検証自動化スクリプト
@@ -35,7 +36,7 @@ d:\libext2fs-win\
 │   ├── vfs/                              # ext4_vfs.h, op_*.c
 │   ├── driver/                           # winfsp_driver.h / .c
 │   └── cli/                              # main.c (ext4fsp.exe)
-└── tests/                                # test_main.c + 単体・結合テスト群
+└── tests/                                # test_main.c + 単体・結合テスト群 + bench_direct_io.c
 ```
 
 ### CMake ターゲット構成
@@ -52,8 +53,11 @@ d:\libext2fs-win\
    - ソース: `src/cli/main.c`
    - リンク: `ext4fsp_core`, `ext2fs`, `dbghelp`
 5. **`ext4fsp_tests`（実行ファイル / CTest 登録）**:
-   - ソース: `tests/*.c`
+   - ソース: `tests/test_*.c`
    - CTest スイート: `win32_io`, `partition_and_probe`, `vfs_operations`, `winfsp_callbacks`, `extent_and_overlay`
+6. **`ext4fsp_bench`（実行ファイル / Direct I/O ベンチマーク）**:
+   - ソース: `tests/bench_direct_io.c`
+   - リンク: `ext4fsp_core`, `ext2fs`
 
 ---
 
