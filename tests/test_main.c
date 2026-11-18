@@ -25,6 +25,9 @@ int main(int argc, char **argv) {
     if (!suite || strcmp(suite, "winfsp_callbacks") == 0) {
         failures += run_suite_winfsp_callbacks();
     }
+    if (!suite || strcmp(suite, "extent_and_overlay") == 0) {
+        failures += run_suite_extent_and_overlay();
+    }
 
     printf("\nSummary: failures=%d, assertions=%d\n", failures, g_test_assertions);
     return failures == 0 ? 0 : 1;

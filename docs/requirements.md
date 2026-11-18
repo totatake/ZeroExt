@@ -34,7 +34,9 @@ Windows 11 環境において、別ドライブや仮想イメージファイル
 | **FR-04** | **Read-Only / Read-Write 制御と Dirty 保護** | RO マウント時は `GENERIC_READ` のみでオープンし、I/O 層で書き込みを物理遮断する。RW マウント要求時に Dirty Journal (`EXT3_FEATURE_INCOMPAT_RECOVER` / JBD2 `s_start != 0` / `EXT2_ERROR_FS`) を検出した場合は RW マウントを拒否（または設定により RO 自動フォールバック）すること。 |
 | **FR-05** | **最新 ext4 ファイルシステム操作 (VFS)** | 64bit ブロック番号（`blk64_t`）、`EXT4_EXTENTS_FL`（インラインおよびマルチレベルエクステント）、従来型間接ブロック、256B+ iノード（ナノ秒精度タイムスタンプ・`crtime`）、`metadata_csum`（CRC32C）検証・更新、複数ブロックディレクトリ拡張・HTree 互換ディレクトリ操作、シンボリックリンク（Fast / Block）、リネーム、トランケート、ボリュームラベル変更に対応すること。 |
 | **FR-06** | **WinFsp ユーザー空間ドライバ統合** | `FSP_FILE_SYSTEM_INTERFACE` の全コールバックを実装し、エクスプローラー・Win32 アプリ・メモリマップドファイル (`mmap`) からドライブレターとして透過アクセス可能にすること。`winfsp-x64.dll` は実行時に動的ロードし、SDK ヘッダ非導入環境でもビルド・インプロセス検証できること。 |
-| **FR-07** | **CLI 管理・オフライン操作ツール (`ext4fsp.exe`)** | `list`, `inspect`, `mkfs`, `ls`, `stat`, `cat`, `write`, `mkdir`, `rm`, `mv`, `mount` サブコマンドを備え、WinFsp マウントだけでなくイメージ生成・オフラインファイル操作・診断を単体で実行できること。 |
+| **FR-07** | **CLI 管理・オフライン操作ツール (`ext4fsp.exe`)** | `list`, `inspect`, `mkfs`, `ls`, `stat`, `cat`, `write`, `mkdir`, `rm`, `mv`, `extents`, `mount`, `unmount` サブコマンドを備え、WinFsp マウントだけでなくイメージ生成・オフラインファイル操作・エクステントマッピング検査・診断を単体で実行できること。 |
+| **FR-08** | **ダイレクト・エクステント I/O パススルー** | ファイルの初回読み取り時にエクステントツリー（多段ツリー含む）・間接ブロック・インラインデータを抽出して `inode -> ExtentRun[]` としてキャッシュし、以降の `Read` 要求を `libext2fs` およびメタデータロックをバイパスして二分探索 `O(log N)` で物理セクタへ直読すること（未初期化エクステント・スパースホールのゼロ埋め、RW 変更時のキャッシュ自動無効化を含む）。 |
+| **FR-09** | **NTFS Upperdir オーバーレイマウント (`--overlay`)** | Lower 側の ext4 ボリュームを厳密に Read-Only で開いたまま（Dirty Journal ボリュームも安全に参照可）、Windows NTFS 上の指定ディレクトリを Upper 層として重ね合わせ、新規作成・変更（Copy-up）・削除（`.wh.<name>` ホワイトアウト / `.wh.__dir_opaque` 不透過ディレクトリ）・リネームを非破壊の Read-Write ボリューム（ドライブレターまたは NTFS 空フォルダマウントポイント）として提供すること。 |
 
 ---
 
@@ -42,7 +44,7 @@ Windows 11 環境において、別ドライブや仮想イメージファイル
 
 | ID | カテゴリ | 要件内容 |
 | :--- | :--- | :--- |
-| **NFR-01** | **性能（並列 Read・キャッシュ）** | 2 階層 `SRWLOCK` によりメタデータ更新は排他、データ Read は複数スレッド並列実行可能にする。I/O 層の LRU ブロックキャッシュおよび WinFsp `FileInfoTimeout` カーネルキャッシュ有効化により、大容量ファイル読み取り・ディレクトリ列挙を高速化する。 |
+| **NFR-01** | **性能（並列 Read・ダイレクト I/O・キャッシュ）** | エクステント直結エンジンと `win32_io_pread_direct` により、抽出済みの通常ファイル `Read` は `ctx->rwlock` や I/O ブロックキャッシュロックを取らず並列直読でき、GGUF 等の大容量 `mmap` ロードにおいてネイティブディスクに近いスループットを実現する。メタデータ層は 2 階層 `SRWLOCK`＋LRU キャッシュおよび WinFsp `FileInfoTimeout` カーネルキャッシュで高速化する。 |
 | **NFR-02** | **安全性・耐障害性** | ユーザー空間プロセスとして動作し、Windows 11 のドライバ署名（Attestation Signing）不要で動作し、異常時も OS クラッシュ（BSOD）を起こさない。 |
 | **NFR-03** | **アップストリーム追従性** | `third_party/e2fsprogs` へ Windows 固有パッチ（`#ifdef _MSC_VER` 等）を混入させず、`compat/` と自動ヘッダ生成スクリプトへ完全分離することで、将来の `e2fsprogs` 新バージョンへの追従・ビルド検証を容易にする。 |
 | **NFR-04** | **ビルド可搬性・自己完結性** | Cygwin / MSYS2 ランタイム DLL（`cygwin1.dll` 等）に依存せず、Visual Studio 2022 (`cl.exe` / CMake / Ninja) のみで純粋なネイティブ Windows バイナリとしてビルドできること。 |

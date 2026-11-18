@@ -303,9 +303,24 @@ static errcode_t win32_aligned_read(win32_private_t *priv, uint64_t logical_off,
     if (logical_off > priv->partition_size || len > priv->partition_size - logical_off) {
         return EXT2_ET_LLSEEK_FAILED;
     }
+
+    /* Chunk reads > 64 MiB so DWORD length and aligned bounce buffers remain bounded */
+    if (len > (64U * 1024U * 1024U)) {
+        size_t done = 0;
+        while (done < len) {
+            size_t chunk = len - done;
+            if (chunk > (64U * 1024U * 1024U)) chunk = (64U * 1024U * 1024U);
+            errcode_t rc = win32_aligned_read(priv, logical_off + done, (uint8_t *)dst + done, chunk);
+            if (rc != 0) return rc;
+            done += chunk;
+        }
+        return 0;
+    }
+
     phys_off = priv->partition_offset + logical_off;
 
-    if ((phys_off % sec) == 0 && (len % sec) == 0 && (((uintptr_t)dst) % sec) == 0) {
+    if (!priv->is_physical_device ||
+        ((phys_off % sec) == 0 && (len % sec) == 0 && (((uintptr_t)dst) % sec) == 0)) {
         err = raw_pread_exact(priv->handle, phys_off, dst, (DWORD)len, &got);
         if (err != ERROR_SUCCESS) {
             return EXT2_ET_SHORT_READ;
@@ -685,6 +700,18 @@ uint64_t win32_io_get_device_size(io_channel channel) {
     if (!channel || channel->magic != EXT2_ET_MAGIC_IO_CHANNEL) return 0;
     priv = (win32_private_t *)channel->private_data;
     return priv->partition_size;
+}
+
+errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
+                                void *dst, size_t len) {
+    win32_private_t *priv;
+    if (!channel || channel->magic != EXT2_ET_MAGIC_IO_CHANNEL) {
+        return EXT2_ET_MAGIC_IO_CHANNEL;
+    }
+    if (len == 0) return 0;
+    if (!dst) return EXT2_ET_INVALID_ARGUMENT;
+    priv = (win32_private_t *)channel->private_data;
+    return win32_aligned_read(priv, part_rel_offset, dst, len);
 }
 
 struct struct_io_manager struct_win32_io_manager = {

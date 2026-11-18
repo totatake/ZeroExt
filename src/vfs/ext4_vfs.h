@@ -14,6 +14,10 @@
 extern "C" {
 #endif
 
+struct ext4_extent_map;
+struct ext4_extent_cache;
+struct ext4_overlay_ctx;
+
 typedef struct ext4_mount_config {
     const char *source_path;
     uint32_t    partition_number;     /* 0 = auto / raw */
@@ -26,20 +30,26 @@ typedef struct ext4_mount_config {
     int         force_rw_on_dirty;    /* 1 = allow RW even if dirty journal detected */
     int         ignore_csum_errors;   /* 1 = set EXT2_FLAG_IGNORE_CSUM_ERRORS */
     int         case_insensitive;     /* 1 = fallback case-insensitive lookup (Windows default) */
+    const char *overlay_upper_dir;    /* Optional NTFS upperdir for Overlay mount (lower opens RO) */
+    int         disable_direct_io;    /* 1 = force ext2fs_file_read instead of direct extent I/O */
 } ext4_mount_config_t;
 
 typedef struct ext4_vfs_ctx {
-    ext2_filsys          fs;
-    SRWLOCK              rwlock;
-    int                  read_only;
-    int                  dirty_detected;
-    int                  fell_back_to_ro;
-    int                  case_insensitive;
-    ext4_journal_state_t journal_state;
-    char                 source_path[1024];
-    uint64_t             partition_offset;
-    uint64_t             partition_size;
-    char                 volume_label[32];
+    ext2_filsys               fs;
+    SRWLOCK                   rwlock;
+    int                       read_only;
+    int                       lower_read_only;
+    int                       dirty_detected;
+    int                       fell_back_to_ro;
+    int                       case_insensitive;
+    int                       disable_direct_io;
+    ext4_journal_state_t      journal_state;
+    char                      source_path[1024];
+    uint64_t                  partition_offset;
+    uint64_t                  partition_size;
+    char                      volume_label[32];
+    struct ext4_extent_cache *extent_cache;
+    struct ext4_overlay_ctx  *overlay;
 } ext4_vfs_ctx_t;
 
 typedef struct ext4_stat {
@@ -128,6 +138,15 @@ int ext4_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_targ
 int ext4_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol);
 int ext4_vfs_set_label(ext4_vfs_ctx_t *ctx, const char *label);
 int ext4_vfs_flush(ext4_vfs_ctx_t *ctx);
+
+/* Lower-layer direct helpers (bypass overlay routing; used by overlay_vfs & tools) */
+int ext4_vfs_lower_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st);
+int ext4_vfs_lower_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st);
+int ext4_vfs_lower_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx);
+int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t offset,
+                        uint32_t length, uint32_t *out_read);
+int ext4_vfs_lower_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol);
+int ext4_vfs_get_extents(ext4_vfs_ctx_t *ctx, const char *path, struct ext4_extent_map **out_map);
 
 #ifdef __cplusplus
 }

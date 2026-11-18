@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
 
@@ -45,7 +46,7 @@ static int vfs_readdir_cb_internal(ext2_ino_t dir, int entry, struct ext2_dir_en
     return 0;
 }
 
-int ext4_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx) {
+int ext4_vfs_lower_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx) {
     struct vfs_readdir_bridge bridge;
     int ret;
 
@@ -62,4 +63,11 @@ int ext4_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb
 
     if (ret != 0) return ext4_errcode_to_errno((errcode_t)ret);
     return bridge.err;
+}
+
+int ext4_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx) {
+    if (ctx && ctx->overlay) {
+        return overlay_vfs_readdir(ctx, dir_ino, cb, user_ctx);
+    }
+    return ext4_vfs_lower_readdir(ctx, dir_ino, cb, user_ctx);
 }

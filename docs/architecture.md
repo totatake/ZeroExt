@@ -2,14 +2,14 @@
 
 ## 1. システムアーキテクチャ概要
 
-本システムは、カーネルプロキシとしての **WinFsp (`winfsp-x64.sys` / `winfsp-x64.dll`)**、WinFsp コールバックブリッジ層（`src/driver/`）、モジュラー VFS 操作層（`src/vfs/op_*.c`）、ディスク・パーティション・ジャーナル検査層（`src/disk/`）、本家 `e2fsprogs` (`third_party/e2fsprogs/` + `compat/`)、および Windows ネイティブ I/O マネージャ（`src/io/win32_io.c`）の 6 層で構成される。
+本システムは、カーネルプロキシとしての **WinFsp (`winfsp-x64.sys` / `winfsp-x64.dll`)**、WinFsp コールバックブリッジ層（`src/driver/`）、NTFS Overlay ルーティング層（`src/overlay/`）、モジュラー VFS 操作層（`src/vfs/op_*.c`）、エクステント直結 I/O エンジン（`src/extent/`）、ディスク・パーティション・ジャーナル検査層（`src/disk/`）、本家 `e2fsprogs` (`third_party/e2fsprogs/` + `compat/`)、および Windows ネイティブ I/O マネージャ（`src/io/win32_io.c`）で構成される。
 
 ### 1.1 コンポーネント構成図
 
 ```mermaid
 flowchart TD
     subgraph UserApps["Windows アプリケーション層"]
-        Exp["Windows Explorer / Win32 Apps / mmap"]
+        Exp["Windows Explorer / Win32 Apps / mmap (GGUF 等)"]
         CliUser["管理者ターミナル (CLI)"]
     end
 
@@ -18,17 +18,20 @@ flowchart TD
     end
 
     subgraph DriverExe["libext2fs-win / ext4fsp.exe (ユーザー空間)"]
-        CLI["src/cli/main.c\n(list / inspect / mkfs / mount 等)"]
-        WinFspDrv["src/driver/winfsp_driver.c\n(FSP_FILE_SYSTEM_INTERFACE + 動的FspLoad)"]
+        CLI["src/cli/main.c\n(list / inspect / extents / mount 等)"]
+        WinFspDrv["src/driver/winfsp_driver.c\n(FSP_FILE_SYSTEM_INTERFACE + UACセッション対応)"]
+        Overlay["src/overlay/overlay_vfs.c\n(--overlay 時: Upper NTFS + Copy-up + Whiteout)"]
         VFS["src/vfs/op_*.c\n(モジュラーVFS + 2階層SRWLOCK)"]
+        Extent["src/extent/extent_map.c\n(エクステント抽出/LRUキャッシュ + 二分探索ロックレスRead)"]
         Disk["src/disk/\n(partition_table / superblock_probe / disk_scanner)"]
         LibExt2["third_party/e2fsprogs/lib/ext2fs\n(64bit / Extents / CRC32C / 256B Inode)"]
         Compat["compat/ (msvc_compat.h + include/)\n+ scripts/generate_e2fsprogs_headers.py"]
-        Win32IO["src/io/win32_io.c\n(struct_io_manager: OVERLAPPED + 4KB RMW + LRU + 境界ガード)"]
+        Win32IO["src/io/win32_io.c\n(OVERLAPPED + 直読API + 4KB RMW + LRU + 境界ガード)"]
     end
 
-    subgraph Storage["ストレージデバイス"]
-        Phys["\\\\.\\PhysicalDriveX (GPT/MBR) / .img"]
+    subgraph Storage["ストレージデバイス / Upperdir"]
+        Phys["\\\\.\\PhysicalDriveX (GPT/MBR) / .img (Lower)"]
+        NtfsUpper["Windows NTFS Upperdir (--overlay 指定時)"]
     end
 
     Exp --> WinFspSys
@@ -38,9 +41,14 @@ flowchart TD
     CLI --> VFS
     CLI --> WinFspDrv
     WinFspDrv --> VFS
+    VFS -->|"--overlay 時"| Overlay
+    Overlay -->|"書込 / Upper参照 / Copy-up"| NtfsUpper
+    Overlay -->|"Lower 参照 (RO)"| Extent
+    VFS -->|"通常Read (キャッシュヒット時ロックレス)"| Extent
     VFS --> Disk
     VFS --> LibExt2
     Compat -.->|"Zero-Patch /FI 適用"| LibExt2
+    Extent -->|"win32_io_pread_direct"| Win32IO
     LibExt2 -->|"io_manager"| Win32IO
     Disk --> Win32IO
     Win32IO -->|"CreateFileW / OVERLAPPED"| Phys
@@ -53,34 +61,31 @@ sequenceDiagram
     actor User as ユーザー
     participant CLI as ext4fsp.exe (CLI / Driver)
     participant Disk as partition_table & superblock_probe
-    participant VFS as ext4_vfs (op_init / op_read / op_write)
-    participant IO as win32_io_manager (LRU + 4KB RMW)
+    participant VFS as ext4_vfs / overlay_vfs
+    participant Ext as extent_map (LRUキャッシュ + 二分探索)
+    participant IO as win32_io_manager
     participant Dev as PhysicalDrive / .img
 
-    User->>CLI: ext4fsp mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
-    CLI->>Disk: パーティション位置解決 (GPT/MBR/EBR)
-    Disk->>IO: オフセット0 / GPTエントリ読取
-    IO->>Dev: CreateFileW(GENERIC_READ) + ReadFile(OVERLAPPED)
-    Disk-->>CLI: OffsetBytes, SizeBytes 確定
+    User->>CLI: ext4fsp mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: [--overlay C:\upper]
+    CLI->>Disk: パーティション位置解決 (GPT/MBR/EBR) & ext4_probe_partition
+    Disk-->>CLI: OffsetBytes, SizeBytes, Journal状態
+    CLI->>VFS: ext4_vfs_mount(cfg) (Overlay時はLowerを厳密ROオープン)
+    VFS-->>CLI: ext4_vfs_ctx_t 確立
+    CLI->>CLI: WinFsp StartDispatcher & ドライブ/フォルダマウント
 
-    CLI->>Disk: ext4_probe_partition(OffsetBytes)
-    Disk-->>CLI: CLEAN or NEEDS_RECOVERY / HAS_ERRORS
-
-    alt Dirty Journal 検出 かつ force_rw_on_dirty なし
-        CLI-->>User: RW マウント拒否（または RO 自動フォールバック）
-    else 正常または RO 指定
-        CLI->>VFS: ext4_vfs_mount(cfg)
-        VFS->>IO: win32_io_manager (パーティション境界設定 + LRU初期化)
-        VFS->>IO: ext2fs_open2 + ext2fs_read_bitmaps
-        VFS-->>CLI: ext4_vfs_ctx_t 確立
-        CLI->>CLI: WinFsp FspFileSystemCreate & StartDispatcher (M:)
+    User->>CLI: ファイル Read (例: llama.cpp の mmap ページイン)
+    alt Overlay で Upper (NTFS) に存在
+        VFS-->>User: Upper NTFS ファイルから直接 ReadFile
+    else Lower (ext4) のファイルを Direct Extent I/O で読み取り
+        Ext->>Ext: extent_cache 参照 (ヒット時は ctx->rwlock 不要)
+        opt 初回キャッシュミス時のみ
+            Ext->>IO: ext2fs_extent_get / block_iterate3 / inline_data_get 抽出
+        end
+        Ext->>Ext: O(log N) 二分探索で論理オフセット → 物理オフセット変換
+        Ext->>IO: win32_io_pread_direct (cache_lock バイパス)
+        IO->>Dev: ReadFile(OVERLAPPED) 連続ブロック一括直読
+        IO-->>User: データ返却 (スパース領域はメモリ上でゼロ埋め)
     end
-
-    User->>CLI: ファイル Read (マルチスレッド)
-    CLI->>VFS: AcquireSRWLockShared(&ctx->rwlock)
-    VFS->>IO: ext2fs_file_read -> win32_io read_blk64 (LRU参照 / OVERLAPPED)
-    IO-->>VFS: データ返却
-    VFS-->>CLI: ReleaseSRWLockShared
 ```
 
 ---
@@ -164,3 +169,12 @@ sequenceDiagram
 ### ADR-011: `UmFileContextIsUserContext2 = 1` によるハンドル単位コンテキスト管理
 - **決定**: `FSP_FSCTL_VOLUME_PARAMS.UmFileContextIsUserContext2` を `1` に設定し、`FspOpen` / `FspCreate` が返す `ext4_file_handle_t *` を WinFsp の `UserContext2`（オープンハンドル／`FILE_OBJECT` 単位の `FileDesc`）として扱う。
 - **根拠**: `UmFileContextIsUserContext2 = 0`（既定）では `UserContext`（`FileNode` スロット）が使われ、並列アクセス時に同一パスに対する複数のクローズ要求が同一ポインタへ配送されて二重解放 (`STATUS_HEAP_CORRUPTION` / `0xC0000374`) および解放済みポインタ参照が発生する。`ext4_file_handle_t` は `create_options` / `delete_on_close` / `open_writable` を保持するオープン単位の構造体であるため、`UserContext2` に割り当てることで 1 オープン＝1 クローズが保証される。
+
+### ADR-012: ロックレス・エクステント直結パススルー I/O (`src/extent/`)
+- **決定**: 通常 Read 時（`--no-direct-io` 未指定）は、inode のエクステント配列（多段エクステント木・従来型間接ブロック・インラインデータ・Fast シンボリックリンク・未初期化エクステント・スパースホールすべてに対応し隣接連続領域を自動結合）をキャッシュし、参照カウント (`InterlockedIncrement`/`Decrement`) 付き `ext4_extent_map_t` を取り出した後に `ctx->rwlock` およびブロックキャッシュロックを取らず `win32_io_pread_direct` で連続物理ブロックを一括読み出しする。RW マウントで `write` / `truncate` / `unlink` が発生した際は対象 inode のキャッシュを即時無効化する。
+- **根拠**: 大容量ファイル（GGUF モデルの `mmap` ロードや VM イメージ等）に対する大量ページイン時に毎回 `ext2fs_file_open` / `llseek` / ブロック単位の `cache_lock` を通過すると競合とシステムコール回数が増大する。`O(log N)` 二分探索＋一括 `OVERLAPPED` `ReadFile` により、読み取りパスから VFS ロック競合を完全に排除できる。また多段ツリー（`eh_depth >= 1`）走査時は `EXT2_EXTENT_ROOT` 直後に `EXT2_EXTENT_DOWN` で最初のリーフまで降りてから `EXT2_EXTENT_NEXT_LEAF` を呼ぶことでインデックス枝 0 のスキップを防ぐ。
+
+### ADR-013: NTFS を Upper 層とする非破壊 Overlay マウント (`src/overlay/`)
+- **決定**: `--overlay <upper_ntfs_dir>` 指定時は、Lower の ext4 ボリュームを常に厳密 Read-Only (`GENERIC_READ`、Dirty Journal でも安全オープン可) に固定し、Windows NTFS 上の指定フォルダを Upper 層とする OverlayFS 互換 VFS（`src/overlay/overlay_vfs.c`）を有効化する。
+- **根拠**: デュアルブート環境や Linux ワークスペース上の大容量ファイル（GGUF モデルや Linux ソースコード）へゼロコピーに近い速度でアクセスしつつ、Windows 側の出力物（ログ・ビルド生成物・設定変更）だけを NTFS に安全に逃がす用途では、ext4 本体への直接書き込みリスクを完全にゼロにする必要がある。ホワイトアウト (`.wh.<name>`) と不透過ディレクトリマーカー (`.wh.__dir_opaque`)、変更時自動 Copy-up、および `ino <-> path` 双方向マッピングにより、Lower を 1 バイトも汚さず完全な Read-Write 体験を実現できる。
+

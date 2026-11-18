@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
 
@@ -108,7 +109,7 @@ void ext4_fill_stat_from_inode(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
     }
 }
 
-int ext4_vfs_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st) {
+int ext4_vfs_lower_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st) {
     struct ext2_inode_large ino_st;
     errcode_t retval;
 
@@ -124,7 +125,14 @@ int ext4_vfs_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name
     return ext4_errcode_to_errno(retval);
 }
 
-int ext4_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
+int ext4_vfs_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st) {
+    if (ctx && ctx->overlay) {
+        return overlay_vfs_stat_ino(ctx, ino, leaf_name, out_st);
+    }
+    return ext4_vfs_lower_stat_ino(ctx, ino, leaf_name, out_st);
+}
+
+int ext4_vfs_lower_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
     char norm[1024];
     ext2_ino_t ino = 0;
     struct ext2_inode_large ino_st;
@@ -154,12 +162,22 @@ int ext4_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
     return rc;
 }
 
+int ext4_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
+    if (ctx && ctx->overlay) {
+        return overlay_vfs_stat(ctx, path, out_st);
+    }
+    return ext4_vfs_lower_stat(ctx, path, out_st);
+}
+
 int ext4_vfs_set_times(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint32_t win_attrs,
                        uint64_t ctime_ft, uint64_t atime_ft, uint64_t mtime_ft, uint64_t chgtime_ft) {
     struct ext2_inode_large ino_st;
     errcode_t retval;
 
     if (!ctx || ino == 0) return -EINVAL;
+    if (ctx->overlay) {
+        return overlay_vfs_set_times(ctx, ino, win_attrs, ctime_ft, atime_ft, mtime_ft, chgtime_ft);
+    }
     if (ctx->read_only) return -EROFS;
 
     AcquireSRWLockExclusive(&ctx->rwlock);

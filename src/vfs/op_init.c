@@ -2,6 +2,8 @@
 #include "../io/win32_io.h"
 #include "../disk/partition_table.h"
 #include "../common/ext4_errno.h"
+#include "../extent/extent_map.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -178,16 +180,19 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
         return -EINVAL;
     }
 
+    int has_overlay = (cfg->overlay_upper_dir && cfg->overlay_upper_dir[0] != '\0');
+    int lower_ro = has_overlay ? 1 : cfg->read_only;
     read_only = cfg->read_only;
     int dirty = (probe.journal_state == EXT4_JOURNAL_NEEDS_RECOVERY ||
                  probe.journal_state == EXT4_JOURNAL_HAS_ERRORS);
     int fell_back = 0;
 
-    if (!read_only && dirty && !cfg->force_rw_on_dirty) {
+    if (!lower_ro && dirty && !cfg->force_rw_on_dirty) {
         if (cfg->ro_fallback_on_dirty) {
             ext4_log(EXT4_LOG_WARN,
                      "Dirty journal / FS error detected (%s) on '%s'; falling back to READ-ONLY mount.",
                      ext4_journal_state_name(probe.journal_state), cfg->source_path);
+            lower_ro = 1;
             read_only = 1;
             fell_back = 1;
         } else {
@@ -203,9 +208,11 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
 
     InitializeSRWLock(&ctx->rwlock);
     ctx->read_only = read_only;
+    ctx->lower_read_only = lower_ro;
     ctx->dirty_detected = dirty;
     ctx->fell_back_to_ro = fell_back;
     ctx->case_insensitive = cfg->case_insensitive;
+    ctx->disable_direct_io = cfg->disable_direct_io;
     ctx->journal_state = probe.journal_state;
     ctx->partition_offset = part_offset;
     ctx->partition_size = part_size;
@@ -217,10 +224,10 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     io_cfg.partition_size_bytes = part_size;
     io_cfg.sector_size = sector_size;
     io_cfg.max_cache_blocks = cfg->max_cache_blocks;
-    io_cfg.read_only = read_only;
+    io_cfg.read_only = lower_ro;
 
     flags = EXT2_FLAG_64BITS;
-    if (!read_only) {
+    if (!lower_ro) {
         flags |= EXT2_FLAG_RW;
     }
     if (cfg->ignore_csum_errors) {
@@ -244,6 +251,17 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
         return ext4_errcode_to_errno(retval);
     }
 
+    ctx->extent_cache = ext4_extent_cache_create(4096);
+    if (has_overlay) {
+        int orc = overlay_vfs_create(ctx, cfg->overlay_upper_dir, &ctx->overlay);
+        if (orc != 0) {
+            ext4_extent_cache_destroy(ctx->extent_cache);
+            ext2fs_close_free(&ctx->fs);
+            free(ctx);
+            return orc;
+        }
+    }
+
     *out_ctx = ctx;
     return 0;
 }
@@ -251,6 +269,15 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
 int ext4_vfs_unmount(ext4_vfs_ctx_t *ctx) {
     errcode_t retval = 0;
     if (!ctx) return 0;
+
+    if (ctx->overlay) {
+        overlay_vfs_destroy(ctx->overlay);
+        ctx->overlay = NULL;
+    }
+    if (ctx->extent_cache) {
+        ext4_extent_cache_destroy(ctx->extent_cache);
+        ctx->extent_cache = NULL;
+    }
 
     AcquireSRWLockExclusive(&ctx->rwlock);
     if (ctx->fs) {

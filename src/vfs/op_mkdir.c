@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,6 +36,9 @@ int ext4_vfs_mkdir(ext4_vfs_ctx_t *ctx, const char *path, uint16_t mode, ext2_in
     int rc;
 
     if (!ctx || !path) return -EINVAL;
+    if (ctx->overlay) {
+        return overlay_vfs_mkdir(ctx, path, mode, out_ino);
+    }
     if (ctx->read_only) return -EROFS;
 
     rc = ext4_vfs_normalize_path(path, norm, sizeof(norm));
@@ -104,6 +108,9 @@ int ext4_vfs_can_delete(ext4_vfs_ctx_t *ctx, ext2_ino_t ino) {
 
     if (!ctx || ino == 0) return -EINVAL;
     if (ctx->read_only) return -EROFS;
+    if (ctx->overlay) {
+        return overlay_vfs_can_delete(ctx, ino);
+    }
     if (ino == EXT2_ROOT_INO) return -EACCES;
 
     AcquireSRWLockShared(&ctx->rwlock);

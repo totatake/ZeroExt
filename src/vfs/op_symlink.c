@@ -13,7 +13,7 @@ int ext4_vfs_symlink(ext4_vfs_ctx_t *ctx, const char *link_path, const char *tar
     int rc;
 
     if (!ctx || !link_path || !target_path) return -EINVAL;
-    if (ctx->read_only) return -EROFS;
+    if (ctx->read_only || ctx->lower_read_only) return -EROFS;
 
     rc = ext4_vfs_normalize_path(link_path, norm, sizeof(norm));
     if (rc != 0) return rc;

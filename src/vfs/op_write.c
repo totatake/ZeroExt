@@ -1,5 +1,7 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../extent/extent_map.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
 
@@ -11,6 +13,9 @@ int ext4_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint64_
     ext2_off64_t fsize = 0;
 
     if (!ctx || !out_written || ino == 0) return -EINVAL;
+    if (ctx->overlay) {
+        return overlay_vfs_write(ctx, ino, buf, offset, length, write_to_eof, out_written, out_new_size);
+    }
     *out_written = 0;
     if (out_new_size) *out_new_size = 0;
     if (ctx->read_only) return -EROFS;
@@ -49,6 +54,9 @@ int ext4_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint64_
         }
     }
     ReleaseSRWLockExclusive(&ctx->rwlock);
+    if (ctx->extent_cache) {
+        ext4_extent_cache_invalidate(ctx->extent_cache, ino);
+    }
 
     if (retval != 0) return ext4_errcode_to_errno(retval);
     *out_written = (uint32_t)written;

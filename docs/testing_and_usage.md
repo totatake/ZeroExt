@@ -39,11 +39,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1 -Clean
 .\build\ext4fsp.exe mkdir test.img /data [--partition <N>]
 .\build\ext4fsp.exe write test.img /data/hello.txt "Hello ext4!" [--partition <N>]
 .\build\ext4fsp.exe write test.img /data/model.bin C:\path\to\local.bin --from-file [--partition <N>]
-.\build\ext4fsp.exe ls    test.img /data [--partition <N>]
-.\build\ext4fsp.exe stat  test.img /data/hello.txt [--partition <N>]
-.\build\ext4fsp.exe cat   test.img /data/hello.txt [--partition <N>]
-.\build\ext4fsp.exe mv    test.img /data/hello.txt /data/renamed.txt [--partition <N>]
-.\build\ext4fsp.exe rm    test.img /data/renamed.txt [--partition <N>]
+.\build\ext4fsp.exe ls      test.img /data [--partition <N>]
+.\build\ext4fsp.exe stat    test.img /data/hello.txt [--partition <N>]
+.\build\ext4fsp.exe cat     test.img /data/hello.txt [--partition <N>]
+.\build\ext4fsp.exe extents test.img /data/model.bin [--partition <N>]
+.\build\ext4fsp.exe mv      test.img /data/hello.txt /data/renamed.txt [--partition <N>]
+.\build\ext4fsp.exe rm      test.img /data/renamed.txt [--partition <N>]
 ```
 
 ### 2.2 WinFsp のインストールと Windows ドライブレターへのマウント
@@ -78,13 +79,23 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 #### マウント実行コマンド
 
 ```powershell
-# Read-Only マウント（既定：最も安全）
+# Read-Only マウント（既定：Direct Extent I/O 有効・最も安全）
 .\build\ext4fsp.exe mount --source test.img --mountpoint M: --ro
 
 # Read-Write マウント（Dirty Journal 検出時は自動拒否）
 .\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
 
+# 非破壊 Overlay マウント（Lower の ext4 は常に RO、作成/変更は NTFS Upperdir へ保存）
+# ※ GGUF モデル等を ext4 からゼロオーバーヘッド直読しつつ、Windows 側へ設定・ログ・生成物を書込可能
+.\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
+
+# NTFS の空きディレクトリへ直接マウントすることも可能
+# （親ディレクトリは通常の NTFS 書き込み領域、サブフォルダ配下だけを Overlay/ext4 として公開）
+.\build\ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint C:\models\linux_ext4 --ro
+
 # オプション
+#   --overlay <dir>    : NTFS Upperdir を指定して Overlay RW マウント（Lower ext4 は厳密 RO）
+#   --no-direct-io     : Direct Extent I/O を無効化し、従来の libext2fs 経由 Read に切替
 #   --cache-blocks <N> : LRU ブロックキャッシュ数（既定 2048 ブロック = 8MB @ 4KB）
 #   --force-dirty      : Dirty Journal 検出時でも強制的に RW オープン（非推奨・上級者向け）
 #   --debug            : WinFsp デバッグログ有効化
@@ -134,31 +145,35 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update_e2fsprogs.ps1 -Upstrea
 | `vfs_operations` | `test_multiblock_directory_expansion` | 120 ファイル作成による `ext2fs_expand_dir` 複数ブロックディレクトリ拡張・部分削除・再マウント検証 | PASS |
 | `vfs_operations` | `test_gpt_partition_rw_isolation` | GPT Partition 2 への RW マウント書込時に Partition 1 の保護バイト (`0x5A`) が不変であること | PASS |
 | `winfsp_callbacks` | `test_winfsp_interface_e2e` | `FSP_FILE_SYSTEM_INTERFACE` 全主要コールバック（`GetVolumeInfo`, `SetVolumeLabel`, `GetSecurityByName`, `Create`, `Open`, `Overwrite`, `Read`/`EOF`, `Write`, `Flush`, `SetBasicInfo`, `SetFileSize`, `CanDelete`, `SetDelete`, `Rename`, `ReadDirectory` Marker ページング, `Cleanup`, `Close`） | PASS |
+| `extent_and_overlay` | `test_direct_extent_deep_tree_and_holes` | 8 断片・多段エクステント木 (`eh_depth >= 1`) 抽出、スパースホール横断・非アライン直読 (`disable_direct_io` 比較一致)、書込/縮小時のキャッシュ無効化 | PASS |
+| `extent_and_overlay` | `test_extent_indirect_uninit_and_inline` | 従来型間接ブロック (`EXT4_STORAGE_INDIRECT`)、インラインデータ (`EXT4_INLINE_DATA_FL`)、未初期化エクステント (`is_uninit`) ゼロ埋め直読 | PASS |
+| `extent_and_overlay` | `test_overlay_vfs_and_persistence` | Dirty ext4 の RO 下位マウント、Direct Extent 読取、Copy-up 書込・追記・再マウント永続性、ホワイトアウト (`.wh.*`) 隠蔽・不透過ディレクトリ再作成、下位 ext4 非破壊検証 | PASS |
 
-### 4.2 実行ログ抜粋（クリーンビルド・Release・MSVC 19.44.35228 x64）
+### 4.2 実行ログ抜粋（Release・MSVC 19.44.35228 x64）
 
 ```text
 Internal ctest changing into directory: D:/libext2fs-win/build
 Test project D:/libext2fs-win/build
     Start 1: win32_io
-1/4 Test #1: win32_io .........................   Passed    0.09 sec
+1/5 Test #1: win32_io .........................   Passed    0.09 sec
     Start 2: partition_and_probe
-2/4 Test #2: partition_and_probe ..............   Passed    0.10 sec
+2/5 Test #2: partition_and_probe ..............   Passed    0.09 sec
     Start 3: vfs_operations
-3/4 Test #3: vfs_operations ...................   Passed    0.16 sec
+3/5 Test #3: vfs_operations ...................   Passed    0.17 sec
     Start 4: winfsp_callbacks
-4/4 Test #4: winfsp_callbacks .................   Passed    0.03 sec
+4/5 Test #4: winfsp_callbacks .................   Passed    0.04 sec
+    Start 5: extent_and_overlay
+5/5 Test #5: extent_and_overlay ...............   Passed    0.08 sec
 
-100% tests passed, 0 tests failed out of 4
-Total Test time (real) =   0.39 sec
+100% tests passed, 0 tests failed out of 5
+Total Test time (real) =   0.49 sec
 ```
 
-`ext4fsp_tests.exe` 直接実行結果：`Summary: failures=0, assertions=28167`（全 13 テスト関数成功）。
+`ext4fsp_tests.exe` 直接実行結果：`Summary: failures=0, assertions=35395`（全 16 テスト関数成功）。
 
-### 4.3 CLI 実動作検証結果
+### 4.3 CLI & WinFsp 実動作検証結果
 
-16 MB ext4 イメージに対し `mkfs` → `inspect` → `mkdir` → `write` → `cat` → `mv` → `ls` → `rm` の一連操作を実行し、すべて終了コード 0 で正常完了することを確認しました（検証用一時イメージは削除済み）。
-また、`third_party/e2fsprogs` 配下に `_MSC_VER` / `_WIN32` / `windows.h` 等の Windows 固有記述が 0 件であることも確認済みです。
-
-> [!NOTE]
-> 本環境には WinFsp カーネルドライバ（`winfsp-x64.dll` / `winfsp-x64.sys`）が未インストールのため、実際のドライブレター（`M:` 等）を OS 上へ出現させる結合確認は未実施です（`FSP_FILE_SYSTEM_INTERFACE` 全コールバックの挙動は `winfsp_callbacks` インプロセス結合テストにて検証済み）。実ドライブマウントを行う場合は WinFsp をインストールしてください。
+1. **オフライン CLI 操作**: `ext4fsp.exe` で `mkfs` → `inspect` → `mkdir` → `write` → `cat` → `extents` → `mv` → `ls` → `rm` の一連操作を確認。
+2. **WinFsp ドライブマウント & 並列負荷**: テストイメージへの WinFsp 経由 RO/RW マウント＋6 スレッド並列アクセス、実物理ディスク (`\\.\PhysicalDrive2`, partition 2) の RW マウントおよび Explorer 参照を確認。
+3. **WinFsp Overlay マウント (`--overlay`)**: `W:` へ Overlay マウントした状態で Lower ファイルの読み取り・Upper 新規作成・Lower ファイルへの追記 (Copy-up) を実行し、Lower イメージが変更前 (`LOWER-BASE-DATA`) のまま不変であることを確認。
+4. **Upstream 分離検証**: `third_party/e2fsprogs/` 配下に `_MSC_VER` / `_WIN32` / `windows.h` 等の Windows 固有記述が 0 件であることを確認。

@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -106,6 +107,9 @@ int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_p
     int rc;
 
     if (!ctx || !old_path || !new_path) return -EINVAL;
+    if (ctx->overlay) {
+        return overlay_vfs_rename(ctx, old_path, new_path, replace_if_exists);
+    }
     if (ctx->read_only) return -EROFS;
 
     rc = ext4_vfs_normalize_path(old_path, norm_old, sizeof(norm_old));

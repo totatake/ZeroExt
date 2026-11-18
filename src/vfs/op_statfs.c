@@ -1,9 +1,10 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
 
-int ext4_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
+int ext4_vfs_lower_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
     uint64_t blk_sz;
     uint32_t serial = 0;
 
@@ -26,12 +27,19 @@ int ext4_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
     return 0;
 }
 
+int ext4_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
+    if (ctx && ctx->overlay) {
+        return overlay_vfs_statfs(ctx, out_vol);
+    }
+    return ext4_vfs_lower_statfs(ctx, out_vol);
+}
+
 int ext4_vfs_set_label(ext4_vfs_ctx_t *ctx, const char *label) {
     size_t len;
     errcode_t retval;
 
     if (!ctx || !label) return -EINVAL;
-    if (ctx->read_only) return -EROFS;
+    if (ctx->read_only || ctx->lower_read_only) return -EROFS;
 
     AcquireSRWLockExclusive(&ctx->rwlock);
     memset(ctx->fs->super->s_volume_name, 0, sizeof(ctx->fs->super->s_volume_name));

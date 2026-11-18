@@ -36,6 +36,11 @@ void win32_io_clear_next_config(void);
 void win32_io_get_stats(io_channel channel, win32_io_stats_t *out_stats);
 uint64_t win32_io_get_device_size(io_channel channel);
 
+/* Lockless direct partition-relative read bypassing the block cache and cache_lock.
+ * Handles 4KB/sector alignment automatically when reading from physical block devices. */
+errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
+                                void *dst, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

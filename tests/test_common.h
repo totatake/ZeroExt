@@ -58,5 +58,6 @@ int run_suite_win32_io(void);
 int run_suite_partition_and_probe(void);
 int run_suite_vfs_operations(void);
 int run_suite_winfsp_callbacks(void);
+int run_suite_extent_and_overlay(void);
 
 #endif /* LIBEXT2FS_WIN_TEST_COMMON_H */

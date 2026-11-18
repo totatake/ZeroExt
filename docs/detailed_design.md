@@ -30,6 +30,8 @@ d:\libext2fs-win\
 │   ├── common/                           # ext4_errno.h / .c
 │   ├── io/                               # win32_io.h / .c
 │   ├── disk/                             # partition_table, superblock_probe, disk_scanner
+│   ├── extent/                           # extent_map.h / .c (ダイレクト・エクステント直結I/O)
+│   ├── overlay/                          # overlay_vfs.h / .c (NTFS Upperdir OverlayFS)
 │   ├── vfs/                              # ext4_vfs.h, op_*.c
 │   ├── driver/                           # winfsp_driver.h / .c
 │   └── cli/                              # main.c (ext4fsp.exe)
@@ -44,14 +46,14 @@ d:\libext2fs-win\
    - コンパイルオプション (MSVC): `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_compat.h` `/W3`
    - デバッグ形式 (`CMP0141`): `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT = "Embedded"`（`/Z7` により `mspdbsrv.exe` 非依存でビルド）
 3. **`ext4fsp_core`（静的ライブラリ）**:
-   - ソース: `src/common/*.c`, `src/io/*.c`, `src/disk/*.c`, `src/vfs/*.c`, `src/driver/*.c`
-   - リンク: `ext2fs`, `advapi32`
+   - ソース: `src/common/*.c`, `src/io/*.c`, `src/disk/*.c`, `src/extent/*.c`, `src/overlay/*.c`, `src/vfs/*.c`, `src/driver/*.c`
+   - リンク: `ext2fs`, `advapi32`, `shell32`, `user32`
 4. **`ext4fsp`（実行ファイル）**:
    - ソース: `src/cli/main.c`
-   - リンク: `ext4fsp_core`, `ext2fs`
+   - リンク: `ext4fsp_core`, `ext2fs`, `dbghelp`
 5. **`ext4fsp_tests`（実行ファイル / CTest 登録）**:
    - ソース: `tests/*.c`
-   - CTest スイート: `win32_io`, `partition_and_probe`, `vfs_operations`, `winfsp_callbacks`
+   - CTest スイート: `win32_io`, `partition_and_probe`, `vfs_operations`, `winfsp_callbacks`, `extent_and_overlay`
 
 ---
 
@@ -103,6 +105,8 @@ void win32_io_set_next_config(const win32_io_config_t *cfg);
 void win32_io_clear_next_config(void);
 void win32_io_get_stats(io_channel channel, win32_io_stats_t *out_stats);
 uint64_t win32_io_get_device_size(io_channel channel);
+errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
+                                void *dst, size_t len);
 ```
 
 ### 3.2 動作仕様
@@ -150,20 +154,24 @@ uint64_t win32_io_get_device_size(io_channel channel);
 ### 5.1 コンテキストとロック順序規則
 ```c
 typedef struct ext4_vfs_ctx {
-    ext2_filsys          fs;
-    SRWLOCK              rwlock;
-    int                  read_only;
-    int                  dirty_detected;
-    int                  fell_back_to_ro;
-    int                  case_insensitive;
-    ext4_journal_state_t journal_state;
-    char                 source_path[1024];
-    uint64_t             partition_offset;
-    uint64_t             partition_size;
-    char                 volume_label[32];
+    ext2_filsys               fs;
+    SRWLOCK                   rwlock;
+    int                       read_only;
+    int                       lower_read_only;
+    int                       dirty_detected;
+    int                       fell_back_to_ro;
+    int                       case_insensitive;
+    int                       disable_direct_io;
+    ext4_journal_state_t      journal_state;
+    char                      source_path[1024];
+    uint64_t                  partition_offset;
+    uint64_t                  partition_size;
+    char                      volume_label[32];
+    struct ext4_extent_cache *extent_cache;
+    struct ext4_overlay_ctx  *overlay;
 } ext4_vfs_ctx_t;
 ```
-- **ロック階層順序**: 常に **`ctx->rwlock`（外側） → `win32_io` の `cache_lock`（内側）** の順で取得し、逆順取得を禁止する。
+- **ロック階層順序**: 常に **`mut_cs` (Overlay) → `ctx->rwlock`（外側） → `win32_io` の `cache_lock`（内側）**、および独立リーフの **`extent_cache->lock` / `overlay->map_lock`** とし、循環・逆順取得を禁止する。`ext4_extent_pread` 自体は `ref_count` 取得後にロックを一切保持せず `win32_io_pread_direct` を呼ぶ。
 
 ### 5.2 各操作モジュール責務一覧
 | モジュール | 公開関数 | 取得ロック | 主な処理内容 |
@@ -172,8 +180,8 @@ typedef struct ext4_vfs_ctx {
 | `op_getattr.c` | `ext4_vfs_stat`, `ext4_vfs_stat_ino`, `ext4_vfs_set_times` | Shared / Exclusive | パス正規化・大小文字フォールバック解決、64bit サイズ、100ns `FILETIME` 相互変換、`FILE_ATTRIBUTE_*`（ドットファイル `HIDDEN`、RO 時 `READONLY`）算出。 |
 | `op_readdir.c` | `ext4_vfs_readdir` | Shared | `ext2fs_dir_iterate2` で各エントリ名と `ext4_stat_t` をコールバック返却。 |
 | `op_open.c` | `ext4_vfs_open`, `ext4_vfs_close_handle` | Shared | `ext4_file_handle_t` 確保・種別・RO 書き込み権限確認。 |
-| `op_read.c` | `ext4_vfs_read` | Shared | `ext2fs_file_open` → `ext2fs_file_llseek` → `ext2fs_file_read` による並列読み取り。 |
-| `op_write.c` | `ext4_vfs_write` | Exclusive | `write_to_eof` 対応書き込み、エクステント拡張、`mtime`/`ctime` 更新。 |
+| `op_read.c` | `ext4_vfs_read`, `ext4_vfs_lower_read`, `ext4_vfs_get_extents` | Extent Cache Hit: ロックレス / Miss: Shared | `extent_cache` ヒット時は `ext4_extent_pread` で物理セクタ直読（`--no-direct-io` 時は `ext2fs_file_read` フォールバック）。`ctx->overlay` 有効時は `overlay_vfs_read` へ委譲。 |
+| `op_write.c` | `ext4_vfs_write` | Exclusive | `write_to_eof` 対応書き込み、エクステント拡張、`mtime`/`ctime` 更新、対象 iノードの `extent_cache` 無効化。 |
 | `op_create.c` | `ext4_vfs_create` | Exclusive | 親確認・重複検査・`ext2fs_new_inode`・256B iノード初期化（`EXT4_EXTENTS_FL`）・`ext2fs_link` 登録後に親 iノードを再読込して時刻更新（`ext2fs_expand_dir` 後の上書き防止）。 |
 | `op_mkdir.c` | `ext4_vfs_mkdir`, `ext4_vfs_can_delete` | Exclusive / Shared | `ext2fs_mkdir` によるディレクトリ作成、および `.` と `..` 以外のエントリ不在検証 (`-ENOTEMPTY`)。 |
 | `op_unlink.c` | `ext4_vfs_unlink` | Exclusive | 空チェック、`ext2fs_unlink`、リンクカウント 0 時の全ブロック解放（`ext2fs_punch`）および iノード解放。 |
@@ -185,7 +193,31 @@ typedef struct ext4_vfs_ctx {
 
 ---
 
-## 6. エラーコード変換規則 (`src/common/ext4_errno.h` / `.c`)
+## 6. ダイレクト・エクステント ＆ Overlay 層詳細 (`src/extent/`, `src/overlay/`)
+
+### 6.1 `src/extent/extent_map.h` / `.c`
+- **抽出対象 (`ext4_extent_extract`)**:
+  - `EXT4_INLINE_DATA_FL` / 60B 未満 Fast Symlink: `EXT4_STORAGE_INLINE` としてバイト列を保持し、メモリから即返却。
+  - `EXT4_EXTENTS_FL`: `ext2fs_extent_open2` + `EXT2_EXTENT_ROOT` → `while (!(e_flags & LEAF)) EXT2_EXTENT_DOWN` → `EXT2_EXTENT_NEXT_LEAF` で全リーフノードを走査し、連続物理エクステントを統合（`is_uninit` も正確に維持）。
+  - 従来型間接ブロック: `ext2fs_block_iterate3(..., BLOCK_FLAG_READ_ONLY, ...)` で物理ブロックを結合。
+- **参照・読み取り (`ext4_extent_resolve`, `ext4_extent_pread`)**:
+  - 論理オフセットで昇順ソートされた `runs[]` を `O(log N)` 二分探索。スパースホールや `is_uninit` 領域は I/O 発行せず `memset(0)`、実ブロック領域は `win32_io_pread_direct` へ渡す。
+- **キャッシュ (`ext4_extent_cache_t`)**:
+  - 最大 4096 エントリの LRU ＋ 4096 バケットハッシュ表。各 `ext4_extent_map_t` は `InterlockedIncrement` / `InterlockedDecrement` による `ref_count` 管理を行い、evict や RW 無効化 (`ext4_extent_cache_invalidate`) と並列 Read の競合を完全に防止する。
+
+### 6.2 `src/overlay/overlay_vfs.h` / `.c`
+- **基本原則**: `cfg.overlay_upper_dir` 指定時、Lower (`ctx->fs`) は強制的に Read-Only でオープンし、すべての更新系操作は NTFS 上の `upper_dir` に向ける。
+- **解決規則 (`overlay_resolve`)**:
+  - ルート `/` からパス要素ごとにたどり、`upper_dir` 上の `.wh.<name>`（ホワイトアウト）およびディレクトリ内 `.wh.__dir_opaque`（削除後再作成による不透過ディレクトリ）を判定した上で Upper 優先 → Lower フォールバックを行う。Upper に通常ファイルが存在する場合は同名の Lower ディレクトリおよび配下を遮蔽する。
+- **iノード安定性 (`overlay_assign_ino` / `overlay_lookup_ino`)**:
+  - Lower に由来するエントリには Lower の `ext2_ino_t` を引き継ぎ、Upper 新規作成エントリには `0x80000000U` 以降の合成 `ext2_ino_t` を割り当て、`path <-> ino` 双方向表で管理（`rename` 時もプレフィックス配下のパスを一括更新）。
+- **Copy-up (`ensure_upper_copy`) & マージ列挙 (`overlay_vfs_readdir`)**:
+  - Lower のみ存在するファイルへの `writable` オープン・`write`・`truncate`・`set_times`・`rename` 時に一時ファイル経由で Upper へ原子的コピーアップ（`ext4_vfs_lower_read` により Direct Extent 経由で高速転送）。
+  - `readdir` は Upper と Lower を重複排除・ホワイトアウトフィルタ付きで統合し、`.wh.*` マーカーを透過的に隠蔽する。
+
+---
+
+## 7. エラーコード変換規則 (`src/common/ext4_errno.h` / `.c`)
 
 | 発生事象 | `libext2fs` `errcode_t` / POSIX `-errno` | Windows `NTSTATUS` |
 | :--- | :--- | :--- |
@@ -202,7 +234,7 @@ typedef struct ext4_vfs_ctx {
 
 ---
 
-## 7. WinFsp ドライバ層詳細 (`src/driver/winfsp_driver.h`, `winfsp_driver.c`)
+## 8. WinFsp ドライバ層詳細 (`src/driver/winfsp_driver.h`, `winfsp_driver.c`)
 
 - **`FSP_FSCTL_VOLUME_PARAMS` 設定**:
   - `SectorSize = (UINT16)vol.block_size`、`SectorsPerAllocationUnit = 1`、`MaxComponentLength = 255`

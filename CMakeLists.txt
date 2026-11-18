@@ -116,6 +116,8 @@ add_library(ext4fsp_core STATIC
     src/disk/superblock_probe.c
     src/disk/partition_table.c
     src/disk/disk_scanner.c
+    src/extent/extent_map.c
+    src/overlay/overlay_vfs.c
     src/vfs/op_init.c
     src/vfs/op_getattr.c
     src/vfs/op_readdir.c
@@ -164,6 +166,7 @@ add_executable(ext4fsp_tests
     tests/test_partition_and_probe.c
     tests/test_vfs_operations.c
     tests/test_winfsp_callbacks.c
+    tests/test_extent_and_overlay.c
 )
 target_link_libraries(ext4fsp_tests PRIVATE ext4fsp_core ext2fs)
 if(MSVC)
@@ -174,3 +177,4 @@ add_test(NAME win32_io            COMMAND ext4fsp_tests --suite win32_io)
 add_test(NAME partition_and_probe COMMAND ext4fsp_tests --suite partition_and_probe)
 add_test(NAME vfs_operations      COMMAND ext4fsp_tests --suite vfs_operations)
 add_test(NAME winfsp_callbacks    COMMAND ext4fsp_tests --suite winfsp_callbacks)
+add_test(NAME extent_and_overlay  COMMAND ext4fsp_tests --suite extent_and_overlay)

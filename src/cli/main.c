@@ -3,6 +3,7 @@
 #include "../disk/partition_table.h"
 #include "../disk/superblock_probe.h"
 #include "../vfs/ext4_vfs.h"
+#include "../extent/extent_map.h"
 #include "../driver/winfsp_driver.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,7 +96,9 @@ static void print_usage(void) {
         "  ext4fsp mkdir <image_path> <ext4_path> [--partition <N>]\n"
         "  ext4fsp rm <image_path> <ext4_path> [--partition <N>]\n"
         "  ext4fsp mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
-        "  ext4fsp mount --source <image_or_disk> --mountpoint <M:> [--partition <N>] [--rw|--ro] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
+        "  ext4fsp extents <image_or_disk> <ext4_path> [--partition <N>]\n"
+        "  ext4fsp mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw|--ro]\n"
+        "                [--overlay <ntfs_upper_dir>] [--no-direct-io] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
         "  ext4fsp unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
         "  A mount stays active while the 'mount' process runs; press Ctrl+C in that console to unmount.\n"
@@ -490,14 +493,59 @@ static int cmd_mv(int argc, char **argv) {
     return 0;
 }
 
+static int cmd_extents(int argc, char **argv) {
+    if (argc < 4) {
+        print_usage();
+        return 1;
+    }
+    uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
+    ext4_vfs_ctx_t *ctx = NULL;
+    int rc = mount_helper(argv[2], part, 1, &ctx);
+    if (rc != 0) return 1;
+
+    ext4_extent_map_t *map = NULL;
+    rc = ext4_vfs_get_extents(ctx, argv[3], &map);
+    if (rc != 0) {
+        fprintf(stderr, "extents failed for '%s': %d\n", argv[3], rc);
+        ext4_vfs_unmount(ctx);
+        return 1;
+    }
+
+    const char *kind_str = (map->kind == EXT4_STORAGE_EXTENTS) ? "extents" :
+                           (map->kind == EXT4_STORAGE_INDIRECT) ? "indirect" : "inline";
+    printf("Path: %s | Inode: %u | Size: %llu bytes | BlockSize: %u | Kind: %s | Runs: %zu | PartOff: %llu\n",
+           argv[3], map->ino, (unsigned long long)map->file_size, map->block_size,
+           kind_str, map->run_count, (unsigned long long)ctx->partition_offset);
+    if (map->kind == EXT4_STORAGE_INLINE) {
+        printf("  [INLINE] %zu bytes stored directly inside inode\n", map->inline_size);
+    } else {
+        for (size_t i = 0; i < map->run_count; i++) {
+            const ext4_extent_run_t *r = &map->runs[i];
+            printf("  [%3zu] Logical [%12llu .. %12llu) -> PartRel %12llu (DiskAbs %12llu) Len=%llu%s\n",
+                   i,
+                   (unsigned long long)r->logical_offset,
+                   (unsigned long long)(r->logical_offset + r->length),
+                   (unsigned long long)r->physical_offset,
+                   (unsigned long long)(ctx->partition_offset + r->physical_offset),
+                   (unsigned long long)r->length,
+                   r->is_uninit ? " [UNINIT]" : "");
+        }
+    }
+    ext4_extent_map_release(map);
+    ext4_vfs_unmount(ctx);
+    return 0;
+}
+
 static int cmd_mount(int argc, char **argv) {
     const char *src = parse_str_opt(argc, argv, "--source", NULL);
     const char *mp = parse_str_opt(argc, argv, "--mountpoint", NULL);
+    const char *overlay_dir = parse_str_opt(argc, argv, "--overlay", NULL);
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     uint32_t cache_blocks = parse_u32_opt(argc, argv, "--cache-blocks", 2048);
     int rw = has_flag(argc, argv, "--rw");
     int ro = has_flag(argc, argv, "--ro");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
+    int no_direct_io = has_flag(argc, argv, "--no-direct-io");
     uint32_t debug_log = has_flag(argc, argv, "--debug") ? (uint32_t)-1 : 0;
 
     if (!src || !mp) {
@@ -510,10 +558,17 @@ static int cmd_mount(int argc, char **argv) {
     cfg.source_path = src;
     cfg.partition_number = part;
     cfg.max_cache_blocks = cache_blocks;
-    cfg.read_only = (ro || !rw) ? 1 : 0;
+    if (overlay_dir && overlay_dir[0] != '\0') {
+        /* Overlay keeps lower ext4 strictly RO while permitting writes to upperdir unless --ro is forced */
+        cfg.read_only = ro ? 1 : 0;
+        cfg.overlay_upper_dir = overlay_dir;
+    } else {
+        cfg.read_only = (ro || !rw) ? 1 : 0;
+    }
     cfg.ro_fallback_on_dirty = cfg.read_only;
     cfg.force_rw_on_dirty = force_dirty;
     cfg.case_insensitive = 1;
+    cfg.disable_direct_io = no_direct_io;
 
     ext4_vfs_ctx_t *ctx = NULL;
     int rc = ext4_vfs_mount(&cfg, &ctx);
@@ -536,8 +591,12 @@ static int cmd_mount(int argc, char **argv) {
         return 1;
     }
 
-    printf("Mounted '%s' (partition=%u, mode=%s) at %s. Press Ctrl+C to unmount...\n",
-           src, part, ctx->read_only ? "RO" : "RW", mp);
+    const char *mode_str = ctx->overlay
+                               ? (ctx->read_only ? "OVERLAY-RO" : "OVERLAY-RW(lower=RO)")
+                               : (ctx->read_only ? "RO" : "RW");
+    printf("Mounted '%s' (partition=%u, mode=%s, direct_io=%s%s%s) at %s. Press Ctrl+C to unmount...\n",
+           src, part, mode_str, ctx->disable_direct_io ? "off" : "on",
+           overlay_dir ? ", upper=" : "", overlay_dir ? overlay_dir : "", mp);
     fflush(stdout);
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
     while (!g_stop_requested) {
@@ -584,6 +643,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "mkdir") == 0) return cmd_mkdir(argc, argv);
     if (strcmp(cmd, "rm") == 0) return cmd_rm(argc, argv);
     if (strcmp(cmd, "mv") == 0) return cmd_mv(argc, argv);
+    if (strcmp(cmd, "extents") == 0) return cmd_extents(argc, argv);
     if (strcmp(cmd, "mount") == 0) return cmd_mount(argc, argv);
 
     print_usage();

@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <string.h>
 
@@ -15,6 +16,9 @@ int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t 
     int rc;
 
     if (!ctx || !path) return -EINVAL;
+    if (ctx->overlay) {
+        return overlay_vfs_create_file(ctx, path, is_dir, mode, win_attrs, out_ino);
+    }
     if (ctx->read_only) return -EROFS;
     if (is_dir) {
         return ext4_vfs_mkdir(ctx, path, mode ? mode : 0755, out_ino);

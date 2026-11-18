@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,9 @@ int ext4_vfs_open(ext4_vfs_ctx_t *ctx, const char *path, int writable, ext4_file
     errcode_t retval;
 
     if (!ctx || !path || !out_handle) return -EINVAL;
+    if (ctx->overlay) {
+        return overlay_vfs_open(ctx, path, writable, out_handle);
+    }
     *out_handle = NULL;
     memset(&ino_st, 0, sizeof(ino_st));
 
