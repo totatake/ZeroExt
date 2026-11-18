@@ -160,3 +160,7 @@ sequenceDiagram
 ### ADR-010: WinFsp ABI 構造体レイアウトの検証
 - **決定**: SDK に依存しない自前ヘッダ `third_party/winfsp/include/winfsp/winfsp.h` の `FSP_FSCTL_VOLUME_PARAMS` (504 bytes)、`FSP_FSCTL_FILE_INFO` (72 bytes)、`FSP_FSCTL_DIR_INFO` (`FileNameBuf` @ 0x68) を公式 WinFsp 2.x ABI 仕様と照合し、コンパイル時アサーション (`FSP_ABI_ASSERT`) で固定した。
 - **根拠**: 旧定義はビットフィールド位置（`AllowOpenInKernelMode` 以降が bit 18 からずれていた）と末尾サイズ (512 bytes) が公式と食い違っており、`Version` に誤ったサイズを渡していた。ABI の不一致はカーネルドライバへのパラメータ誤伝達に直結するため、ビルド時に検出できるようにする。
+
+### ADR-011: `UmFileContextIsUserContext2 = 1` によるハンドル単位コンテキスト管理
+- **決定**: `FSP_FSCTL_VOLUME_PARAMS.UmFileContextIsUserContext2` を `1` に設定し、`FspOpen` / `FspCreate` が返す `ext4_file_handle_t *` を WinFsp の `UserContext2`（オープンハンドル／`FILE_OBJECT` 単位の `FileDesc`）として扱う。
+- **根拠**: `UmFileContextIsUserContext2 = 0`（既定）では `UserContext`（`FileNode` スロット）が使われ、並列アクセス時に同一パスに対する複数のクローズ要求が同一ポインタへ配送されて二重解放 (`STATUS_HEAP_CORRUPTION` / `0xC0000374`) および解放済みポインタ参照が発生する。`ext4_file_handle_t` は `create_options` / `delete_on_close` / `open_writable` を保持するオープン単位の構造体であるため、`UserContext2` に割り当てることで 1 オープン＝1 クローズが保証される。

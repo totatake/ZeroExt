@@ -612,6 +612,7 @@ void winfsp_driver_build_volume_params(ext4_vfs_ctx_t *ctx, FSP_FSCTL_VOLUME_PAR
     out_params->ReadOnlyVolume = ctx->read_only ? 1 : 0;
     out_params->PostCleanupWhenModifiedOnly = 1;
     out_params->SupportsPosixUnlinkRename = 1;
+    out_params->UmFileContextIsUserContext2 = 1;
     wcscpy_s(out_params->FileSystemName, _countof(out_params->FileSystemName), L"ext4");
 }
 

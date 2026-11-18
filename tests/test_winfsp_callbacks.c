@@ -42,6 +42,7 @@ static int test_winfsp_interface_e2e(void) {
         winfsp_driver_build_volume_params(ctx, &vp);
         TEST_ASSERT_EQ_INT(4096, vp.SectorSize);
         TEST_ASSERT_EQ_INT(0, vp.ReadOnlyVolume);
+        TEST_ASSERT_EQ_INT(1, vp.UmFileContextIsUserContext2);
         TEST_ASSERT(wcscmp(vp.FileSystemName, L"ext4") == 0);
     }
 
