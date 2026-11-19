@@ -300,6 +300,11 @@ static NTSTATUS FspRead(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Bu
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
     if (got == 0) return STATUS_END_OF_FILE;
 
+    if (ctx->stats_enabled) {
+        InterlockedAdd64(&ctx->stat_read_bytes, (LONG64)got);
+        InterlockedIncrement64(&ctx->stat_read_ops);
+    }
+
     *PBytesTransferred = got;
     return STATUS_SUCCESS;
 }
@@ -335,6 +340,11 @@ static NTSTATUS FspWrite(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID B
     rc = ext4_vfs_write(ctx, handle->ino, Buffer, Offset, effective_len,
                         WriteToEndOfFile ? 1 : 0, &written, &new_size);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
+
+    if (ctx->stats_enabled && written > 0) {
+        InterlockedAdd64(&ctx->stat_write_bytes, (LONG64)written);
+        InterlockedIncrement64(&ctx->stat_write_ops);
+    }
 
     *PBytesTransferred = written;
     if (FileInfo) {
@@ -837,4 +847,14 @@ void winfsp_driver_stop(winfsp_mount_handle_t *handle) {
     }
     if (handle->drive[0]) notify_shell_drive(handle->drive, 0);
     free(handle);
+}
+
+int winfsp_driver_is_runtime_available(void) {
+    FSP_RUNTIME_API *api = FspGetRuntimeApi();
+    return (api && api->Module && api->Create && api->SetMountPoint &&
+            api->StartDispatcher && api->StopDispatcher && api->Delete) ? 1 : 0;
+}
+
+int winfsp_driver_is_process_elevated(void) {
+    return process_is_elevated();
 }

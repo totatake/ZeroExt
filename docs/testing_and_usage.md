@@ -21,6 +21,30 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1 -Clean
 - `build/zeroext.exe`: CLI ＆ WinFsp マウント実行ファイル
 - `build/zeroext_tests.exe`: 単体・結合テスト実行ファイル
 - `build/zeroext_bench.exe`: `--direct-io` 性能評価ベンチマーク実行ファイル（`tests/bench_direct_io.c`）
+- `build/gui/ZeroExtGui.exe`: デスクトップ GUI マウントマネージャー（`.NET 10` / WPF、`scripts/build_gui.ps1` で単体ビルド可）
+
+> `-SkipGui` スイッチを指定すると、C/CMake/CTest のみを実行します。
+
+---
+
+## 1.5 GUI アプリケーション (`ZeroExtGui.exe`) の使い方
+
+`.\build\gui\ZeroExtGui.exe` を起動すると、CLI コマンドを意識せずに ext2 / ext3 / ext4 ボリュームの検査・マウント・管理を行えます。
+
+- **ソース追加・検査**:
+  - 起動時に接続中の物理ディスクを自動スキャンします（非管理者権限の場合はツールバーの **「管理者権限で再起動」** から UAC 昇格できます）。
+  - `.img` / `.raw` ファイルは **「イメージを追加...」** ボタンまたはウィンドウへのドラッグ＆ドロップで追加できます（非管理者権限のままマウント可能）。
+  - **「新規作成...」** から新規 ext4 イメージを作成できます。
+- **マウント設定タブ**:
+  - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（NTFS Upperdir の `.wh.__ext4_lower_id` 事前チェック機能付き）・**Read-Write**（Dirty 時の自動 RO フォールバック選択可）を選択し、空きドライブレターまたは空 NTFS フォルダへワンクリックでマウントします。
+  - 詳細設定では Direct I/O 切替・LRU キャッシュブロック数・デバッグログ・同等 CLI コマンドのコピーを行えます。
+- **アクティブマウントタブ & システムトレイ**:
+  - 稼働中のマウントごとの読取／書込スループット（MB/s）および累計転送量をリアルタイム表示し、「エクスプローラーで開く」や安全なアンマウントを実行できます。
+  - マウント中にウィンドウを閉じた場合はシステムトレイへ最小化してマウントを維持できます（トレイメニューから再表示・開く・一括アンマウント終了が可能）。
+  - 異常終了などで残留したドライブレターがある場合は **「残留ドライブ解除」** からクリーンアップできます。
+- **ファイルブラウザタブ（WinFsp 不要）**:
+  - WinFsp が未導入の環境でも、`zeroext ls --json` を通じて ext2 / ext3 / ext4 内のディレクトリ・ファイル一覧を非破壊で閲覧できます。
+- **ライト／ダークテーマ切替**: 右上のテーマボタンから即座に切り替え可能（設定およびボリュームごとのマウントプリセットは `%LOCALAPPDATA%\ZeroExt\gui_settings.json` に保存されます）。
 
 ---
 
@@ -102,9 +126,15 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 #   --overlay <dir>    : NTFS Upperdir を指定して非破壊 Overlay RW マウント（Lower ext4 は厳密 RO、--rw とは併用不可）
 #   --no-direct-io     : RO / --overlay 時の既定 Direct Extent I/O を無効化し、標準ブロックキャッシュ経路を使用
 #   --direct-io        : Direct Extent I/O を明示有効化（RO / --overlay では既定 ON のため通常不要、--rw とは併用不可）
-#   --cache-blocks <N> : LRU ブロックキャッシュ数（既定 2048 ブロック = 8MB @ 4KB）
-#   --force-dirty      : Dirty Journal 検出時でも強制的に RW オープン（非推奨・上級者向け）
-#   --debug            : WinFsp デバッグログ有効化
+#   --cache-blocks <N>    : LRU ブロックキャッシュ数（既定 2048 ブロック = 8MB @ 4KB）
+#   --ro-fallback         : --rw 指定時に Dirty Journal 検出時へ RO 自動フォールバック
+#   --force-dirty         : Dirty Journal 検出時でも強制的に RW オープン（非推奨・上級者向け）
+#   --debug               : WinFsp デバッグログ有効化
+#   --stop-event <name>   : 指定 Win32 Event シグナル受信時に安全アンマウント
+#   --json-events         : マウント状態・統計・エラーを 1 行 JSON イベントで標準出力へ通知
+#   --stats-interval <ms> : --json-events 併用時の I/O 統計イベント出力間隔 (ms)
+#
+# また list / inspect / ls サブコマンドでは --json フラグにより UTF-8 構造化 JSON 出力が可能です。
 ```
 
 アンマウントは実行中のコンソールで `Ctrl+C` を押下します（`ext2fs_flush` と I/O キャッシュフラッシュを実行したうえで安全に停止・解除します）。

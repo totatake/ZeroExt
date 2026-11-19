@@ -376,7 +376,12 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
 
     if (label && *label) {
         size_t llen = strlen(label);
-        if (llen > 16) llen = 16;
+        if (llen > 16) {
+            llen = 16;
+            while (llen > 0 && (((unsigned char)label[llen]) & 0xC0) == 0x80) {
+                llen--;
+            }
+        }
         memcpy(param.s_volume_name, label, llen);
     }
 

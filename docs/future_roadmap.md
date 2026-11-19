@@ -4,7 +4,10 @@
 
 ---
 
-## 1. GUI アプリケーションの追加
+## 1. GUI アプリケーションの追加（実装済み）
+
+> [!NOTE]
+> 本項目は `gui/ZeroExt.Gui/`（WPF / `.NET 10`、`ZeroExtGui.exe`）として実装されました。`zeroext.exe` とは `--json` / `--json-events` / `--stop-event` によるサブプロセス疎結合（GPLv2 境界維持）で連携します。詳細は [テスト報告書・利用ガイド](testing_and_usage.md) を参照してください。
 
 ### 1.1 背景と目的
 現状の `zeroext.exe` はコマンドライン操作を前提としており、物理ディスク（`\\.\PhysicalDrive0..15`）の認識、パーティションや JBD2 ジャーナル状態の検査、マウントオプションの組み合わせ（Read-Only + Direct I/O / `--overlay` / `--rw` / `--no-direct-io`）、アンマウントおよび UAC 昇格制御をターミナルから手動で指定する必要がある。

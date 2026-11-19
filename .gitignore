@@ -3,6 +3,8 @@ build/
 out/
 cmake-build-*/
 .vs/
+gui/**/bin/
+gui/**/obj/
 
 # Compiled binaries and debug symbols
 *.obj

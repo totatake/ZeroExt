@@ -9,8 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <errno.h>
 #include <dbghelp.h>
 #include <psapi.h>
+#include <shellapi.h>
 
 static volatile int g_stop_requested = 0;
 
@@ -86,10 +88,10 @@ static void print_usage(void) {
     printf(
         "ZeroExt (zeroext) - libext2fs + WinFsp ext2/ext3/ext4 User-Space Driver & CLI\n\n"
         "Usage:\n"
-        "  zeroext list [<image_or_disk>]\n"
-        "  zeroext inspect <image_or_disk> [--partition <N>]\n"
+        "  zeroext list [<image_or_disk>] [--json]\n"
+        "  zeroext inspect <image_or_disk> [--partition <N>] [--json]\n"
         "  zeroext mkfs <image_path> --size-mb <N> [--label <label>]\n"
-        "  zeroext ls <image_path> [<ext4_path>] [--partition <N>]\n"
+        "  zeroext ls <image_path> [<ext4_path>] [--partition <N>] [--json]\n"
         "  zeroext stat <image_path> <ext4_path> [--partition <N>]\n"
         "  zeroext cat <image_path> <ext4_path> [--partition <N>]\n"
         "  zeroext write <image_path> <ext4_path> <text_or_host_file> [--from-file] [--partition <N>]\n"
@@ -98,7 +100,8 @@ static void print_usage(void) {
         "  zeroext mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
         "  zeroext extents <image_or_disk> <ext4_path> [--partition <N>]\n"
         "  zeroext mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
-        "                [--no-direct-io | --direct-io] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
+        "                [--no-direct-io | --direct-io] [--ro-fallback] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
+        "                [--stop-event <name>] [--json-events] [--stats-interval <ms>]\n"
         "  zeroext unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
         "  Default mount mode is Read-Only with Direct Extent I/O enabled.\n"
@@ -131,6 +134,109 @@ static int has_flag(int argc, char **argv, const char *flag) {
     return 0;
 }
 
+static const char *find_positional_skip_opts(int argc, char **argv, int start_idx, int target_pos) {
+    int pos = 0;
+    for (int i = start_idx; i < argc; i++) {
+        if (strcmp(argv[i], "--partition") == 0 ||
+            strcmp(argv[i], "--size-mb") == 0 ||
+            strcmp(argv[i], "--label") == 0 ||
+            strcmp(argv[i], "--cache-blocks") == 0 ||
+            strcmp(argv[i], "--overlay") == 0 ||
+            strcmp(argv[i], "--source") == 0 ||
+            strcmp(argv[i], "--mountpoint") == 0 ||
+            strcmp(argv[i], "--stop-event") == 0 ||
+            strcmp(argv[i], "--stats-interval") == 0) {
+            i++;
+            continue;
+        }
+        if (argv[i][0] == '-') {
+            continue;
+        }
+        if (pos == target_pos) {
+            return argv[i];
+        }
+        pos++;
+    }
+    return NULL;
+}
+
+static void print_json_str(const char *s) {
+    const unsigned char *p = (const unsigned char *)(s ? s : "");
+    putchar('"');
+    while (*p) {
+        unsigned char c = *p++;
+        switch (c) {
+        case '"':  fputs("\\\"", stdout); break;
+        case '\\': fputs("\\\\", stdout); break;
+        case '\b': fputs("\\b", stdout); break;
+        case '\f': fputs("\\f", stdout); break;
+        case '\n': fputs("\\n", stdout); break;
+        case '\r': fputs("\\r", stdout); break;
+        case '\t': fputs("\\t", stdout); break;
+        default:
+            if (c < 0x20) {
+                printf("\\u%04x", (unsigned)c);
+            } else {
+                putchar((int)c);
+            }
+            break;
+        }
+    }
+    putchar('"');
+}
+
+static void print_partition_json(const pt_partition_entry_t *p) {
+    printf("{");
+    printf("\"partition_number\":%u,", p->partition_number);
+    printf("\"start_sector\":%llu,", (unsigned long long)p->start_sector);
+    printf("\"sector_count\":%llu,", (unsigned long long)p->sector_count);
+    printf("\"offset_bytes\":%llu,", (unsigned long long)p->offset_bytes);
+    printf("\"size_bytes\":%llu,", (unsigned long long)p->size_bytes);
+    printf("\"type_id\":"); print_json_str(p->type_id); putchar(',');
+    printf("\"type_description\":"); print_json_str(p->type_description); putchar(',');
+    printf("\"partition_name\":"); print_json_str(p->partition_name); putchar(',');
+    printf("\"fs_kind\":"); print_json_str(ext4_fs_kind_name(p->probe.fs_kind)); putchar(',');
+    printf("\"journal_state\":"); print_json_str(ext4_journal_state_name(p->probe.journal_state)); putchar(',');
+    printf("\"volume_label\":"); print_json_str(p->probe.volume_label); putchar(',');
+    printf("\"uuid\":"); print_json_str(p->probe.uuid); putchar(',');
+    printf("\"block_size\":%u,", p->probe.block_size);
+    printf("\"inode_size\":%u,", p->probe.inode_size);
+    printf("\"blocks_count\":%llu,", (unsigned long long)p->probe.blocks_count);
+    printf("\"total_bytes\":%llu,", (unsigned long long)p->probe.total_bytes);
+    printf("\"free_bytes\":%llu,", (unsigned long long)p->probe.free_bytes);
+    printf("\"feature_compat\":%u,", p->probe.feature_compat);
+    printf("\"feature_incompat\":%u,", p->probe.feature_incompat);
+    printf("\"feature_ro_compat\":%u,", p->probe.feature_ro_compat);
+    printf("\"journal_inum\":%u,", p->probe.journal_inum);
+    printf("\"journal_start\":%u,", p->probe.journal_start);
+    printf("\"journal_errno\":%d,", p->probe.journal_errno);
+    printf("\"state_flags\":%u", (unsigned)p->probe.state_flags);
+    printf("}");
+}
+
+static void print_disk_json(const char *device_path, int drive_index, int accessible,
+                            const pt_table_result_t *res, uint32_t filter_part) {
+    printf("{");
+    printf("\"device_path\":"); print_json_str(device_path); putchar(',');
+    printf("\"drive_index\":%d,", drive_index);
+    printf("\"accessible\":%s,", accessible ? "true" : "false");
+    printf("\"style\":"); print_json_str((accessible && res) ? res->style : ""); putchar(',');
+    printf("\"effective_sector_size\":%u,", (accessible && res) ? res->effective_sector_size : 0U);
+    printf("\"total_size_bytes\":%llu,", (unsigned long long)((accessible && res) ? res->total_size_bytes : 0ULL));
+    printf("\"partitions\":[");
+    if (accessible && res) {
+        int first = 1;
+        for (uint32_t i = 0; i < res->count; i++) {
+            const pt_partition_entry_t *p = &res->partitions[i];
+            if (filter_part != 0 && p->partition_number != filter_part) continue;
+            if (!first) putchar(',');
+            print_partition_json(p);
+            first = 0;
+        }
+    }
+    printf("]}");
+}
+
 static void print_partition_table(const char *source, const pt_table_result_t *res) {
     printf("Source: %s | Style: %s | SectorSize: %u | TotalBytes: %llu\n",
            source, res->style, res->effective_sector_size, (unsigned long long)res->total_size_bytes);
@@ -148,15 +254,27 @@ static void print_partition_table(const char *source, const pt_table_result_t *r
 }
 
 static int cmd_list(int argc, char **argv) {
-    if (argc >= 3 && argv[2][0] != '-') {
+    int json = has_flag(argc, argv, "--json");
+    const char *target = find_positional_skip_opts(argc, argv, 2, 0);
+
+    if (target) {
         pt_table_result_t *res = (pt_table_result_t *)calloc(1, sizeof(*res));
         if (!res) return 1;
-        if (pt_read_partitions(argv[2], 0, res) != 0) {
-            fprintf(stderr, "Failed to inspect '%s'\n", argv[2]);
+        if (pt_read_partitions(target, 0, res) != 0) {
+            fprintf(stderr, "Failed to inspect '%s'\n", target);
             free(res);
             return 1;
         }
-        print_partition_table(argv[2], res);
+        if (json) {
+            printf("{\"is_elevated\":%s,\"winfsp_available\":%s,\"disks\":[",
+                   winfsp_driver_is_process_elevated() ? "true" : "false",
+                   winfsp_driver_is_runtime_available() ? "true" : "false");
+            print_disk_json(target, -1, 1, res, 0);
+            printf("]}\n");
+            fflush(stdout);
+        } else {
+            print_partition_table(target, res);
+        }
         free(res);
         return 0;
     }
@@ -165,12 +283,25 @@ static int cmd_list(int argc, char **argv) {
     uint32_t count = 0;
     if (!disks) return 1;
     disk_scanner_scan_physical_drives(disks, SCAN_MAX_DRIVES, &count);
-    for (uint32_t i = 0; i < count; i++) {
-        if (!disks[i].accessible) {
-            printf("Source: %s | (Access Denied - Run as Administrator to inspect raw physical disk)\n",
-                   disks[i].device_path);
-        } else {
-            print_partition_table(disks[i].device_path, &disks[i].table);
+    if (json) {
+        printf("{\"is_elevated\":%s,\"winfsp_available\":%s,\"disks\":[",
+               winfsp_driver_is_process_elevated() ? "true" : "false",
+               winfsp_driver_is_runtime_available() ? "true" : "false");
+        for (uint32_t i = 0; i < count; i++) {
+            if (i > 0) putchar(',');
+            print_disk_json(disks[i].device_path, (int)disks[i].drive_index,
+                            disks[i].accessible, &disks[i].table, 0);
+        }
+        printf("]}\n");
+        fflush(stdout);
+    } else {
+        for (uint32_t i = 0; i < count; i++) {
+            if (!disks[i].accessible) {
+                printf("Source: %s | (Access Denied - Run as Administrator to inspect raw physical disk)\n",
+                       disks[i].device_path);
+            } else {
+                print_partition_table(disks[i].device_path, &disks[i].table);
+            }
         }
     }
     free(disks);
@@ -178,38 +309,49 @@ static int cmd_list(int argc, char **argv) {
 }
 
 static int cmd_inspect(int argc, char **argv) {
-    if (argc < 3) {
+    int json = has_flag(argc, argv, "--json");
+    const char *src = find_positional_skip_opts(argc, argv, 2, 0);
+    if (!src) {
         print_usage();
         return 1;
     }
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     pt_table_result_t *res = (pt_table_result_t *)calloc(1, sizeof(*res));
     if (!res) return 1;
-    if (pt_read_partitions(argv[2], 0, res) != 0) {
-        fprintf(stderr, "Failed to read '%s'\n", argv[2]);
+    if (pt_read_partitions(src, 0, res) != 0) {
+        fprintf(stderr, "Failed to read '%s'\n", src);
         free(res);
         return 1;
     }
-    print_partition_table(argv[2], res);
-    for (uint32_t i = 0; i < res->count; i++) {
-        const pt_partition_entry_t *p = &res->partitions[i];
-        if (part != 0 && p->partition_number != part) continue;
-        if (p->probe.fs_kind == EXT4_FS_UNKNOWN) continue;
-        printf("\n[Partition %u Detail]\n", p->partition_number);
-        printf("  Filesystem   : %s\n", ext4_fs_kind_name(p->probe.fs_kind));
-        printf("  Label        : %s\n", p->probe.volume_label);
-        printf("  UUID         : %s\n", p->probe.uuid);
-        printf("  BlockSize    : %u\n", p->probe.block_size);
-        printf("  InodeSize    : %u\n", p->probe.inode_size);
-        printf("  Blocks       : %llu\n", (unsigned long long)p->probe.blocks_count);
-        printf("  TotalBytes   : %llu\n", (unsigned long long)p->probe.total_bytes);
-        printf("  FreeBytes    : %llu\n", (unsigned long long)p->probe.free_bytes);
-        printf("  Compat       : 0x%08X\n", p->probe.feature_compat);
-        printf("  Incompat     : 0x%08X\n", p->probe.feature_incompat);
-        printf("  RoCompat     : 0x%08X\n", p->probe.feature_ro_compat);
-        printf("  JournalState : %s (inum=%u, s_start=%u, s_errno=%d)\n",
-               ext4_journal_state_name(p->probe.journal_state),
-               p->probe.journal_inum, p->probe.journal_start, p->probe.journal_errno);
+    if (json) {
+        printf("{\"is_elevated\":%s,\"winfsp_available\":%s,\"disks\":[",
+               winfsp_driver_is_process_elevated() ? "true" : "false",
+               winfsp_driver_is_runtime_available() ? "true" : "false");
+        print_disk_json(src, -1, 1, res, part);
+        printf("]}\n");
+        fflush(stdout);
+    } else {
+        print_partition_table(src, res);
+        for (uint32_t i = 0; i < res->count; i++) {
+            const pt_partition_entry_t *p = &res->partitions[i];
+            if (part != 0 && p->partition_number != part) continue;
+            if (p->probe.fs_kind == EXT4_FS_UNKNOWN) continue;
+            printf("\n[Partition %u Detail]\n", p->partition_number);
+            printf("  Filesystem   : %s\n", ext4_fs_kind_name(p->probe.fs_kind));
+            printf("  Label        : %s\n", p->probe.volume_label);
+            printf("  UUID         : %s\n", p->probe.uuid);
+            printf("  BlockSize    : %u\n", p->probe.block_size);
+            printf("  InodeSize    : %u\n", p->probe.inode_size);
+            printf("  Blocks       : %llu\n", (unsigned long long)p->probe.blocks_count);
+            printf("  TotalBytes   : %llu\n", (unsigned long long)p->probe.total_bytes);
+            printf("  FreeBytes    : %llu\n", (unsigned long long)p->probe.free_bytes);
+            printf("  Compat       : 0x%08X\n", p->probe.feature_compat);
+            printf("  Incompat     : 0x%08X\n", p->probe.feature_incompat);
+            printf("  RoCompat     : 0x%08X\n", p->probe.feature_ro_compat);
+            printf("  JournalState : %s (inum=%u, s_start=%u, s_errno=%d)\n",
+                   ext4_journal_state_name(p->probe.journal_state),
+                   p->probe.journal_inum, p->probe.journal_start, p->probe.journal_errno);
+        }
     }
     free(res);
     return 0;
@@ -256,13 +398,60 @@ static int ls_print_cb(const char *name, const ext4_stat_t *st, void *user_ctx) 
     return 0;
 }
 
+typedef struct ls_json_entry {
+    char     name[1024];
+    int      is_dir;
+    int      is_symlink;
+    uint64_t size;
+    uint32_t mode;
+    uint32_t ino;
+    uint32_t hard_links;
+    uint64_t last_write_filetime;
+} ls_json_entry_t;
+
+typedef struct ls_json_list {
+    ls_json_entry_t *items;
+    size_t           count;
+    size_t           cap;
+    int              oom;
+} ls_json_list_t;
+
+static int ls_json_collect_cb(const char *name, const ext4_stat_t *st, void *user_ctx) {
+    ls_json_list_t *list = (ls_json_list_t *)user_ctx;
+    if (list->count == list->cap) {
+        size_t new_cap = list->cap ? list->cap * 2 : 64;
+        ls_json_entry_t *nb = (ls_json_entry_t *)realloc(list->items, new_cap * sizeof(*nb));
+        if (!nb) {
+            list->oom = 1;
+            return 1;
+        }
+        list->items = nb;
+        list->cap = new_cap;
+    }
+    {
+        ls_json_entry_t *e = &list->items[list->count++];
+        memset(e, 0, sizeof(*e));
+        strncpy_s(e->name, sizeof(e->name), name ? name : "", _TRUNCATE);
+        e->is_dir = st->is_dir ? 1 : 0;
+        e->is_symlink = st->is_symlink ? 1 : 0;
+        e->size = st->size;
+        e->mode = st->mode;
+        e->ino = st->ino;
+        e->hard_links = st->hard_links;
+        e->last_write_filetime = st->last_write_time;
+    }
+    return 0;
+}
+
 static int cmd_ls(int argc, char **argv) {
-    if (argc < 3) {
+    const char *src = find_positional_skip_opts(argc, argv, 2, 0);
+    const char *path_arg = find_positional_skip_opts(argc, argv, 2, 1);
+    const char *path = path_arg ? path_arg : "/";
+    int json = has_flag(argc, argv, "--json");
+    if (!src) {
         print_usage();
         return 1;
     }
-    const char *src = argv[2];
-    const char *path = (argc >= 4 && argv[3][0] != '-') ? argv[3] : "/";
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     ext4_vfs_ctx_t *ctx = NULL;
     ext4_file_handle_t *h = NULL;
@@ -273,13 +462,49 @@ static int cmd_ls(int argc, char **argv) {
     }
     rc = ext4_vfs_open(ctx, path, 0, &h);
     if (rc == 0) {
-        if (!h->is_dir) {
-            ext4_stat_t st;
-            if (ext4_vfs_stat_ino(ctx, h->ino, path, &st) == 0) {
-                ls_print_cb(path, &st, NULL);
+        if (json) {
+            ls_json_list_t list;
+            memset(&list, 0, sizeof(list));
+            if (!h->is_dir) {
+                ext4_stat_t st;
+                rc = ext4_vfs_stat_ino(ctx, h->ino, path, &st);
+                if (rc == 0) {
+                    ls_json_collect_cb(path, &st, &list);
+                }
+            } else {
+                rc = ext4_vfs_readdir(ctx, h->ino, ls_json_collect_cb, &list);
             }
+            if (list.oom) rc = -ENOMEM;
+            if (rc == 0) {
+                printf("{\"source\":"); print_json_str(src);
+                printf(",\"partition\":%u", part);
+                printf(",\"path\":"); print_json_str(path);
+                printf(",\"entries\":[");
+                for (size_t i = 0; i < list.count; i++) {
+                    const ls_json_entry_t *e = &list.items[i];
+                    if (i > 0) putchar(',');
+                    printf("{\"name\":"); print_json_str(e->name);
+                    printf(",\"is_dir\":%s", e->is_dir ? "true" : "false");
+                    printf(",\"is_symlink\":%s", e->is_symlink ? "true" : "false");
+                    printf(",\"size\":%llu", (unsigned long long)e->size);
+                    printf(",\"mode\":%u", e->mode);
+                    printf(",\"ino\":%u", e->ino);
+                    printf(",\"hard_links\":%u", e->hard_links);
+                    printf(",\"last_write_filetime\":%llu}", (unsigned long long)e->last_write_filetime);
+                }
+                printf("]}\n");
+                fflush(stdout);
+            }
+            free(list.items);
         } else {
-            rc = ext4_vfs_readdir(ctx, h->ino, ls_print_cb, NULL);
+            if (!h->is_dir) {
+                ext4_stat_t st;
+                if (ext4_vfs_stat_ino(ctx, h->ino, path, &st) == 0) {
+                    ls_print_cb(path, &st, NULL);
+                }
+            } else {
+                rc = ext4_vfs_readdir(ctx, h->ino, ls_print_cb, NULL);
+            }
         }
         ext4_vfs_close_handle(h);
     }
@@ -379,7 +604,11 @@ static int cmd_write(int argc, char **argv) {
     uint8_t *data_buf = NULL;
     size_t data_len = 0;
     if (from_file) {
-        FILE *fp = fopen(payload, "rb");
+        wchar_t wpayload[1024];
+        FILE *fp = NULL;
+        if (ext4_utf8_to_wide(payload, wpayload, _countof(wpayload)) == 0) {
+            fp = _wfopen(wpayload, L"rb");
+        }
         if (!fp) {
             fprintf(stderr, "Cannot open host file '%s'\n", payload);
             return 1;
@@ -537,37 +766,81 @@ static int cmd_extents(int argc, char **argv) {
     return 0;
 }
 
+static void emit_mount_error_json(int json_events, const char *stage, int code, const char *msg) {
+    if (!json_events) return;
+    printf("{\"event\":\"error\",\"stage\":");
+    print_json_str(stage);
+    printf(",\"code\":%d,\"message\":", code);
+    print_json_str(msg);
+    printf("}\n");
+    fflush(stdout);
+}
+
 static int cmd_mount(int argc, char **argv) {
     const char *src = parse_str_opt(argc, argv, "--source", NULL);
     const char *mp = parse_str_opt(argc, argv, "--mountpoint", NULL);
     const char *overlay_dir = parse_str_opt(argc, argv, "--overlay", NULL);
+    const char *stop_event_name = parse_str_opt(argc, argv, "--stop-event", NULL);
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     uint32_t cache_blocks = parse_u32_opt(argc, argv, "--cache-blocks", 2048);
+    uint32_t stats_interval = parse_u32_opt(argc, argv, "--stats-interval", 0);
     int rw = has_flag(argc, argv, "--rw");
+    int ro_fallback = has_flag(argc, argv, "--ro-fallback");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
     int direct_io = has_flag(argc, argv, "--direct-io");
     int no_direct_io = has_flag(argc, argv, "--no-direct-io");
+    int json_events = has_flag(argc, argv, "--json-events");
     uint32_t debug_log = has_flag(argc, argv, "--debug") ? (uint32_t)-1 : 0;
+    HANDLE stop_event = NULL;
+
+    if (json_events) {
+        setvbuf(stdout, NULL, _IONBF, 0);
+    }
 
     if (!src || !mp) {
-        print_usage();
+        emit_mount_error_json(json_events, "args", -EINVAL, "Missing --source or --mountpoint.");
+        if (!json_events) print_usage();
         return 1;
     }
 
     if (rw && overlay_dir && overlay_dir[0] != '\0') {
-        fprintf(stderr, "Error: --rw and --overlay cannot be used together "
-                        "(--overlay writes to the NTFS upperdir while keeping lower ext4 read-only).\n");
+        const char *msg = "Error: --rw and --overlay cannot be used together "
+                          "(--overlay writes to the NTFS upperdir while keeping lower ext4 read-only).";
+        fprintf(stderr, "%s\n", msg);
+        emit_mount_error_json(json_events, "args", -EINVAL, msg);
         return 1;
     }
 
     if (direct_io && no_direct_io) {
-        fprintf(stderr, "Error: --direct-io and --no-direct-io cannot be used together.\n");
+        const char *msg = "Error: --direct-io and --no-direct-io cannot be used together.";
+        fprintf(stderr, "%s\n", msg);
+        emit_mount_error_json(json_events, "args", -EINVAL, msg);
         return 1;
     }
 
     if (direct_io && rw) {
-        fprintf(stderr, "Error: --direct-io is only supported in Read-Only (default) or --overlay mode.\n");
+        const char *msg = "Error: --direct-io is only supported in Read-Only (default) or --overlay mode.";
+        fprintf(stderr, "%s\n", msg);
+        emit_mount_error_json(json_events, "args", -EINVAL, msg);
         return 1;
+    }
+
+    if (stop_event_name && stop_event_name[0] != '\0') {
+        wchar_t wevent[256];
+        if (ext4_utf8_to_wide(stop_event_name, wevent, _countof(wevent)) != 0) {
+            emit_mount_error_json(json_events, "args", -EINVAL, "Invalid --stop-event name.");
+            return 1;
+        }
+        stop_event = CreateEventW(NULL, TRUE, FALSE, wevent);
+        if (!stop_event) {
+            stop_event = OpenEventW(SYNCHRONIZE, FALSE, wevent);
+        }
+        if (!stop_event) {
+            fprintf(stderr, "Failed to open/create stop event '%s' (err=%lu).\n",
+                    stop_event_name, (unsigned long)GetLastError());
+            emit_mount_error_json(json_events, "args", -(int)GetLastError(), "Failed to open/create stop event.");
+            return 1;
+        }
     }
 
     ext4_mount_config_t cfg;
@@ -583,7 +856,7 @@ static int cmd_mount(int argc, char **argv) {
         /* Read-Only by default; pass --rw to enable Read-Write mode */
         cfg.read_only = rw ? 0 : 1;
     }
-    cfg.ro_fallback_on_dirty = cfg.read_only;
+    cfg.ro_fallback_on_dirty = (cfg.read_only || ro_fallback) ? 1 : 0;
     cfg.force_rw_on_dirty = force_dirty;
     cfg.case_insensitive = 1;
     cfg.enable_direct_io = direct_io ? 1 : 0;
@@ -592,39 +865,106 @@ static int cmd_mount(int argc, char **argv) {
     ext4_vfs_ctx_t *ctx = NULL;
     int rc = ext4_vfs_mount(&cfg, &ctx);
     if (rc != 0) {
-        fprintf(stderr, "Failed to mount '%s' (err=%d)\n", src, rc);
+        char errbuf[256];
+        _snprintf_s(errbuf, sizeof(errbuf), _TRUNCATE, "Failed to mount '%s' (err=%d)", src, rc);
+        fprintf(stderr, "%s\n", errbuf);
+        emit_mount_error_json(json_events, "vfs_mount", rc, errbuf);
+        if (stop_event) CloseHandle(stop_event);
         return 1;
+    }
+
+    if (stats_interval > 0) {
+        ctx->stats_enabled = 1;
     }
 
     wchar_t wmp[256];
     if (ext4_utf8_to_wide(mp, wmp, _countof(wmp)) != 0) {
+        emit_mount_error_json(json_events, "args", -EINVAL, "Invalid mountpoint path.");
         ext4_vfs_unmount(ctx);
+        if (stop_event) CloseHandle(stop_event);
         return 1;
     }
 
     winfsp_mount_handle_t *mh = NULL;
     rc = winfsp_driver_start(ctx, wmp, debug_log, &mh);
     if (rc != 0) {
-        fprintf(stderr, "WinFsp mount failed (err=%d). Make sure WinFsp runtime is installed.\n", rc);
+        char errbuf[256];
+        _snprintf_s(errbuf, sizeof(errbuf), _TRUNCATE,
+                    "WinFsp mount failed (err=%d). Make sure WinFsp runtime is installed.", rc);
+        fprintf(stderr, "%s\n", errbuf);
+        emit_mount_error_json(json_events, "winfsp_start", rc, errbuf);
         ext4_vfs_unmount(ctx);
+        if (stop_event) CloseHandle(stop_event);
         return 1;
     }
 
     const char *mode_str = ctx->overlay
                                ? (ctx->read_only ? "OVERLAY-RO" : "OVERLAY-RW(lower=RO)")
                                : (ctx->read_only ? "RO" : "RW");
-    printf("Mounted '%s' (partition=%u, mode=%s, direct_io=%s%s%s) at %s. Press Ctrl+C to unmount...\n",
-           src, part, mode_str, ctx->enable_direct_io ? "on" : "off",
-           overlay_dir ? ", upper=" : "", overlay_dir ? overlay_dir : "", mp);
-    fflush(stdout);
-    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
-    while (!g_stop_requested) {
-        Sleep(200);
+    if (json_events) {
+        printf("{\"event\":\"mounted\",\"source\":"); print_json_str(src);
+        printf(",\"partition\":%u", part);
+        printf(",\"mountpoint\":"); print_json_str(mp);
+        printf(",\"mode\":"); print_json_str(mode_str);
+        printf(",\"read_only\":%s", ctx->read_only ? "true" : "false");
+        printf(",\"lower_read_only\":%s", ctx->lower_read_only ? "true" : "false");
+        printf(",\"direct_io\":%s", ctx->enable_direct_io ? "true" : "false");
+        printf(",\"fell_back_to_ro\":%s", ctx->fell_back_to_ro ? "true" : "false");
+        printf(",\"overlay_upper\":"); print_json_str(overlay_dir ? overlay_dir : "");
+        printf(",\"volume_label\":"); print_json_str(ctx->volume_label);
+        printf("}\n");
+        fflush(stdout);
+    } else {
+        printf("Mounted '%s' (partition=%u, mode=%s, direct_io=%s%s%s) at %s. Press Ctrl+C to unmount...\n",
+               src, part, mode_str, ctx->enable_direct_io ? "on" : "off",
+               overlay_dir ? ", upper=" : "", overlay_dir ? overlay_dir : "", mp);
+        fflush(stdout);
     }
-    printf("Unmounting %s...\n", mp);
+
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+    {
+        ULONGLONG last_stats_tick = GetTickCount64();
+        while (!g_stop_requested) {
+            DWORD wait_ms = (stats_interval > 0 && stats_interval < 200U) ? stats_interval : 200U;
+            if (stop_event) {
+                if (WaitForSingleObject(stop_event, wait_ms) == WAIT_OBJECT_0) {
+                    g_stop_requested = 1;
+                    break;
+                }
+            } else {
+                Sleep(wait_ms);
+            }
+            if (json_events && stats_interval > 0) {
+                ULONGLONG now = GetTickCount64();
+                if (now - last_stats_tick >= (ULONGLONG)stats_interval) {
+                    LONG64 rb = InterlockedCompareExchange64(&ctx->stat_read_bytes, 0, 0);
+                    LONG64 wb = InterlockedCompareExchange64(&ctx->stat_write_bytes, 0, 0);
+                    LONG64 ro = InterlockedCompareExchange64(&ctx->stat_read_ops, 0, 0);
+                    LONG64 wo = InterlockedCompareExchange64(&ctx->stat_write_ops, 0, 0);
+                    printf("{\"event\":\"stats\",\"read_bytes\":%lld,\"write_bytes\":%lld,\"read_ops\":%lld,\"write_ops\":%lld}\n",
+                           (long long)rb, (long long)wb, (long long)ro, (long long)wo);
+                    fflush(stdout);
+                    last_stats_tick = now;
+                }
+            }
+        }
+    }
+
+    if (json_events) {
+        printf("{\"event\":\"unmounting\",\"mountpoint\":"); print_json_str(mp); printf("}\n");
+        fflush(stdout);
+    } else {
+        printf("Unmounting %s...\n", mp);
+    }
     winfsp_driver_stop(mh);
     ext4_vfs_unmount(ctx);
-    printf("Unmounted cleanly.\n");
+    if (stop_event) CloseHandle(stop_event);
+    if (json_events) {
+        printf("{\"event\":\"unmounted\",\"mountpoint\":"); print_json_str(mp); printf("}\n");
+        fflush(stdout);
+    } else {
+        printf("Unmounted cleanly.\n");
+    }
     return 0;
 }
 
@@ -644,27 +984,86 @@ static int cmd_unmount(int argc, char **argv) {
     return 0;
 }
 
+static int build_utf8_argv(int *out_argc, char ***out_argv) {
+    int wargc = 0;
+    LPWSTR *wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv || wargc <= 0) {
+        if (wargv) LocalFree(wargv);
+        return -1;
+    }
+    char **uargv = (char **)calloc((size_t)wargc + 1, sizeof(char *));
+    if (!uargv) {
+        LocalFree(wargv);
+        return -1;
+    }
+    for (int i = 0; i < wargc; i++) {
+        int needed = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0, NULL, NULL);
+        if (needed <= 0) {
+            for (int j = 0; j < i; j++) free(uargv[j]);
+            free(uargv);
+            LocalFree(wargv);
+            return -1;
+        }
+        uargv[i] = (char *)malloc((size_t)needed);
+        if (!uargv[i]) {
+            for (int j = 0; j < i; j++) free(uargv[j]);
+            free(uargv);
+            LocalFree(wargv);
+            return -1;
+        }
+        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, uargv[i], needed, NULL, NULL);
+    }
+    LocalFree(wargv);
+    *out_argc = wargc;
+    *out_argv = uargv;
+    return 0;
+}
+
+static void free_utf8_argv(int argc, char **argv) {
+    if (!argv) return;
+    for (int i = 0; i < argc; i++) {
+        free(argv[i]);
+    }
+    free(argv);
+}
+
 int main(int argc, char **argv) {
+    int uargc = 0;
+    char **uargv = NULL;
+    int using_uargv = 0;
+    int rc = 1;
+
     install_crash_handlers();
+    if (build_utf8_argv(&uargc, &uargv) == 0) {
+        argc = uargc;
+        argv = uargv;
+        using_uargv = 1;
+    }
+
     if (argc < 2) {
         print_usage();
+        if (using_uargv) free_utf8_argv(uargc, uargv);
         return 1;
     }
     const char *cmd = argv[1];
-    if (strcmp(cmd, "unmount") == 0 || strcmp(cmd, "umount") == 0) return cmd_unmount(argc, argv);
-    if (strcmp(cmd, "list") == 0) return cmd_list(argc, argv);
-    if (strcmp(cmd, "inspect") == 0) return cmd_inspect(argc, argv);
-    if (strcmp(cmd, "mkfs") == 0) return cmd_mkfs(argc, argv);
-    if (strcmp(cmd, "ls") == 0) return cmd_ls(argc, argv);
-    if (strcmp(cmd, "stat") == 0) return cmd_stat(argc, argv);
-    if (strcmp(cmd, "cat") == 0) return cmd_cat(argc, argv);
-    if (strcmp(cmd, "write") == 0) return cmd_write(argc, argv);
-    if (strcmp(cmd, "mkdir") == 0) return cmd_mkdir(argc, argv);
-    if (strcmp(cmd, "rm") == 0) return cmd_rm(argc, argv);
-    if (strcmp(cmd, "mv") == 0) return cmd_mv(argc, argv);
-    if (strcmp(cmd, "extents") == 0) return cmd_extents(argc, argv);
-    if (strcmp(cmd, "mount") == 0) return cmd_mount(argc, argv);
+    if (strcmp(cmd, "unmount") == 0 || strcmp(cmd, "umount") == 0) rc = cmd_unmount(argc, argv);
+    else if (strcmp(cmd, "list") == 0) rc = cmd_list(argc, argv);
+    else if (strcmp(cmd, "inspect") == 0) rc = cmd_inspect(argc, argv);
+    else if (strcmp(cmd, "mkfs") == 0) rc = cmd_mkfs(argc, argv);
+    else if (strcmp(cmd, "ls") == 0) rc = cmd_ls(argc, argv);
+    else if (strcmp(cmd, "stat") == 0) rc = cmd_stat(argc, argv);
+    else if (strcmp(cmd, "cat") == 0) rc = cmd_cat(argc, argv);
+    else if (strcmp(cmd, "write") == 0) rc = cmd_write(argc, argv);
+    else if (strcmp(cmd, "mkdir") == 0) rc = cmd_mkdir(argc, argv);
+    else if (strcmp(cmd, "rm") == 0) rc = cmd_rm(argc, argv);
+    else if (strcmp(cmd, "mv") == 0) rc = cmd_mv(argc, argv);
+    else if (strcmp(cmd, "extents") == 0) rc = cmd_extents(argc, argv);
+    else if (strcmp(cmd, "mount") == 0) rc = cmd_mount(argc, argv);
+    else {
+        print_usage();
+        rc = 1;
+    }
 
-    print_usage();
-    return 1;
+    if (using_uargv) free_utf8_argv(uargc, uargv);
+    return rc;
 }

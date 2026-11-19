@@ -1,7 +1,8 @@
 param(
     [string]$BuildDir = "$PSScriptRoot\..\build",
     [string]$BuildType = "Release",
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$SkipGui
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,4 +33,18 @@ call "$Vcvars" >nul && "$Cmake" -S "$RepoRoot" -B "$BuildDir" -G Ninja -DCMAKE_B
 cmd.exe /c $Cmd
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
+}
+
+if (-not $SkipGui) {
+    if (Get-Command dotnet -ErrorAction SilentlyContinue) {
+        $GuiScript = Join-Path $PSScriptRoot "build_gui.ps1"
+        if (Test-Path $GuiScript) {
+            & $GuiScript -Configuration $BuildType -OutDir (Join-Path $BuildDir "gui")
+            if ($LASTEXITCODE -ne 0) {
+                exit $LASTEXITCODE
+            }
+        }
+    } else {
+        Write-Warning "dotnet SDK not found; skipping ZeroExtGui build."
+    }
 }

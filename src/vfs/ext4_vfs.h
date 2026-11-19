@@ -51,6 +51,11 @@ typedef struct ext4_vfs_ctx {
     char                      volume_label[32];
     struct ext4_extent_cache *extent_cache;
     struct ext4_overlay_ctx  *overlay;
+    int                       stats_enabled;
+    volatile LONG64           stat_read_bytes;
+    volatile LONG64           stat_write_bytes;
+    volatile LONG64           stat_read_ops;
+    volatile LONG64           stat_write_ops;
 } ext4_vfs_ctx_t;
 
 typedef struct ext4_stat {

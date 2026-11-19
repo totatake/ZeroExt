@@ -26,6 +26,10 @@ void winfsp_driver_stop(winfsp_mount_handle_t *handle);
  * (Mount Manager mount point + DOS device in current and desktop-user sessions). */
 int winfsp_driver_force_unmount(const wchar_t *drive);
 
+/* Runtime capability helpers */
+int winfsp_driver_is_runtime_available(void);
+int winfsp_driver_is_process_elevated(void);
+
 #ifdef __cplusplus
 }
 #endif

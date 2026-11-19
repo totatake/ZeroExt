@@ -1,6 +1,6 @@
 # `ZeroExt` (`zeroext`)
 
-Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高速 ext2 / ext3 / ext4 ユーザー空間ファイルシステムドライバおよび管理 CLI ツールです。
+Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高速 ext2 / ext3 / ext4 ユーザー空間ファイルシステムドライバ、管理 CLI ツール（`zeroext.exe`）、およびデスクトップ GUI マウントマネージャー（`ZeroExtGui.exe`）です。
 
 ## 特徴
 
@@ -27,11 +27,30 @@ Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高�
 
 ## ビルドとテスト
 
-Visual Studio 2022 BuildTools 環境で以下を実行します（ビルド時に WinFsp SDK の事前導入は不要です）：
+Visual Studio 2022 BuildTools 環境で以下を実行します（ビルド時に WinFsp SDK の事前導入は不要です。`.NET 10 SDK` が導入されている環境では GUI アプリ `ZeroExtGui.exe` も自動ビルド・テストされます）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
 ```
+
+GUI のみをビルド・テストする場合は以下を実行します：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_gui.ps1
+```
+
+ビルド完了後は `.\build\gui\ZeroExtGui.exe` から GUI マウントマネージャーを起動できます。
+
+## GUI アプリケーション (`ZeroExtGui.exe`)
+
+- **ディスク／イメージ自動一覧 & 状態検査**: 物理ディスク（非管理者時は 1 クリックで「管理者権限で再起動」）および `.img` ファイル（ドラッグ＆ドロップ対応）の GPT / MBR / EBR パーティション・ラベル・UUID・使用率・JBD2 ジャーナル状態（`CLEAN` / `NEEDS_RECOVERY` / `HAS_ERRORS`）を可視化。
+- **3 つのマウントモード選択**:
+  - **Read-Only（推奨・既定）**: Direct I/O 有効で高速・安全に読取。
+  - **Overlay（非破壊 RW）**: Lower ext4 を RO 保護し、変更・新規作成だけ指定の NTFS Upperdir へ保存（`.wh.__ext4_lower_id` の事前検証付き）。
+  - **Read-Write**: Dirty 状態検出時の自動 RO フォールバック設定（`--ro-fallback`）に対応。
+- **リアルタイム統計・システムトレイ常駐**: 読取／書込速度・累計転送量のリアルタイム表示、「エクスプローラーで開く」、安全なワンクリック・アンマウント、システムトレイ常駐、および CLI コマンドプレビュー。
+- **WinFsp 不要のオフライン機能**: WinFsp 未導入環境でも、ext2/3/4 イメージ内のフォルダ・ファイル閲覧（`ファイルブラウザ` タブ）や新規 `.img` 作成（`mkfs`）、WinFsp 導入ガイド表示を利用可能。
+- **疎結合アーキテクチャ**: GPLv2 の `libext2fs` / `zeroext_core` を直接リンクせず、`zeroext.exe` をサブプロセス（JSON / Named Event IPC）として制御します。
 
 ## WinFsp のインストール（ドライブマウント実行時に必須）
 
