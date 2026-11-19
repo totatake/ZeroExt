@@ -187,4 +187,4 @@ Total Test time (real) =   0.52 sec
 
 ## 性能ベンチマーク (`ext4fsp_bench.exe`)
 
-`--direct-io` 有無による VFS 単体層および WinFsp 実マウント経由の読み取りスループット比較には `.\build\ext4fsp_bench.exe` を使用する。詳細な測定結果・考察・再現手順は [性能評価報告書 (`--direct-io` 比較)](performance_evaluation.md) を参照。
+`--direct-io` 有無による VFS 単体層・WinFsp 実マウント経由のスループット比較には `.\build\ext4fsp_bench.exe` を、同一 NVMe SSD 上での Windows Native (NTFS) / `ext4fsp` / `wsl --mount --vhd` 横並び比較には管理者権限 PowerShell 用の `scripts/bench_compare_ssd.ps1` を使用する。詳細な測定結果・考察・再現手順は [性能評価報告書 (`--direct-io` / NTFS / WSL2 比較)](performance_evaluation.md) を参照。

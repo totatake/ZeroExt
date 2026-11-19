@@ -226,9 +226,12 @@ cleanup:
 }
 
 static int run_winfsp_live_read(const char *file_path, uint32_t chunk_kb,
-                                int unbuffered, int random_mode) {
-    wchar_t file_w[MAX_PATH];
-    DWORD flags = unbuffered ? FILE_FLAG_NO_BUFFERING : FILE_FLAG_SEQUENTIAL_SCAN;
+                                int unbuffered, int random_mode,
+                                int warmup, uint64_t rnd_ops) {
+    wchar_t file_w[1024];
+    DWORD flags = unbuffered
+                      ? FILE_FLAG_NO_BUFFERING
+                      : (random_mode ? FILE_FLAG_RANDOM_ACCESS : FILE_FLAG_SEQUENTIAL_SCAN);
     HANDLE h;
     LARGE_INTEGER fsz, freq, t0, t1;
     uint32_t chunk_sz;
@@ -244,8 +247,8 @@ static int run_winfsp_live_read(const char *file_path, uint32_t chunk_kb,
     }
     chunk_sz = chunk_kb * 1024U;
 
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, file_path, -1, file_w, MAX_PATH) == 0 &&
-        MultiByteToWideChar(CP_ACP, 0, file_path, -1, file_w, MAX_PATH) == 0) {
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, file_path, -1, file_w, _countof(file_w)) == 0 &&
+        MultiByteToWideChar(CP_ACP, 0, file_path, -1, file_w, _countof(file_w)) == 0) {
         fprintf(stderr, "Path conversion failed: %s\n", file_path);
         return 1;
     }
@@ -261,6 +264,26 @@ static int run_winfsp_live_read(const char *file_path, uint32_t chunk_kb,
         fprintf(stderr, "GetFileSizeEx failed or file smaller than %u KB\n", chunk_kb);
         CloseHandle(h);
         return 1;
+    }
+
+    if (warmup && !unbuffered) {
+        const uint32_t warm_chunk = 1024U * 1024U;
+        uint8_t *wbuf = (uint8_t *)_aligned_malloc(warm_chunk, 4096);
+        LARGE_INTEGER zero;
+        DWORD wgot = 0;
+        if (!wbuf) {
+            CloseHandle(h);
+            return 1;
+        }
+        while (ReadFile(h, wbuf, warm_chunk, &wgot, NULL) && wgot > 0) {
+        }
+        _aligned_free(wbuf);
+        zero.QuadPart = 0;
+        if (!SetFilePointerEx(h, zero, NULL, FILE_BEGIN)) {
+            fprintf(stderr, "Warmup rewind failed (%s): %lu\n", file_path, GetLastError());
+            CloseHandle(h);
+            return 1;
+        }
     }
 
     buf = (uint8_t *)_aligned_malloc(chunk_sz, 4096);
@@ -280,7 +303,7 @@ static int run_winfsp_live_read(const char *file_path, uint32_t chunk_kb,
         }
     } else {
         uint64_t pages = (uint64_t)fsz.QuadPart / chunk_sz;
-        ops = 16384;
+        ops = rnd_ops ? rnd_ops : 16384ULL;
         for (uint64_t i = 0; i < ops; i++) {
             uint64_t off = ((uint64_t)lcg_next(&seed) % pages) * (uint64_t)chunk_sz;
             LARGE_INTEGER li;
@@ -304,8 +327,9 @@ static int run_winfsp_live_read(const char *file_path, uint32_t chunk_kb,
         double secs = qpc_sec(t0, t1, freq);
         double mbps = ((double)total_done / (1024.0 * 1024.0)) / secs;
         double iops = (double)ops / secs;
-        printf("WinFsp %s %s (%uKB) | bytes=%llu MB | %8.3f s | %9.1f MB/s | %9.0f IOPS\n",
-               unbuffered ? "UNBUF" : "CACHED",
+        const char *cache_lbl = unbuffered ? "UNBUF" : (warmup ? "CACHED-WARM" : "CACHED");
+        printf("%s %s (%uKB) | bytes=%llu MB | %8.3f s | %9.1f MB/s | %9.0f IOPS\n",
+               cache_lbl,
                random_mode ? "RND" : "SEQ",
                chunk_kb,
                (unsigned long long)(total_done / (1024ULL * 1024ULL)),
@@ -321,8 +345,9 @@ static void print_usage(const char *prog) {
     printf("Usage:\n");
     printf("  %s\n", prog);
     printf("      Run in-process VFS read benchmark (enable_direct_io=0 vs 1)\n");
-    printf("  %s --winfsp-read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd]\n", prog);
-    printf("      Benchmark Win32 ReadFile throughput against a mounted WinFsp drive\n");
+    printf("  %s --read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops]\n", prog);
+    printf("  %s --winfsp-read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops]\n", prog);
+    printf("      Benchmark Win32 ReadFile throughput against NTFS, WinFsp, or UNC paths\n");
     printf("  %s --help\n", prog);
 }
 
@@ -336,7 +361,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (argc >= 2 && strcmp(argv[1], "--winfsp-read") == 0) {
+    if (argc >= 2 && (strcmp(argv[1], "--winfsp-read") == 0 || strcmp(argv[1], "--read") == 0)) {
         if (argc < 4) {
             print_usage(argv[0]);
             return 1;
@@ -345,7 +370,9 @@ int main(int argc, char **argv) {
             uint32_t kb = (uint32_t)strtoul(argv[3], NULL, 10);
             int unbuf = (argc >= 5 && strcmp(argv[4], "unbuf") == 0);
             int rnd = (argc >= 6 && strcmp(argv[5], "rnd") == 0);
-            return run_winfsp_live_read(argv[2], kb, unbuf, rnd);
+            int warm = (argc >= 7 && strcmp(argv[6], "warm") == 0);
+            uint64_t rnd_ops = (argc >= 8) ? (uint64_t)_strtoui64(argv[7], NULL, 10) : 0ULL;
+            return run_winfsp_live_read(argv[2], kb, unbuf, rnd, warm, rnd_ops);
         }
     }
 

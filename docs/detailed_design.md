@@ -21,7 +21,8 @@ d:\libext2fs-win\
 ├── scripts/
 │   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> generated headers
 │   ├── update_e2fsprogs.ps1              # e2fsprogs 更新＆ビルド検証自動化スクリプト
-│   └── build_and_test.ps1                # MSVC + Ninja + CTest 実行スクリプト
+│   ├── build_and_test.ps1                # MSVC + Ninja + CTest 実行スクリプト
+│   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ext4fsp/WSL2)
 ├── compat/
 │   ├── msvc_compat.h                     # /FI 強制インクルード用互換シム
 │   └── include/                          # POSIX/Autotools 代替ヘッダ
