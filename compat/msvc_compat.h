@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_MSVC_COMPAT_H
-#define LIBEXT2FS_WIN_MSVC_COMPAT_H
+#ifndef ZEROEXT_MSVC_COMPAT_H
+#define ZEROEXT_MSVC_COMPAT_H
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -59,4 +59,4 @@ typedef SSIZE_T ssize_t;
 #pragma warning(disable : 4996) /* deprecated POSIX names */
 #endif /* _MSC_VER */
 
-#endif /* LIBEXT2FS_WIN_MSVC_COMPAT_H */
+#endif /* ZEROEXT_MSVC_COMPAT_H */

@@ -3,19 +3,19 @@ if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
 endif()
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
-project(libext2fs_win C)
+project(ZeroExt C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Locate real Python 3 (avoiding WindowsApps store stub alias)
 set(_PY_CANDIDATE "$ENV{LOCALAPPDATA}/Python/bin/python.exe")
-if(NOT DEFINED EXT4FSP_PYTHON AND EXISTS "${_PY_CANDIDATE}")
-    set(EXT4FSP_PYTHON "${_PY_CANDIDATE}")
+if(NOT DEFINED ZEROEXT_PYTHON AND EXISTS "${_PY_CANDIDATE}")
+    set(ZEROEXT_PYTHON "${_PY_CANDIDATE}")
 endif()
-if(NOT DEFINED EXT4FSP_PYTHON)
+if(NOT DEFINED ZEROEXT_PYTHON)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    set(EXT4FSP_PYTHON "${Python3_EXECUTABLE}")
+    set(ZEROEXT_PYTHON "${Python3_EXECUTABLE}")
 endif()
 
 set(E2FSPROGS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/e2fsprogs")
@@ -30,19 +30,19 @@ set(E2FSPROGS_GEN_TYPES_H "${E2FSPROGS_GEN_DIR}/ext2fs/ext2_types.h")
 
 # Generate once at configure time so initial header scanning sees all generated headers
 execute_process(
-    COMMAND "${EXT4FSP_PYTHON}" "${E2FSPROGS_GEN_SCRIPT}"
+    COMMAND "${ZEROEXT_PYTHON}" "${E2FSPROGS_GEN_SCRIPT}"
             --et-file "${E2FSPROGS_ET_IN}"
             --types-file "${E2FSPROGS_TYPES_IN}"
             --out-dir "${E2FSPROGS_GEN_DIR}"
     RESULT_VARIABLE _GEN_RES
 )
 if(NOT _GEN_RES EQUAL 0)
-    message(FATAL_ERROR "Failed to generate e2fsprogs headers via ${EXT4FSP_PYTHON}")
+    message(FATAL_ERROR "Failed to generate e2fsprogs headers via ${ZEROEXT_PYTHON}")
 endif()
 
 add_custom_command(
     OUTPUT "${E2FSPROGS_GEN_ERR_H}" "${E2FSPROGS_GEN_ERR_C}" "${E2FSPROGS_GEN_TYPES_H}"
-    COMMAND "${EXT4FSP_PYTHON}" "${E2FSPROGS_GEN_SCRIPT}"
+    COMMAND "${ZEROEXT_PYTHON}" "${E2FSPROGS_GEN_SCRIPT}"
             --et-file "${E2FSPROGS_ET_IN}"
             --types-file "${E2FSPROGS_TYPES_IN}"
             --out-dir "${E2FSPROGS_GEN_DIR}"
@@ -110,7 +110,7 @@ if(MSVC)
 endif()
 
 # Static library: Win32 I/O, Disk/Partition/Journal Probe, Modular VFS, WinFsp Interface
-add_library(ext4fsp_core STATIC
+add_library(zeroext_core STATIC
     src/common/ext4_errno.c
     src/io/win32_io.c
     src/disk/superblock_probe.c
@@ -134,33 +134,33 @@ add_library(ext4fsp_core STATIC
     src/vfs/op_flush.c
     src/driver/winfsp_driver.c
 )
-target_include_directories(ext4fsp_core
+target_include_directories(zeroext_core
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/winfsp/include"
 )
-target_compile_definitions(ext4fsp_core PUBLIC
+target_compile_definitions(zeroext_core PUBLIC
     _CRT_SECURE_NO_WARNINGS
     WIN32_LEAN_AND_MEAN
     NOMINMAX
 )
 if(MSVC)
-    target_compile_options(ext4fsp_core PRIVATE /W4 /wd4100 /wd4200 /wd4201)
+    target_compile_options(zeroext_core PRIVATE /W4 /wd4100 /wd4200 /wd4201)
 endif()
-target_link_libraries(ext4fsp_core PUBLIC ext2fs advapi32 shell32 user32)
+target_link_libraries(zeroext_core PUBLIC ext2fs advapi32 shell32 user32)
 
-# CLI executable: ext4fsp.exe
-add_executable(ext4fsp src/cli/main.c)
-target_link_libraries(ext4fsp PRIVATE ext4fsp_core ext2fs dbghelp)
+# CLI executable: zeroext.exe
+add_executable(zeroext src/cli/main.c)
+target_link_libraries(zeroext PRIVATE zeroext_core ext2fs dbghelp)
 # Map file: resolve crash offsets reported by the crash filter (module+0xNNN) to functions
-target_link_options(ext4fsp PRIVATE /MAP)
+target_link_options(zeroext PRIVATE /MAP)
 if(MSVC)
-    target_compile_options(ext4fsp PRIVATE /W4 /wd4100 /wd4200)
+    target_compile_options(zeroext PRIVATE /W4 /wd4100 /wd4200)
 endif()
 
 # Test executable and CTest registration
 enable_testing()
-add_executable(ext4fsp_tests
+add_executable(zeroext_tests
     tests/test_main.c
     tests/test_win32_io.c
     tests/test_partition_and_probe.c
@@ -168,20 +168,20 @@ add_executable(ext4fsp_tests
     tests/test_winfsp_callbacks.c
     tests/test_extent_and_overlay.c
 )
-target_link_libraries(ext4fsp_tests PRIVATE ext4fsp_core ext2fs)
+target_link_libraries(zeroext_tests PRIVATE zeroext_core ext2fs)
 if(MSVC)
-    target_compile_options(ext4fsp_tests PRIVATE /W4 /wd4100 /wd4200)
+    target_compile_options(zeroext_tests PRIVATE /W4 /wd4100 /wd4200)
 endif()
 
-add_test(NAME win32_io            COMMAND ext4fsp_tests --suite win32_io)
-add_test(NAME partition_and_probe COMMAND ext4fsp_tests --suite partition_and_probe)
-add_test(NAME vfs_operations      COMMAND ext4fsp_tests --suite vfs_operations)
-add_test(NAME winfsp_callbacks    COMMAND ext4fsp_tests --suite winfsp_callbacks)
-add_test(NAME extent_and_overlay  COMMAND ext4fsp_tests --suite extent_and_overlay)
+add_test(NAME win32_io            COMMAND zeroext_tests --suite win32_io)
+add_test(NAME partition_and_probe COMMAND zeroext_tests --suite partition_and_probe)
+add_test(NAME vfs_operations      COMMAND zeroext_tests --suite vfs_operations)
+add_test(NAME winfsp_callbacks    COMMAND zeroext_tests --suite winfsp_callbacks)
+add_test(NAME extent_and_overlay  COMMAND zeroext_tests --suite extent_and_overlay)
 
-# Benchmark executable: ext4fsp_bench.exe (Direct I/O vs standard VFS/WinFsp read)
-add_executable(ext4fsp_bench tests/bench_direct_io.c)
-target_link_libraries(ext4fsp_bench PRIVATE ext4fsp_core ext2fs)
+# Benchmark executable: zeroext_bench.exe (Direct I/O vs standard VFS/WinFsp read)
+add_executable(zeroext_bench tests/bench_direct_io.c)
+target_link_libraries(zeroext_bench PRIVATE zeroext_core ext2fs)
 if(MSVC)
-    target_compile_options(ext4fsp_bench PRIVATE /W4 /wd4100 /wd4200)
+    target_compile_options(zeroext_bench PRIVATE /W4 /wd4100 /wd4200)
 endif()

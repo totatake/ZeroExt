@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_CONFIG_H
-#define LIBEXT2FS_WIN_CONFIG_H
+#ifndef ZEROEXT_CONFIG_H
+#define ZEROEXT_CONFIG_H
 
 #define PACKAGE "e2fsprogs"
 #define PACKAGE_NAME "e2fsprogs"
@@ -42,4 +42,4 @@
 #define SIZEOF_VOID_P 4
 #endif
 
-#endif /* LIBEXT2FS_WIN_CONFIG_H */
+#endif /* ZEROEXT_CONFIG_H */

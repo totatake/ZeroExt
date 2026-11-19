@@ -17,7 +17,7 @@ flowchart TD
         WinFspSys["winfsp-x64.sys\n(MS署名済 FSD + Cc/Mm キャッシュ連携)"]
     end
 
-    subgraph DriverExe["libext2fs-win / ext4fsp.exe (ユーザー空間)"]
+    subgraph DriverExe["ZeroExt / zeroext.exe (ユーザー空間)"]
         CLI["src/cli/main.c\n(list / inspect / extents / mount 等)"]
         WinFspDrv["src/driver/winfsp_driver.c\n(FSP_FILE_SYSTEM_INTERFACE + UACセッション対応)"]
         Overlay["src/overlay/overlay_vfs.c\n(--overlay 時: Upper NTFS + Copy-up + Whiteout)"]
@@ -59,14 +59,14 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     actor User as ユーザー
-    participant CLI as ext4fsp.exe (CLI / Driver)
+    participant CLI as zeroext.exe (CLI / Driver)
     participant Disk as partition_table & superblock_probe
     participant VFS as ext4_vfs / overlay_vfs
     participant Ext as extent_map (LRUキャッシュ + 二分探索)
     participant IO as win32_io_manager
     participant Dev as PhysicalDrive / .img
 
-    User->>CLI: ext4fsp mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: [--overlay C:\upper]
+    User->>CLI: zeroext mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: [--overlay C:\upper]
     CLI->>Disk: パーティション位置解決 (GPT/MBR/EBR) & ext4_probe_partition
     Disk-->>CLI: OffsetBytes, SizeBytes, Journal状態
     CLI->>VFS: ext4_vfs_mount(cfg) (Overlay時はLowerを厳密ROオープン)
@@ -114,8 +114,8 @@ sequenceDiagram
   2. Windows FSD では Cache Manager (`Cc`) および Memory Manager (`Mm` / ページング I/O / `mmap`) との協調実装が最難関となるが、WinFsp が MS 署名済みカーネルドライバとしてこれらを代行するため、大容量 Read や `mmap` でも高速かつ安全に動作する。
   3. ユーザー空間プロセスであるため開発時・運用時のバグで BSOD を起こさず、Windows 11 の EV コード署名＋Microsoft Attestation Signing も不要となる。
 
-### ADR-002: 独立プロジェクト (`libext2fs-win`) として分離開発する
-- **決定**: 既存の Read-Only ツール群（`LinuxRoDrive` 等）へ組み込まず、独立したリポジトリ・C/CMake プロジェクトとして開発する。
+### ADR-002: 独立プロジェクト (`ZeroExt`) として分離開発する
+- **決定**: 既存の Read-Only ツール群（`LinuxRoDrive` 等）へ組み込まず、独立したリポジトリ・C/CMake プロジェクト（`ZeroExt`）として開発する。
 - **根拠**:
   1. **安全性モデルの境界**: 「外部ドライバ不要・100% Read-Only」を前提とする設計と、「WinFsp 導入・`GENERIC_WRITE` による物理ディスク直接書き込み」を伴う設計はリスク特性が真逆であり、同一プロセスへ混在させると安全保証の境界が曖昧になる。
   2. **技術スタック・ビルド分離**: .NET / C# ソリューションへ C/CMake/MSVC ネイティブビルドや `e2fsprogs` ビルドを混在させると保守コストが急増する。
@@ -170,13 +170,13 @@ sequenceDiagram
 - **決定**: `FSP_FSCTL_VOLUME_PARAMS.UmFileContextIsUserContext2` を `1` に設定し、`FspOpen` / `FspCreate` が返す `ext4_file_handle_t *` を WinFsp の `UserContext2`（オープンハンドル／`FILE_OBJECT` 単位の `FileDesc`）として扱う。
 - **根拠**: `UmFileContextIsUserContext2 = 0`（既定）では `UserContext`（`FileNode` スロット）が使われ、並列アクセス時に同一パスに対する複数のクローズ要求が同一ポインタへ配送されて二重解放 (`STATUS_HEAP_CORRUPTION` / `0xC0000374`) および解放済みポインタ参照が発生する。`ext4_file_handle_t` は `create_options` / `delete_on_close` / `open_writable` を保持するオープン単位の構造体であるため、`UserContext2` に割り当てることで 1 オープン＝1 クローズが保証される。
 
-### ADR-012: 明示指定かつ RO 専用のロックレス・エクステント直結 I/O (`src/extent/`, `--direct-io`)
-- **決定**: ダイレクト・エクステント I/O エンジンは `--direct-io`（`enable_direct_io = 1`）を明示的に指定した場合に限り、かつ下位 ext4 ボリュームが Read-Only（既定の RO マウントまたは `--overlay`）で開かれている場合のみ有効化する。非 Overlay の `--rw` マウントと `--direct-io` の同時指定はマウント時に `-EINVAL` で拒否し、既定状態（`enable_direct_io = 0`）および RW 時は `extent_cache` を生成せず `ext2fs_file_read` 経由で処理する。
+### ADR-012: RO / Overlay 既定有効・RW 自動無効のロックレス・エクステント直結 I/O (`src/extent/`, `--no-direct-io`)
+- **決定**: ダイレクト・エクステント I/O エンジンは、下位 ext4 ボリュームが Read-Only（既定の RO マウントまたは `--overlay`）で開かれている場合に**既定で有効化**し、`--no-direct-io`（`disable_direct_io = 1`）明示指定時のみ標準 `ext2fs_file_read` 経路へ切り替える。非 Overlay の `--rw` マウント時は自動的に無効化（`extent_cache` 未生成）し、`--direct-io` の明示併用は `-EINVAL` で拒否する。
 - **根拠**:
-  1. 大容量ファイル（GGUF モデルの `mmap` ロードや VM イメージ等）に対する大量ページイン時に毎回 `ext2fs_file_open` / `llseek` / ブロック単位の `cache_lock` を通過するコストをなくすため、有効化時は inode のエクステント配列（多段ツリー・間接ブロック・インライン・未初期化・スパースに対応し隣接連続領域を結合）をキャッシュし、`O(log N)` 二分探索＋`ctx->rwlock` を保持しない `win32_io_pread_direct` へ流す（多段ツリーは `EXT2_EXTENT_ROOT` 直後に `EXT2_EXTENT_DOWN` で最初のリーフへ降りて枝 0 のスキップを防ぐ）。
+  1. 同一物理 NVMe SSD 評価において、実デバイス（`FILE_FLAG_NO_BUFFERING`）に対する標準 `ext2fs_file_read`（`52.1 MB/s`）に比べ、ダイレクト・エクステント直読（`1,490.9 MB/s`）は **28.6 倍** の実効性能差を示し、さらに `--overlay` 併用時や多段ツリー・間接ブロック・インラインデータ・未初期化エクステント・スパースホールの互換検証も完了したため、RO/Overlay の標準経路として既定有効化する。
   2. 一方、RW マウント下でロックレス直読を行うと、`libext2fs` 内部ファイルバッファ（`file->buf`）の未フラッシュデータとディスク上の旧データ・エクステントヘッダ書換中間状態との間で Read-after-Write 不整合リスクが生じるため、RW 時を最初から抑止して設計・検証を単純かつ安全に保つ。
 
 ### ADR-013: NTFS を Upper 層とする非破壊 Overlay マウント (`src/overlay/`) と Lower-ID 照合
 - **決定**: `--overlay <upper_ntfs_dir>` 指定時は、Lower の ext4 ボリュームを常に厳密 Read-Only (`GENERIC_READ`、Dirty Journal でも安全オープン可) に固定し、Windows NTFS 上の指定フォルダを Upper 層とする OverlayFS 互換 VFS（`src/overlay/overlay_vfs.c`）を有効化する。さらに Upperdir ルートに隠しマーカー `.wh.__ext4_lower_id`（Lower の `s_uuid` + ブロック数 + ブロックサイズ）を記録し、既存 Upperdir 再利用時に別 Lower との不一致を検出した場合はマウントを拒否 (`-EINVAL`) する。またマーカー未設定の非空ディレクトリに対しては警告ログを出した上で ID を記録する。
-- **根拠**: デュアルブート環境や Linux ワークスペース上の大容量ファイルへ高速アクセス（`--direct-io` 併用可）しつつ Windows 側出力物を NTFS に逃がす用途では、Lower への書き込みリスクをゼロに保つ必要がある。同一 Upperdir を誤って別 Lower に流用すると古いホワイトアウト (`.wh.<name>`) や `.wh.__dir_opaque`、古い Copy-up ファイル、inode 衝突が新 Lower へ誤適用される危険があるため、マウント時に Lower の UUID 等で拘束・検証する。
+- **根拠**: デュアルブート環境や Linux ワークスペース上の大容量ファイルへ高速アクセス（Direct I/O 既定有効）しつつ Windows 側出力物を NTFS に逃がす用途では、Lower への書き込みリスクをゼロに保つ必要がある。同一 Upperdir を誤って別 Lower に流用すると古いホワイトアウト (`.wh.<name>`) や `.wh.__dir_opaque`、古い Copy-up ファイル、inode 衝突が新 Lower へ誤適用される危険があるため、マウント時に Lower の UUID 等で拘束・検証する。
 

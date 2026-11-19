@@ -1,13 +1,13 @@
-# 詳細設計書 (`libext2fs-win` / `ext4fsp`)
+# 詳細設計書 (`ZeroExt` / `zeroext`)
 
-本書は、`libext2fs-win` のディレクトリ構造、CMake ビルド定義、互換レイヤー、`win32_io`、ディスク・ジャーナル検査、VFS (`op_*`)、エラー変換、および WinFsp ドライバインターフェースの詳細仕様を記述する。
+本書は、`ZeroExt` のディレクトリ構造、CMake ビルド定義、互換レイヤー、`win32_io`、ディスク・ジャーナル検査、VFS (`op_*`)、エラー変換、および WinFsp ドライバインターフェースの詳細仕様を記述する。
 
 ---
 
 ## 1. ディレクトリ構成とビルドターゲット
 
 ```text
-d:\libext2fs-win\
+ZeroExt\
 ├── CMakeLists.txt
 ├── LICENSE                               # GPLv2
 ├── README.md
@@ -22,7 +22,7 @@ d:\libext2fs-win\
 │   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> generated headers
 │   ├── update_e2fsprogs.ps1              # e2fsprogs 更新＆ビルド検証自動化スクリプト
 │   ├── build_and_test.ps1                # MSVC + Ninja + CTest 実行スクリプト
-│   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ext4fsp/WSL2)
+│   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ZeroExt/WSL2)
 ├── compat/
 │   ├── msvc_compat.h                     # /FI 強制インクルード用互換シム
 │   └── include/                          # POSIX/Autotools 代替ヘッダ
@@ -37,7 +37,7 @@ d:\libext2fs-win\
 │   ├── overlay/                          # overlay_vfs.h / .c (NTFS Upperdir OverlayFS)
 │   ├── vfs/                              # ext4_vfs.h, op_*.c
 │   ├── driver/                           # winfsp_driver.h / .c
-│   └── cli/                              # main.c (ext4fsp.exe)
+│   └── cli/                              # main.c (zeroext.exe)
 └── tests/                                # test_main.c + 単体・結合テスト群 + bench_direct_io.c
 ```
 
@@ -48,18 +48,18 @@ d:\libext2fs-win\
    - ソース: `third_party/e2fsprogs/lib/et/com_err.c`, 生成された `ext2_err.c`, `third_party/e2fsprogs/lib/ext2fs/*.c`（OS 依存の `unix_io.c` 等は除外）
    - コンパイルオプション (MSVC): `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_compat.h` `/W3`
    - デバッグ形式 (`CMP0141`): `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT = "Embedded"`（`/Z7` により `mspdbsrv.exe` 非依存でビルド）
-3. **`ext4fsp_core`（静的ライブラリ）**:
+3. **`zeroext_core`（静的ライブラリ）**:
    - ソース: `src/common/*.c`, `src/io/*.c`, `src/disk/*.c`, `src/extent/*.c`, `src/overlay/*.c`, `src/vfs/*.c`, `src/driver/*.c`
    - リンク: `ext2fs`, `advapi32`, `shell32`, `user32`
-4. **`ext4fsp`（実行ファイル）**:
+4. **`zeroext`（実行ファイル）**:
    - ソース: `src/cli/main.c`
-   - リンク: `ext4fsp_core`, `ext2fs`, `dbghelp`
-5. **`ext4fsp_tests`（実行ファイル / CTest 登録）**:
+   - リンク: `zeroext_core`, `ext2fs`, `dbghelp`
+5. **`zeroext_tests`（実行ファイル / CTest 登録）**:
    - ソース: `tests/test_*.c`
    - CTest スイート: `win32_io`, `partition_and_probe`, `vfs_operations`, `winfsp_callbacks`, `extent_and_overlay`
-6. **`ext4fsp_bench`（実行ファイル / Direct I/O ベンチマーク）**:
+6. **`zeroext_bench`（実行ファイル / Direct I/O ベンチマーク）**:
    - ソース: `tests/bench_direct_io.c`
-   - リンク: `ext4fsp_core`, `ext2fs`
+   - リンク: `zeroext_core`, `ext2fs`
 
 ---
 
@@ -186,7 +186,7 @@ typedef struct ext4_vfs_ctx {
 | `op_getattr.c` | `ext4_vfs_stat`, `ext4_vfs_stat_ino`, `ext4_vfs_set_times` | Shared / Exclusive | パス正規化・大小文字フォールバック解決、64bit サイズ、100ns `FILETIME` 相互変換、`FILE_ATTRIBUTE_*`（ドットファイル `HIDDEN`、RO 時 `READONLY`）算出。 |
 | `op_readdir.c` | `ext4_vfs_readdir` | Shared | `ext2fs_dir_iterate2` で各エントリ名と `ext4_stat_t` をコールバック返却。 |
 | `op_open.c` | `ext4_vfs_open`, `ext4_vfs_close_handle` | Shared | `ext4_file_handle_t` 確保・種別・RO 書き込み権限確認。 |
-| `op_read.c` | `ext4_vfs_read`, `ext4_vfs_lower_read`, `ext4_vfs_get_extents` | Direct I/O Hit: ロックレス / Miss・通常: Shared | `--direct-io` かつ Lower RO 時のみ `extent_cache` + `ext4_extent_pread` で物理セクタ直読（既定・RW 時は `ext2fs_file_read`）。`ctx->overlay` 有効時は `overlay_vfs_read` へ委譲。 |
+| `op_read.c` | `ext4_vfs_read`, `ext4_vfs_lower_read`, `ext4_vfs_get_extents` | Direct I/O Hit: ロックレス / Miss・通常: Shared | Lower RO（既定 RO / `--overlay` 時既定有効、`--no-direct-io` で無効化可）では `extent_cache` + `ext4_extent_pread` で物理セクタ直読（RW・`--no-direct-io` 時は `ext2fs_file_read`）。`ctx->overlay` 有効時は `overlay_vfs_read` へ委譲。 |
 | `op_write.c` | `ext4_vfs_write` | Exclusive | `write_to_eof` 対応書き込み、エクステント拡張、`mtime`/`ctime` 更新。 |
 | `op_create.c` | `ext4_vfs_create` | Exclusive | 親確認・重複検査・`ext2fs_new_inode`・256B iノード初期化（`EXT4_EXTENTS_FL`）・`ext2fs_link` 登録後に親 iノードを再読込して時刻更新（`ext2fs_expand_dir` 後の上書き防止）。 |
 | `op_mkdir.c` | `ext4_vfs_mkdir`, `ext4_vfs_can_delete` | Exclusive / Shared | `ext2fs_mkdir` によるディレクトリ作成、および `.` と `..` 以外のエントリ不在検証 (`-ENOTEMPTY`)。 |
@@ -202,7 +202,7 @@ typedef struct ext4_vfs_ctx {
 ## 6. ダイレクト・エクステント ＆ Overlay 層詳細 (`src/extent/`, `src/overlay/`)
 
 ### 6.1 `src/extent/extent_map.h` / `.c`
-- **有効条件**: `enable_direct_io != 0` かつ `lower_read_only != 0`（既定の RO マウントまたは `--overlay` で `--direct-io` 明示時のみ有効、`--rw` 時併用は `-EINVAL`）。
+- **有効条件**: `enable_direct_io != 0` かつ `lower_read_only != 0`（既定の RO マウントおよび `--overlay` では `--no-direct-io` 未指定時に自動有効、`--rw` 時併用は自動無効化または明示 `--direct-io` 時 `-EINVAL`）。
 - **抽出対象 (`ext4_extent_extract`)**:
   - `EXT4_INLINE_DATA_FL` / 60B 未満 Fast Symlink: `EXT4_STORAGE_INLINE` としてバイト列を保持し、メモリから即返却。
   - `EXT4_EXTENTS_FL`: `ext2fs_extent_open2` + `EXT2_EXTENT_ROOT` → `while (!(e_flags & LEAF)) EXT2_EXTENT_DOWN` → `EXT2_EXTENT_NEXT_LEAF` で全リーフノードを走査し、連続物理エクステントを統合（`is_uninit` も正確に維持）。

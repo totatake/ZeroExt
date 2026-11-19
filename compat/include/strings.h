@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_COMPAT_STRINGS_H
-#define LIBEXT2FS_WIN_COMPAT_STRINGS_H
+#ifndef ZEROEXT_COMPAT_STRINGS_H
+#define ZEROEXT_COMPAT_STRINGS_H
 
 #include <string.h>
 
@@ -23,4 +23,4 @@ static __inline int ffs(int i) {
 }
 #endif
 
-#endif /* LIBEXT2FS_WIN_COMPAT_STRINGS_H */
+#endif /* ZEROEXT_COMPAT_STRINGS_H */

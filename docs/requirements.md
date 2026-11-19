@@ -1,8 +1,8 @@
-# 要件定義書 (`libext2fs-win` / `ext4fsp`)
+# 要件定義書 (`ZeroExt` / `zeroext`)
 
 ## 1. 背景と目的
 
-Windows 11 環境において、別ドライブや仮想イメージファイル（`.img`）に格納された Linux ファイルシステム（`ext2` / `ext3` / `ext4`）を、通常の Windows ドライブレターとして高速かつ安全にマウント・読み書き（Read-Only / Read-Write およびメモリマップドファイル `mmap` 対応）できるユーザー空間ファイルシステムドライバ **`libext2fs-win`（実行ファイル名: `ext4fsp.exe`）** を構築する。
+Windows 11 / 10 環境において、別ドライブや仮想イメージファイル（`.img`）に格納された Linux ファイルシステム（`ext2` / `ext3` / `ext4`）を、通常の Windows ドライブレターとして高速かつ安全にマウント・読み書き（Read-Only / Read-Write およびメモリマップドファイル `mmap` 対応）できるユーザー空間ファイルシステムドライバ **`ZeroExt`（実行ファイル名: `zeroext.exe`）** を構築する。
 
 従来の純粋な Windows カーネルドライバ（`.sys`）方式は、カーネル空間での C ランタイム非互換・Cache Manager (`Cc`) / Memory Manager (`Mm`) 連携の実装コスト・EV コード署名および Microsoft Attestation Signing 要件・バグ発生時の BSOD リスクが大きい。一方、軽量組み込み向けライブラリ（`lwext4` 等）は省メモリ優先であり、最新 ext4 機能（`64bit`・`metadata_csum`・完全な JBD2 状態判定・大容量転送時のキャッシュ/並列性能）に制約がある。
 
@@ -16,7 +16,7 @@ Windows 11 環境において、別ドライブや仮想イメージファイル
 - **対象ファイルシステム**: Linux `ext2` / `ext3` / `ext4`
 - **対象メディア**: Windows 物理ディスク（`\\.\PhysicalDrive0..15`）および生ディスク/パーティションイメージファイル（`.img`）
 - **対象パーティション方式**: GPT（512B / 4096B セクタ）、MBR（基本パーティション 1〜4）、EBR（論理パーティション 5 以降）、Raw 未パーティションイメージ
-- **実行形態**: Windows ユーザー空間 CLI・マウントサービス（`ext4fsp.exe`）および再利用可能な静的ライブラリ（`ext2fs.lib`, `ext4fsp_core.lib`）
+- **実行形態**: Windows ユーザー空間 CLI・マウントサービス（`zeroext.exe`）および再利用可能な静的ライブラリ（`ext2fs.lib`, `zeroext_core.lib`）
 
 ### 2.2 プロジェクト境界とライセンス前提
 - Read-Only 専用・外部ドライバ不要を旨とする他プロジェクト（`LinuxRoDrive` 等）とはコードベース・安全性モデル・ビルド環境・ライセンスを分離し、独立プロジェクトとして維持する（将来連携する場合も CLI サブプロセス呼び出し等の疎結合で扱う）。
@@ -34,8 +34,8 @@ Windows 11 環境において、別ドライブや仮想イメージファイル
 | **FR-04** | **Read-Only / Read-Write 制御と Dirty 保護** | RO マウント時は `GENERIC_READ` のみでオープンし、I/O 層で書き込みを物理遮断する。RW マウント要求時に Dirty Journal (`EXT3_FEATURE_INCOMPAT_RECOVER` / JBD2 `s_start != 0` / `EXT2_ERROR_FS`) を検出した場合は RW マウントを拒否（または設定により RO 自動フォールバック）すること。 |
 | **FR-05** | **最新 ext4 ファイルシステム操作 (VFS)** | 64bit ブロック番号（`blk64_t`）、`EXT4_EXTENTS_FL`（インラインおよびマルチレベルエクステント）、従来型間接ブロック、256B+ iノード（ナノ秒精度タイムスタンプ・`crtime`）、`metadata_csum`（CRC32C）検証・更新、複数ブロックディレクトリ拡張・HTree 互換ディレクトリ操作、シンボリックリンク（Fast / Block）、リネーム、トランケート、ボリュームラベル変更に対応すること。 |
 | **FR-06** | **WinFsp ユーザー空間ドライバ統合** | `FSP_FILE_SYSTEM_INTERFACE` の全コールバックを実装し、エクスプローラー・Win32 アプリ・メモリマップドファイル (`mmap`) からドライブレターとして透過アクセス可能にすること。`winfsp-x64.dll` は実行時に動的ロードし、SDK ヘッダ非導入環境でもビルド・インプロセス検証できること。 |
-| **FR-07** | **CLI 管理・オフライン操作ツール (`ext4fsp.exe`)** | `list`, `inspect`, `mkfs`, `ls`, `stat`, `cat`, `write`, `mkdir`, `rm`, `mv`, `extents`, `mount`, `unmount` サブコマンドを備え、WinFsp マウントだけでなくイメージ生成・オフラインファイル操作・エクステントマッピング検査・診断を単体で実行できること。 |
-| **FR-08** | **ダイレクト・エクステント I/O パススルー (`--direct-io`)** | Read-Only マウント（既定の RO 動作、または `--overlay` で下位が RO の場合）において `--direct-io` が明示指定された場合のみ有効化され（`--rw` マウントとの併用は拒否）、ファイルの初回読み取り時にエクステントツリー（多段ツリー含む）・間接ブロック・インラインデータを抽出してキャッシュし、以降の `Read` 要求を `libext2fs` およびメタデータロックをバイパスして二分探索 `O(log N)` で物理セクタへ直読すること（未初期化エクステント・スパースホールのゼロ埋めを含む）。 |
+| **FR-07** | **CLI 管理・オフライン操作ツール (`zeroext.exe`)** | `list`, `inspect`, `mkfs`, `ls`, `stat`, `cat`, `write`, `mkdir`, `rm`, `mv`, `extents`, `mount`, `unmount` サブコマンドを備え、WinFsp マウントだけでなくイメージ生成・オフラインファイル操作・エクステントマッピング検査・診断を単体で実行できること。 |
+| **FR-08** | **ダイレクト・エクステント I/O エンジン (既定有効 / `--no-direct-io` で無効化)** | Read-Only マウント（既定の RO 動作）および `--overlay`（Lower が RO の場合）において既定でダイレクト・エクステント I/O を有効化し、`--no-direct-io` 指定時のみ標準ブロックキャッシュ経路へ切り替えられること（`--rw` マウント時は自動無効化、かつ `--direct-io` 明示併用は `-EINVAL` で拒否）。初回読み取り時にエクステントツリー（多段ツリー含む）・間接ブロック・インラインデータを抽出してキャッシュし、以降の `Read` 要求を `libext2fs` およびメタデータロックをバイパスして二分探索 `O(log N)` で物理セクタへ直読すること（未初期化エクステント・スパースホールのゼロ埋めを含む）。 |
 | **FR-09** | **NTFS Upperdir オーバーレイマウント (`--overlay`)** | Lower 側の ext4 ボリュームを厳密に Read-Only で開いたまま（Dirty Journal ボリュームも安全に参照可）、Windows NTFS 上の指定ディレクトリを Upper 層として重ね合わせ、新規作成・変更（Copy-up）・削除（`.wh.<name>` ホワイトアウト / `.wh.__dir_opaque` 不透過ディレクトリ）・リネームを非破壊の Read-Write ボリューム（ドライブレターまたは NTFS 空フォルダマウントポイント）として提供すること。Lower 識別ファイル (`.wh.__ext4_lower_id`) により異なる Lower への既存 Upperdir の誤流用を防止すること。 |
 
 ---
@@ -56,6 +56,6 @@ Windows 11 環境において、別ドライブや仮想イメージファイル
 現行スコープ外ながら、今後の機能拡張・性能可視化に向けて以下 2 項目を構想として位置づけている。詳細方針は [今後の構想・ロードマップ](future_roadmap.md) を参照。
 
 1. **GUI アプリケーションの追加**:
-   - ディスク／パーティション／JBD2 ジャーナル状態の可視化、マウントモード（既定 RO / `--overlay` / `--rw` / `--direct-io`）設定およびトレイ監視を行う GUI フロントエンド（コア `ext4fsp.exe` とはプロセス疎結合を維持）。
+   - ディスク／パーティション／JBD2 ジャーナル状態の可視化、マウントモード（既定 RO＋Direct I/O / `--overlay` / `--rw` / `--no-direct-io`）設定およびトレイ監視を行う GUI フロントエンド（コア `zeroext.exe` とはプロセス疎結合を維持）。
 2. **性能解析用 Perfetto トレース出力機能の追加**:
    - WinFsp コールバック、`ctx->rwlock` / `cache_lock` 競合、`extent_cache` / LRU キャッシュヒット、I/O レイテンシ、Overlay Copy-up 等を [Perfetto UI](https://ui.perfetto.dev/) でタイムライン解析できる明示オプション型トレース出力機能。

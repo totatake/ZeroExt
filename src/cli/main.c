@@ -28,7 +28,7 @@ static void write_minidump(EXCEPTION_POINTERS *ep) {
     HANDLE f;
     while (n > 0 && path[n - 1] != L'\\') n--;
     path[n] = 0;
-    wcscat_s(path, MAX_PATH, L"ext4fsp_crash.dmp");
+    wcscat_s(path, MAX_PATH, L"zeroext_crash.dmp");
     f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION mei;
@@ -84,23 +84,24 @@ static void install_crash_handlers(void) {
 
 static void print_usage(void) {
     printf(
-        "ext4fsp - libext2fs + WinFsp ext2/ext3/ext4 User-Space Driver & CLI\n\n"
+        "ZeroExt (zeroext) - libext2fs + WinFsp ext2/ext3/ext4 User-Space Driver & CLI\n\n"
         "Usage:\n"
-        "  ext4fsp list [<image_or_disk>]\n"
-        "  ext4fsp inspect <image_or_disk> [--partition <N>]\n"
-        "  ext4fsp mkfs <image_path> --size-mb <N> [--label <label>]\n"
-        "  ext4fsp ls <image_path> [<ext4_path>] [--partition <N>]\n"
-        "  ext4fsp stat <image_path> <ext4_path> [--partition <N>]\n"
-        "  ext4fsp cat <image_path> <ext4_path> [--partition <N>]\n"
-        "  ext4fsp write <image_path> <ext4_path> <text_or_host_file> [--from-file] [--partition <N>]\n"
-        "  ext4fsp mkdir <image_path> <ext4_path> [--partition <N>]\n"
-        "  ext4fsp rm <image_path> <ext4_path> [--partition <N>]\n"
-        "  ext4fsp mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
-        "  ext4fsp extents <image_or_disk> <ext4_path> [--partition <N>]\n"
-        "  ext4fsp mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
-        "                [--direct-io] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
-        "  ext4fsp unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
+        "  zeroext list [<image_or_disk>]\n"
+        "  zeroext inspect <image_or_disk> [--partition <N>]\n"
+        "  zeroext mkfs <image_path> --size-mb <N> [--label <label>]\n"
+        "  zeroext ls <image_path> [<ext4_path>] [--partition <N>]\n"
+        "  zeroext stat <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext cat <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext write <image_path> <ext4_path> <text_or_host_file> [--from-file] [--partition <N>]\n"
+        "  zeroext mkdir <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext rm <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
+        "  zeroext extents <image_or_disk> <ext4_path> [--partition <N>]\n"
+        "  zeroext mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
+        "                [--no-direct-io | --direct-io] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
+        "  zeroext unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
+        "  Default mount mode is Read-Only with Direct Extent I/O enabled.\n"
         "  A mount stays active while the 'mount' process runs; press Ctrl+C in that console to unmount.\n"
     );
 }
@@ -221,7 +222,7 @@ static int cmd_mkfs(int argc, char **argv) {
     }
     const char *img = argv[2];
     uint32_t size_mb = parse_u32_opt(argc, argv, "--size-mb", 16);
-    const char *label = parse_str_opt(argc, argv, "--label", "EXT4FSP");
+    const char *label = parse_str_opt(argc, argv, "--label", "ZEROEXT");
     int rc = ext4_vfs_mkfs(img, (uint64_t)size_mb * 1024ULL * 1024ULL, label);
     if (rc != 0) {
         fprintf(stderr, "mkfs failed: %d\n", rc);
@@ -545,6 +546,7 @@ static int cmd_mount(int argc, char **argv) {
     int rw = has_flag(argc, argv, "--rw");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
     int direct_io = has_flag(argc, argv, "--direct-io");
+    int no_direct_io = has_flag(argc, argv, "--no-direct-io");
     uint32_t debug_log = has_flag(argc, argv, "--debug") ? (uint32_t)-1 : 0;
 
     if (!src || !mp) {
@@ -555,6 +557,11 @@ static int cmd_mount(int argc, char **argv) {
     if (rw && overlay_dir && overlay_dir[0] != '\0') {
         fprintf(stderr, "Error: --rw and --overlay cannot be used together "
                         "(--overlay writes to the NTFS upperdir while keeping lower ext4 read-only).\n");
+        return 1;
+    }
+
+    if (direct_io && no_direct_io) {
+        fprintf(stderr, "Error: --direct-io and --no-direct-io cannot be used together.\n");
         return 1;
     }
 
@@ -580,6 +587,7 @@ static int cmd_mount(int argc, char **argv) {
     cfg.force_rw_on_dirty = force_dirty;
     cfg.case_insensitive = 1;
     cfg.enable_direct_io = direct_io ? 1 : 0;
+    cfg.disable_direct_io = no_direct_io ? 1 : 0;
 
     ext4_vfs_ctx_t *ctx = NULL;
     int rc = ext4_vfs_mount(&cfg, &ctx);

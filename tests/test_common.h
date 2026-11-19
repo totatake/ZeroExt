@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_TEST_COMMON_H
-#define LIBEXT2FS_WIN_TEST_COMMON_H
+#ifndef ZEROEXT_TEST_COMMON_H
+#define ZEROEXT_TEST_COMMON_H
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -50,7 +50,7 @@ static __inline void test_make_temp_path(char *out, size_t out_sz, const char *f
     if (n == 0 || n >= sizeof(tmp_dir)) {
         snprintf(out, out_sz, "%s", filename);
     } else {
-        snprintf(out, out_sz, "%slibext2fs_win_%u_%s", tmp_dir, (unsigned)GetCurrentProcessId(), filename);
+        snprintf(out, out_sz, "%szeroext_%u_%s", tmp_dir, (unsigned)GetCurrentProcessId(), filename);
     }
 }
 
@@ -60,4 +60,4 @@ int run_suite_vfs_operations(void);
 int run_suite_winfsp_callbacks(void);
 int run_suite_extent_and_overlay(void);
 
-#endif /* LIBEXT2FS_WIN_TEST_COMMON_H */
+#endif /* ZEROEXT_TEST_COMMON_H */

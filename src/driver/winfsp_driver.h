@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_WINFSP_DRIVER_H
-#define LIBEXT2FS_WIN_WINFSP_DRIVER_H
+#ifndef ZEROEXT_WINFSP_DRIVER_H
+#define ZEROEXT_WINFSP_DRIVER_H
 
 #include "../vfs/ext4_vfs.h"
 #include <winfsp/winfsp.h>
@@ -30,4 +30,4 @@ int winfsp_driver_force_unmount(const wchar_t *drive);
 }
 #endif
 
-#endif /* LIBEXT2FS_WIN_WINFSP_DRIVER_H */
+#endif /* ZEROEXT_WINFSP_DRIVER_H */

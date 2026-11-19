@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_PARTITION_TABLE_H
-#define LIBEXT2FS_WIN_PARTITION_TABLE_H
+#ifndef ZEROEXT_PARTITION_TABLE_H
+#define ZEROEXT_PARTITION_TABLE_H
 
 #include <stdint.h>
 #include "superblock_probe.h"
@@ -38,4 +38,4 @@ int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
 }
 #endif
 
-#endif /* LIBEXT2FS_WIN_PARTITION_TABLE_H */
+#endif /* ZEROEXT_PARTITION_TABLE_H */

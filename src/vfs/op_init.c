@@ -187,6 +187,12 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
                  probe.journal_state == EXT4_JOURNAL_HAS_ERRORS);
     int fell_back = 0;
 
+    if (cfg->enable_direct_io && cfg->disable_direct_io) {
+        ext4_log(EXT4_LOG_ERROR,
+                 "Cannot specify both --direct-io and --no-direct-io.");
+        return -EINVAL;
+    }
+
     if (cfg->enable_direct_io && !lower_ro) {
         ext4_log(EXT4_LOG_ERROR,
                  "Direct extent I/O (--direct-io) is only supported in Read-Only (default) or --overlay mode.");
@@ -218,7 +224,8 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     ctx->dirty_detected = dirty;
     ctx->fell_back_to_ro = fell_back;
     ctx->case_insensitive = cfg->case_insensitive;
-    ctx->enable_direct_io = cfg->enable_direct_io ? 1 : 0;
+    /* Direct Extent I/O is enabled by default whenever Lower ext4 is Read-Only unless explicitly disabled */
+    ctx->enable_direct_io = (lower_ro && !cfg->disable_direct_io) ? 1 : 0;
     ctx->journal_state = probe.journal_state;
     ctx->partition_offset = part_offset;
     ctx->partition_size = part_size;

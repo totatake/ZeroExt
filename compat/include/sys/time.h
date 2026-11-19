@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_COMPAT_SYS_TIME_H
-#define LIBEXT2FS_WIN_COMPAT_SYS_TIME_H
+#ifndef ZEROEXT_COMPAT_SYS_TIME_H
+#define ZEROEXT_COMPAT_SYS_TIME_H
 
 #include <time.h>
 
@@ -13,4 +13,4 @@ struct timeval {
 #endif
 #endif
 
-#endif /* LIBEXT2FS_WIN_COMPAT_SYS_TIME_H */
+#endif /* ZEROEXT_COMPAT_SYS_TIME_H */

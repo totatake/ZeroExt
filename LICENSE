@@ -4,7 +4,7 @@ Version 2, June 1991
 This project links with e2fsprogs (libext2fs / libet), which is licensed under
 the GNU General Public License, version 2 (GPLv2).
 
-Accordingly, libext2fs-win (ext4fsp) is distributed under the terms of the
+Accordingly, ZeroExt (zeroext.exe) is distributed under the terms of the
 GNU General Public License, version 2.
 
 You should have received a copy of the GNU General Public License along with

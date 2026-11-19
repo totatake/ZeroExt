@@ -1,12 +1,12 @@
-# `libext2fs-win` (`ext4fsp`)
+# `ZeroExt` (`zeroext`)
 
-Windows 11 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース ext2 / ext3 / ext4 ユーザー空間ファイルシステムドライバおよび管理 CLI ツールです。
+Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高速 ext2 / ext3 / ext4 ユーザー空間ファイルシステムドライバおよび管理 CLI ツールです。
 
 ## 特徴
 
 - **本家 `e2fsprogs` (`libext2fs`) 採用**: 64bit ブロック番号、ext4 エクステント (`EXT4_EXTENTS_FL`)、256B+ iノード（ナノ秒タイムスタンプ・`crtime`）、`metadata_csum` (CRC32C)、HTree ディレクトリに対応。
 - **WinFsp による高速・安全なユーザー空間 FSD**: Windows の Cache Manager (`Cc`) / Memory Manager (`Mm`) 連携による高速シーケンシャル Read / `mmap` に対応しつつ、ドライバ署名不要・BSOD リスクゼロで動作。
-- **ダイレクト・エクステント I/O モード (`--direct-io`・RO / Overlay 専用)**: 既定の Read-Only マウントまたは `--overlay` 時に `--direct-io` を明示指定した場合、エクステントマップ（多段ツリー・間接ブロック・インラインデータ対応）をキャッシュし、以降の `Read` を `O(log N)` 二分探索＋ロックレス物理セクタ直読 (`win32_io_pread_direct`) で高速化（GGUF モデル等の大容量 `mmap` 読み込みに最適）。
+- **ダイレクト・エクステント I/O エンジン（RO / Overlay 時既定有効、`--no-direct-io` で無効化可）**: 既定の Read-Only マウントおよび `--overlay` マウントでは、初回アクセス時にエクステントマップ（多段ツリー・間接ブロック・インラインデータ対応）をキャッシュし、以降の `Read` を `O(log N)` 二分探索＋ロックレス物理セクタ直読 (`win32_io_pread_direct`) で高速化します（GGUF モデル等の大容量 `mmap` 読み込みに最適。`--rw` モードでは整合性維持のため自動的に無効化されます）。
 - **非破壊 NTFS Overlay マウント (`--overlay`)**: Lower 側の ext4 を厳密 Read-Only に保ったまま NTFS ディレクトリを上層に重ね合わせ、Copy-up 書込・新規作成・ホワイトアウト削除を透過的に実現（`.wh.__ext4_lower_id` による別 Lower 誤流用ガード付き）。
 - **Windows ネイティブ I/O マネージャ (`win32_io_manager`)**:
   - `CreateFileW` + `OVERLAPPED` によるスレッドセーフなオフセット指定 I/O
@@ -22,7 +22,7 @@ Windows 11 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース ext2 / e
 - [アーキテクチャ設計書・ADR (設計判断記録)](docs/architecture.md)
 - [詳細設計書](docs/detailed_design.md)
 - [テスト報告書・利用ガイド](docs/testing_and_usage.md)
-- [性能評価報告書 (`--direct-io` 比較)](docs/performance_evaluation.md)
+- [性能評価報告書 (`--direct-io` / NTFS / WSL2 比較)](docs/performance_evaluation.md)
 - [今後の構想・ロードマップ](docs/future_roadmap.md)
 
 ## ビルドとテスト
@@ -35,7 +35,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
 
 ## WinFsp のインストール（ドライブマウント実行時に必須）
 
-`ext4fsp.exe mount` を使用して Windows ドライブレター（例: `M:`）へマウントするには、事前に **WinFsp** ランタイムをインストールする必要があります（オフラインコマンド `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等は WinFsp なしでも動作します）。
+`zeroext.exe mount` を使用して Windows ドライブレター（例: `M:`）へマウントするには、事前に **WinFsp** ランタイムをインストールする必要があります（オフラインコマンド `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等は WinFsp なしでも動作します）。
 
 以下のいずれかの方法でインストールしてください：
 
@@ -57,28 +57,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
 
 ```powershell
 # ディスク / パーティション一覧と状態検査
-ext4fsp.exe list
-ext4fsp.exe inspect test.img
+zeroext.exe list
+zeroext.exe inspect test.img
 
 # クリーンな ext4 イメージ作成・操作
-ext4fsp.exe mkfs test.img --size-mb 64 --label MYEXT4
-ext4fsp.exe mkdir test.img /data
-ext4fsp.exe write test.img /data/hello.txt "Hello from libext2fs-win!"
-ext4fsp.exe ls test.img /data
-ext4fsp.exe cat test.img /data/hello.txt
-ext4fsp.exe extents test.img /data/hello.txt
+zeroext.exe mkfs test.img --size-mb 64 --label MYEXT4
+zeroext.exe mkdir test.img /data
+zeroext.exe write test.img /data/hello.txt "Hello from ZeroExt!"
+zeroext.exe ls test.img /data
+zeroext.exe cat test.img /data/hello.txt
+zeroext.exe extents test.img /data/hello.txt
 
-# WinFsp で Windows ドライブへマウント (WinFsp ランタイム要・既定は安全な Read-Only)
-ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M:
+# WinFsp で Windows ドライブへマウント (WinFsp ランタイム要・既定は Read-Only + ダイレクトエクステント直読 ON)
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M:
 
-# Read-Only + 高速ダイレクトエクステント直読 (--direct-io は既定の RO / --overlay 時のみ指定可)
-ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --direct-io
+# Direct I/O を明示的に無効化して標準 LRU キャッシュ経由でマウント
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --no-direct-io
 
-# Read-Write マウント（明示的に --rw を指定）
-ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
+# Read-Write マウント（明示的に --rw を指定・Direct I/O は自動無効）
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
 
-# ext4 は Read-Only + 直読に保ち、書き込みだけ Windows NTFS フォルダへ逃がす Overlay マウント
-ext4fsp.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper --direct-io
+# ext4 は Read-Only + 直読 (既定 ON) に保ち、書き込みだけ Windows NTFS フォルダへ逃がす Overlay マウント
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
 ```
 
 ## ライセンス

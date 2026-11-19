@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_WIN32_IO_H
-#define LIBEXT2FS_WIN_WIN32_IO_H
+#ifndef ZEROEXT_WIN32_IO_H
+#define ZEROEXT_WIN32_IO_H
 
 #include <stdint.h>
 #include <ext2fs/ext2_io.h>
@@ -45,4 +45,4 @@ errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
 }
 #endif
 
-#endif /* LIBEXT2FS_WIN_WIN32_IO_H */
+#endif /* ZEROEXT_WIN32_IO_H */

@@ -377,7 +377,7 @@ int main(int argc, char **argv) {
     }
 
     GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
-    snprintf(img_path, sizeof(img_path), "%sext4fsp_bench_%lu.img", tmp_dir, GetCurrentProcessId());
+    snprintf(img_path, sizeof(img_path), "%szeroext_bench_%lu.img", tmp_dir, GetCurrentProcessId());
 
     printf("Preparing 160MB ext4 benchmark image (/model.gguf 64MB, /frag.bin 32MB)...\n");
     if (prepare_image(img_path) != 0) {
@@ -396,7 +396,8 @@ int main(int argc, char **argv) {
         cfg.read_only = 1;
         cfg.max_cache_blocks = 2048;
         cfg.case_insensitive = 1;
-        cfg.enable_direct_io = mode;
+        /* mode=0 verifies --no-direct-io fallback; mode=1 verifies RO default (Direct I/O ON) */
+        cfg.disable_direct_io = (mode == 0) ? 1 : 0;
 
         if (ext4_vfs_mount(&cfg, &ctx) != 0) {
             fprintf(stderr, "Mount failed (mode=%d)\n", mode);
@@ -422,7 +423,9 @@ int main(int argc, char **argv) {
         }
 
         printf("\n=== Mode: enable_direct_io=%d (%s) ===\n",
-               mode, mode ? "--direct-io ON (lockless extent pread)" : "Standard ext2fs_file_read");
+               ctx->enable_direct_io,
+               mode ? "Default (--direct-io ON, lockless extent pread)"
+                    : "--no-direct-io (Standard ext2fs_file_read)");
         failed |= run_vfs_bench("1T Seq  64KB /model.gguf (512MB)", ctx, st_model.ino, st_model.size, 64U * 1024U, 8192, 1, 0);
         failed |= run_vfs_bench("1T Seq   1MB /model.gguf (1024MB)", ctx, st_model.ino, st_model.size, 1024U * 1024U, 1024, 1, 0);
         failed |= run_vfs_bench("1T Seq   4KB /model.gguf (128MB)", ctx, st_model.ino, st_model.size, 4096U, 32768, 1, 0);

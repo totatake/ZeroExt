@@ -55,10 +55,22 @@ static int test_direct_extent_deep_tree_and_holes(void) {
     TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT(ctx == NULL);
 
-    /* 2. Default RW mount disables extent_cache */
-    cfg.enable_direct_io = 0;
+    /* 1b. Contradictory enable_direct_io + disable_direct_io must be rejected */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.enable_direct_io = 1;
+    cfg.disable_direct_io = 1;
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx == NULL);
+
+    /* 2. RW mount automatically disables extent_cache */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
     cfg.case_insensitive = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ctx->enable_direct_io);
     TEST_ASSERT(ctx->extent_cache == NULL);
 
     /* Create a fragmented file with 8 non-contiguous extents (exceeds inline eh_max=4 -> eh_depth >= 1).
@@ -79,12 +91,11 @@ static int test_direct_extent_deep_tree_and_holes(void) {
     ext4_vfs_unmount(ctx);
     ctx = NULL;
 
-    /* 3. Explicit RO + Direct I/O mount enables extent_cache & lockless direct read */
+    /* 3. Default RO mount automatically enables Direct I/O & extent_cache */
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 1;
     cfg.case_insensitive = 1;
-    cfg.enable_direct_io = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT(ctx->extent_cache != NULL);
     TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
@@ -104,12 +115,13 @@ static int test_direct_extent_deep_tree_and_holes(void) {
     ext4_vfs_unmount(ctx);
     ctx = NULL;
 
-    /* Verify exact match with default (non-direct-io) RO mount */
+    /* Verify exact match when disabling direct_io (--no-direct-io) on RO mount */
     {
         uint8_t cmp_buf[8192];
         uint32_t r2 = 0;
-        cfg.enable_direct_io = 0;
+        cfg.disable_direct_io = 1;
         TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+        TEST_ASSERT_EQ_INT(0, ctx->enable_direct_io);
         TEST_ASSERT(ctx->extent_cache == NULL);
         TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, map->ino, cmp_buf, 2ULL * 8192ULL + 2000ULL, 7000U, &r2));
         TEST_ASSERT_EQ_INT(r, r2);
@@ -179,10 +191,10 @@ static int test_extent_indirect_uninit_and_inline(void) {
     ext4_vfs_unmount(ctx);
     ctx = NULL;
 
-    /* Remount in RO + Direct Extent I/O mode */
+    /* Remount in default RO mode (Direct Extent I/O enabled automatically) */
     cfg.read_only = 1;
-    cfg.enable_direct_io = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
 
     TEST_ASSERT_EQ_INT(0, ext4_vfs_get_extents(ctx, "/indirect.bin", &map));
     TEST_ASSERT_EQ_INT(EXT4_STORAGE_INDIRECT, map->kind);
@@ -285,16 +297,16 @@ static int test_overlay_vfs_and_persistence(void) {
     ext4_vfs_unmount(ctx);
     ctx = NULL;
 
-    /* Mount with Overlay + explicit Direct Extent I/O enabled even though lower ext4 has dirty state */
+    /* Mount with Overlay (default Direct Extent I/O enabled automatically) even though lower ext4 has dirty state */
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
     cfg.case_insensitive = 1;
     cfg.overlay_upper_dir = upper_dir;
-    cfg.enable_direct_io = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT_EQ_INT(1, ctx->lower_read_only);
     TEST_ASSERT_EQ_INT(0, ctx->read_only);
+    TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
     TEST_ASSERT(ctx->extent_cache != NULL);
 
     /* 1. Direct Extent read of lower-only file through overlay */

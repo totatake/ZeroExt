@@ -1,5 +1,5 @@
-#ifndef LIBEXT2FS_WIN_EXT4_VFS_H
-#define LIBEXT2FS_WIN_EXT4_VFS_H
+#ifndef ZEROEXT_EXT4_VFS_H
+#define ZEROEXT_EXT4_VFS_H
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -31,7 +31,8 @@ typedef struct ext4_mount_config {
     int         ignore_csum_errors;   /* 1 = set EXT2_FLAG_IGNORE_CSUM_ERRORS */
     int         case_insensitive;     /* 1 = fallback case-insensitive lookup (Windows default) */
     const char *overlay_upper_dir;    /* Optional NTFS upperdir for Overlay mount (lower opens RO) */
-    int         enable_direct_io;     /* 1 = enable direct extent I/O (RO / Overlay only) */
+    int         enable_direct_io;     /* 1 = require direct extent I/O (default ON in RO/Overlay; error on RW) */
+    int         disable_direct_io;    /* 1 = disable direct extent I/O in RO/Overlay (use ext2fs_file_read) */
 } ext4_mount_config_t;
 
 typedef struct ext4_vfs_ctx {
@@ -152,4 +153,4 @@ int ext4_vfs_get_extents(ext4_vfs_ctx_t *ctx, const char *path, struct ext4_exte
 }
 #endif
 
-#endif /* LIBEXT2FS_WIN_EXT4_VFS_H */
+#endif /* ZEROEXT_EXT4_VFS_H */
