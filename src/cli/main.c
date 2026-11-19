@@ -5,6 +5,7 @@
 #include "../vfs/ext4_vfs.h"
 #include "../extent/extent_map.h"
 #include "../driver/winfsp_driver.h"
+#include "../trace/perfetto_trace.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,6 +103,7 @@ static void print_usage(void) {
         "  zeroext mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
         "                [--no-direct-io | --direct-io] [--ro-fallback] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
         "                [--stop-event <name>] [--json-events] [--stats-interval <ms>]\n"
+        "                [--trace <output_json>] [--trace-events <N>]\n"
         "  zeroext unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
         "  Default mount mode is Read-Only with Direct Extent I/O enabled.\n"
@@ -145,7 +147,9 @@ static const char *find_positional_skip_opts(int argc, char **argv, int start_id
             strcmp(argv[i], "--source") == 0 ||
             strcmp(argv[i], "--mountpoint") == 0 ||
             strcmp(argv[i], "--stop-event") == 0 ||
-            strcmp(argv[i], "--stats-interval") == 0) {
+            strcmp(argv[i], "--stats-interval") == 0 ||
+            strcmp(argv[i], "--trace") == 0 ||
+            strcmp(argv[i], "--trace-events") == 0) {
             i++;
             continue;
         }
@@ -781,9 +785,11 @@ static int cmd_mount(int argc, char **argv) {
     const char *mp = parse_str_opt(argc, argv, "--mountpoint", NULL);
     const char *overlay_dir = parse_str_opt(argc, argv, "--overlay", NULL);
     const char *stop_event_name = parse_str_opt(argc, argv, "--stop-event", NULL);
+    const char *trace_path = parse_str_opt(argc, argv, "--trace", NULL);
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     uint32_t cache_blocks = parse_u32_opt(argc, argv, "--cache-blocks", 2048);
     uint32_t stats_interval = parse_u32_opt(argc, argv, "--stats-interval", 0);
+    uint32_t trace_events = parse_u32_opt(argc, argv, "--trace-events", 0);
     int rw = has_flag(argc, argv, "--rw");
     int ro_fallback = has_flag(argc, argv, "--ro-fallback");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
@@ -792,6 +798,7 @@ static int cmd_mount(int argc, char **argv) {
     int json_events = has_flag(argc, argv, "--json-events");
     uint32_t debug_log = has_flag(argc, argv, "--debug") ? (uint32_t)-1 : 0;
     HANDLE stop_event = NULL;
+    int tracing = 0;
 
     if (json_events) {
         setvbuf(stdout, NULL, _IONBF, 0);
@@ -843,6 +850,21 @@ static int cmd_mount(int argc, char **argv) {
         }
     }
 
+    if (trace_path && trace_path[0] != '\0') {
+        int trc = ztrace_init(trace_path, trace_events);
+        if (trc != 0) {
+            char errbuf[256];
+            _snprintf_s(errbuf, sizeof(errbuf), _TRUNCATE,
+                        "Failed to open Perfetto trace output '%s' (err=%d).", trace_path, trc);
+            fprintf(stderr, "%s\n", errbuf);
+            emit_mount_error_json(json_events, "args", trc, errbuf);
+            if (stop_event) CloseHandle(stop_event);
+            return 1;
+        }
+        ztrace_set_thread_name("CLI-Main");
+        tracing = 1;
+    }
+
     ext4_mount_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = src;
@@ -869,6 +891,7 @@ static int cmd_mount(int argc, char **argv) {
         _snprintf_s(errbuf, sizeof(errbuf), _TRUNCATE, "Failed to mount '%s' (err=%d)", src, rc);
         fprintf(stderr, "%s\n", errbuf);
         emit_mount_error_json(json_events, "vfs_mount", rc, errbuf);
+        if (tracing) ztrace_shutdown(NULL);
         if (stop_event) CloseHandle(stop_event);
         return 1;
     }
@@ -881,6 +904,7 @@ static int cmd_mount(int argc, char **argv) {
     if (ext4_utf8_to_wide(mp, wmp, _countof(wmp)) != 0) {
         emit_mount_error_json(json_events, "args", -EINVAL, "Invalid mountpoint path.");
         ext4_vfs_unmount(ctx);
+        if (tracing) ztrace_shutdown(NULL);
         if (stop_event) CloseHandle(stop_event);
         return 1;
     }
@@ -894,6 +918,7 @@ static int cmd_mount(int argc, char **argv) {
         fprintf(stderr, "%s\n", errbuf);
         emit_mount_error_json(json_events, "winfsp_start", rc, errbuf);
         ext4_vfs_unmount(ctx);
+        if (tracing) ztrace_shutdown(NULL);
         if (stop_event) CloseHandle(stop_event);
         return 1;
     }
@@ -918,6 +943,9 @@ static int cmd_mount(int argc, char **argv) {
         printf("Mounted '%s' (partition=%u, mode=%s, direct_io=%s%s%s) at %s. Press Ctrl+C to unmount...\n",
                src, part, mode_str, ctx->enable_direct_io ? "on" : "off",
                overlay_dir ? ", upper=" : "", overlay_dir ? overlay_dir : "", mp);
+        if (tracing) {
+            printf("Perfetto tracing active -> %s\n", trace_path);
+        }
         fflush(stdout);
     }
 
@@ -959,11 +987,38 @@ static int cmd_mount(int argc, char **argv) {
     winfsp_driver_stop(mh);
     ext4_vfs_unmount(ctx);
     if (stop_event) CloseHandle(stop_event);
-    if (json_events) {
-        printf("{\"event\":\"unmounted\",\"mountpoint\":"); print_json_str(mp); printf("}\n");
-        fflush(stdout);
-    } else {
-        printf("Unmounted cleanly.\n");
+
+    {
+        ztrace_summary_t tsum;
+        int trace_flush_rc = 0;
+        memset(&tsum, 0, sizeof(tsum));
+        if (tracing) {
+            trace_flush_rc = ztrace_shutdown(&tsum);
+        }
+        if (json_events) {
+            printf("{\"event\":\"unmounted\",\"mountpoint\":"); print_json_str(mp);
+            if (tracing && trace_flush_rc == 0) {
+                printf(",\"trace_path\":"); print_json_str(trace_path);
+                printf(",\"trace_events\":%llu,\"trace_dropped\":%llu",
+                       (unsigned long long)tsum.events_written,
+                       (unsigned long long)tsum.dropped_events);
+            }
+            printf("}\n");
+            fflush(stdout);
+        } else {
+            printf("Unmounted cleanly.\n");
+            if (tracing) {
+                if (trace_flush_rc == 0) {
+                    printf("Trace written to '%s' (events=%llu, dropped=%llu, threads=%u). Open at https://ui.perfetto.dev/\n",
+                           trace_path,
+                           (unsigned long long)tsum.events_written,
+                           (unsigned long long)tsum.dropped_events,
+                           tsum.threads_seen);
+                } else {
+                    fprintf(stderr, "Failed to write trace '%s' (err=%d).\n", trace_path, trace_flush_rc);
+                }
+            }
+        }
     }
     return 0;
 }

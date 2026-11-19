@@ -1,5 +1,6 @@
 #include "winfsp_driver.h"
 #include "../common/ext4_errno.h"
+#include "../trace/perfetto_trace.h"
 #include <sddl.h>
 #include <shlobj.h>
 #include <errno.h>
@@ -112,9 +113,9 @@ static NTSTATUS FspSetVolumeLabel(FSP_FILE_SYSTEM *FileSystem, PWSTR VolumeLabel
     return FspGetVolumeInfo(FileSystem, VolumeInfo);
 }
 
-static NTSTATUS FspGetSecurityByName(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName,
-                                     PUINT32 PFileAttributes, PSECURITY_DESCRIPTOR SecurityDescriptor,
-                                     SIZE_T *PSecurityDescriptorSize) {
+static NTSTATUS FspGetSecurityByName_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName,
+                                          PUINT32 PFileAttributes, PSECURITY_DESCRIPTOR SecurityDescriptor,
+                                          SIZE_T *PSecurityDescriptorSize) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     char path_utf8[1024];
     ext4_stat_t st;
@@ -139,10 +140,23 @@ static NTSTATUS FspGetSecurityByName(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspCreate(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 CreateOptions,
-                          UINT32 GrantedAccess, UINT32 FileAttributes,
-                          PSECURITY_DESCRIPTOR SecurityDescriptor, UINT64 AllocationSize,
-                          PVOID *PFileContext, FSP_FSCTL_FILE_INFO *FileInfo) {
+static NTSTATUS FspGetSecurityByName(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName,
+                                     PUINT32 PFileAttributes, PSECURITY_DESCRIPTOR SecurityDescriptor,
+                                     SIZE_T *PSecurityDescriptorSize) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspGetSecurityByName_impl(FileSystem, FileName, PFileAttributes,
+                                            SecurityDescriptor, PSecurityDescriptorSize);
+    if (_zt0) {
+        ztrace_record_complete("winfsp", "FspGetSecurityByName", _zt0, ztrace_now_qpc() - _zt0,
+                               0, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
+}
+
+static NTSTATUS FspCreate_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 CreateOptions,
+                               UINT32 GrantedAccess, UINT32 FileAttributes,
+                               PSECURITY_DESCRIPTOR SecurityDescriptor, UINT64 AllocationSize,
+                               PVOID *PFileContext, FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     char path_utf8[1024];
     int is_dir = (CreateOptions & FILE_DIRECTORY_FILE) != 0;
@@ -184,8 +198,23 @@ static NTSTATUS FspCreate(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 Cr
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspOpen(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 CreateOptions,
-                        UINT32 GrantedAccess, PVOID *PFileContext, FSP_FSCTL_FILE_INFO *FileInfo) {
+static NTSTATUS FspCreate(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 CreateOptions,
+                          UINT32 GrantedAccess, UINT32 FileAttributes,
+                          PSECURITY_DESCRIPTOR SecurityDescriptor, UINT64 AllocationSize,
+                          PVOID *PFileContext, FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspCreate_impl(FileSystem, FileName, CreateOptions, GrantedAccess, FileAttributes,
+                                 SecurityDescriptor, AllocationSize, PFileContext, FileInfo);
+    if (_zt0) {
+        ext4_file_handle_t *h = (NT_SUCCESS(st) && PFileContext) ? (ext4_file_handle_t *)(*PFileContext) : NULL;
+        ztrace_record_complete("winfsp", "FspCreate", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
+}
+
+static NTSTATUS FspOpen_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 CreateOptions,
+                             UINT32 GrantedAccess, PVOID *PFileContext, FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     char path_utf8[1024];
     ext4_file_handle_t *handle = NULL;
@@ -232,9 +261,21 @@ static NTSTATUS FspOpen(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 Crea
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspOverwrite(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT32 FileAttributes,
-                             BOOLEAN ReplaceFileAttributes, UINT64 AllocationSize,
-                             FSP_FSCTL_FILE_INFO *FileInfo) {
+static NTSTATUS FspOpen(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32 CreateOptions,
+                        UINT32 GrantedAccess, PVOID *PFileContext, FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspOpen_impl(FileSystem, FileName, CreateOptions, GrantedAccess, PFileContext, FileInfo);
+    if (_zt0) {
+        ext4_file_handle_t *h = (NT_SUCCESS(st) && PFileContext) ? (ext4_file_handle_t *)(*PFileContext) : NULL;
+        ztrace_record_complete("winfsp", "FspOpen", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
+}
+
+static NTSTATUS FspOverwrite_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT32 FileAttributes,
+                                  BOOLEAN ReplaceFileAttributes, UINT64 AllocationSize,
+                                  FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     ext4_stat_t st;
@@ -263,30 +304,56 @@ static NTSTATUS FspOverwrite(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UIN
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS FspOverwrite(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT32 FileAttributes,
+                             BOOLEAN ReplaceFileAttributes, UINT64 AllocationSize,
+                             FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspOverwrite_impl(FileSystem, FileContext, FileAttributes,
+                                    ReplaceFileAttributes, AllocationSize, FileInfo);
+    if (_zt0) {
+        ext4_file_handle_t *h = (ext4_file_handle_t *)FileContext;
+        ztrace_record_complete("winfsp", "FspOverwrite", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
+}
+
 static VOID FspCleanup(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR FileName, ULONG Flags) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     (void)FileName;
 
-    if (!ctx || !handle) return;
-    if (!ctx->read_only && ((Flags & FspCleanupDelete) || handle->delete_on_close)) {
-        ext4_vfs_unlink(ctx, handle->path);
-    } else if (!ctx->read_only && (Flags & (FspCleanupSetLastWriteTime | FspCleanupSetChangeTime | FspCleanupSetLastAccessTime))) {
-        uint64_t now = ext4_now_filetime();
-        ext4_vfs_set_times(ctx, handle->ino, INVALID_FILE_ATTRIBUTES, 0,
-                           (Flags & FspCleanupSetLastAccessTime) ? now : 0,
-                           (Flags & FspCleanupSetLastWriteTime) ? now : 0,
-                           (Flags & FspCleanupSetChangeTime) ? now : 0);
+    if (ctx && handle) {
+        if (!ctx->read_only && ((Flags & FspCleanupDelete) || handle->delete_on_close)) {
+            ext4_vfs_unlink(ctx, handle->path);
+        } else if (!ctx->read_only && (Flags & (FspCleanupSetLastWriteTime | FspCleanupSetChangeTime | FspCleanupSetLastAccessTime))) {
+            uint64_t now = ext4_now_filetime();
+            ext4_vfs_set_times(ctx, handle->ino, INVALID_FILE_ATTRIBUTES, 0,
+                               (Flags & FspCleanupSetLastAccessTime) ? now : 0,
+                               (Flags & FspCleanupSetLastWriteTime) ? now : 0,
+                               (Flags & FspCleanupSetChangeTime) ? now : 0);
+        }
+    }
+    if (_zt0) {
+        ztrace_record_complete("winfsp", "FspCleanup", _zt0, ztrace_now_qpc() - _zt0,
+                               handle ? (uint64_t)handle->ino : 0ULL, 0, (int64_t)Flags, ZTRACE_ARGS_STATUS);
     }
 }
 
 static VOID FspClose(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    uint64_t ino = FileContext ? (uint64_t)((ext4_file_handle_t *)FileContext)->ino : 0ULL;
     (void)FileSystem;
     ext4_vfs_close_handle((ext4_file_handle_t *)FileContext);
+    if (_zt0) {
+        ztrace_record_complete("winfsp", "FspClose", _zt0, ztrace_now_qpc() - _zt0,
+                               ino, 0, 0, ZTRACE_ARGS_STATUS);
+    }
 }
 
-static NTSTATUS FspRead(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Buffer,
-                        UINT64 Offset, ULONG Length, PULONG PBytesTransferred) {
+static NTSTATUS FspRead_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Buffer,
+                             UINT64 Offset, ULONG Length, PULONG PBytesTransferred) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     uint32_t got = 0;
@@ -309,10 +376,22 @@ static NTSTATUS FspRead(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Bu
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspWrite(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Buffer,
-                         UINT64 Offset, ULONG Length, BOOLEAN WriteToEndOfFile,
-                         BOOLEAN ConstrainedIo, PULONG PBytesTransferred,
-                         FSP_FSCTL_FILE_INFO *FileInfo) {
+static NTSTATUS FspRead(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Buffer,
+                        UINT64 Offset, ULONG Length, PULONG PBytesTransferred) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspRead_impl(FileSystem, FileContext, Buffer, Offset, Length, PBytesTransferred);
+    if (_zt0) {
+        ULONG bytes = PBytesTransferred ? *PBytesTransferred : 0;
+        ztrace_record_complete("winfsp", "FspRead", _zt0, ztrace_now_qpc() - _zt0,
+                               Offset, (uint64_t)bytes, (int64_t)st, ZTRACE_ARGS_IO);
+    }
+    return st;
+}
+
+static NTSTATUS FspWrite_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Buffer,
+                              UINT64 Offset, ULONG Length, BOOLEAN WriteToEndOfFile,
+                              BOOLEAN ConstrainedIo, PULONG PBytesTransferred,
+                              FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     uint32_t written = 0;
@@ -358,8 +437,23 @@ static NTSTATUS FspWrite(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID B
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspFlush(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+static NTSTATUS FspWrite(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVOID Buffer,
+                         UINT64 Offset, ULONG Length, BOOLEAN WriteToEndOfFile,
+                         BOOLEAN ConstrainedIo, PULONG PBytesTransferred,
                          FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspWrite_impl(FileSystem, FileContext, Buffer, Offset, Length,
+                                WriteToEndOfFile, ConstrainedIo, PBytesTransferred, FileInfo);
+    if (_zt0) {
+        ULONG bytes = PBytesTransferred ? *PBytesTransferred : 0;
+        ztrace_record_complete("winfsp", "FspWrite", _zt0, ztrace_now_qpc() - _zt0,
+                               Offset, (uint64_t)bytes, (int64_t)st, ZTRACE_ARGS_IO);
+    }
+    return st;
+}
+
+static NTSTATUS FspFlush_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                              FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     int rc;
@@ -379,8 +473,20 @@ static NTSTATUS FspFlush(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspGetFileInfo(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
-                               FSP_FSCTL_FILE_INFO *FileInfo) {
+static NTSTATUS FspFlush(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                         FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspFlush_impl(FileSystem, FileContext, FileInfo);
+    if (_zt0) {
+        ext4_file_handle_t *h = (ext4_file_handle_t *)FileContext;
+        ztrace_record_complete("winfsp", "FspFlush", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
+}
+
+static NTSTATUS FspGetFileInfo_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                                    FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     ext4_stat_t st;
@@ -396,9 +502,21 @@ static NTSTATUS FspGetFileInfo(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspSetBasicInfo(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT32 FileAttributes,
-                                UINT64 CreationTime, UINT64 LastAccessTime, UINT64 LastWriteTime,
-                                UINT64 ChangeTime, FSP_FSCTL_FILE_INFO *FileInfo) {
+static NTSTATUS FspGetFileInfo(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                               FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspGetFileInfo_impl(FileSystem, FileContext, FileInfo);
+    if (_zt0) {
+        ext4_file_handle_t *h = (ext4_file_handle_t *)FileContext;
+        ztrace_record_complete("winfsp", "FspGetFileInfo", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
+}
+
+static NTSTATUS FspSetBasicInfo_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT32 FileAttributes,
+                                     UINT64 CreationTime, UINT64 LastAccessTime, UINT64 LastWriteTime,
+                                     UINT64 ChangeTime, FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     int rc;
@@ -413,8 +531,22 @@ static NTSTATUS FspSetBasicInfo(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, 
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspSetFileSize(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT64 NewSize,
-                               BOOLEAN SetAllocationSize, FSP_FSCTL_FILE_INFO *FileInfo) {
+static NTSTATUS FspSetBasicInfo(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT32 FileAttributes,
+                                UINT64 CreationTime, UINT64 LastAccessTime, UINT64 LastWriteTime,
+                                UINT64 ChangeTime, FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspSetBasicInfo_impl(FileSystem, FileContext, FileAttributes, CreationTime,
+                                       LastAccessTime, LastWriteTime, ChangeTime, FileInfo);
+    if (_zt0) {
+        ext4_file_handle_t *h = (ext4_file_handle_t *)FileContext;
+        ztrace_record_complete("winfsp", "FspSetBasicInfo", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
+}
+
+static NTSTATUS FspSetFileSize_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT64 NewSize,
+                                    BOOLEAN SetAllocationSize, FSP_FSCTL_FILE_INFO *FileInfo) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     int rc;
@@ -437,6 +569,18 @@ static NTSTATUS FspSetFileSize(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, U
 
     if (FileInfo) return FspGetFileInfo(FileSystem, FileContext, FileInfo);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS FspSetFileSize(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, UINT64 NewSize,
+                               BOOLEAN SetAllocationSize, FSP_FSCTL_FILE_INFO *FileInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspSetFileSize_impl(FileSystem, FileContext, NewSize, SetAllocationSize, FileInfo);
+    if (_zt0) {
+        ext4_file_handle_t *h = (ext4_file_handle_t *)FileContext;
+        ztrace_record_complete("winfsp", "FspSetFileSize", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, NewSize, (int64_t)st, ZTRACE_ARGS_RW_OP);
+    }
+    return st;
 }
 
 static NTSTATUS FspCanDelete(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR FileName) {
@@ -467,8 +611,8 @@ static NTSTATUS FspSetDelete(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWS
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS FspRename(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR FileName,
-                          PWSTR NewFileName, BOOLEAN ReplaceIfExists) {
+static NTSTATUS FspRename_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR FileName,
+                               PWSTR NewFileName, BOOLEAN ReplaceIfExists) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     char old_utf8[1024], new_utf8[1024], norm_new[1024];
@@ -488,6 +632,18 @@ static NTSTATUS FspRename(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR 
         }
     }
     return ext4_errno_to_ntstatus(rc);
+}
+
+static NTSTATUS FspRename(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR FileName,
+                          PWSTR NewFileName, BOOLEAN ReplaceIfExists) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspRename_impl(FileSystem, FileContext, FileName, NewFileName, ReplaceIfExists);
+    if (_zt0) {
+        ext4_file_handle_t *h = (ext4_file_handle_t *)FileContext;
+        ztrace_record_complete("winfsp", "FspRename", _zt0, ztrace_now_qpc() - _zt0,
+                               h ? (uint64_t)h->ino : 0ULL, 0, (int64_t)st, ZTRACE_ARGS_STATUS);
+    }
+    return st;
 }
 
 static NTSTATUS FspGetSecurity(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
@@ -548,8 +704,8 @@ static int fsp_readdir_cb(const char *name, const ext4_stat_t *st, void *user_ct
     return 0;
 }
 
-static NTSTATUS FspReadDirectory(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR Pattern,
-                                 PWSTR Marker, PVOID Buffer, ULONG Length, PULONG PBytesTransferred) {
+static NTSTATUS FspReadDirectory_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR Pattern,
+                                      PWSTR Marker, PVOID Buffer, ULONG Length, PULONG PBytesTransferred) {
     ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     struct fsp_readdir_state state;
@@ -573,6 +729,19 @@ static NTSTATUS FspReadDirectory(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
         FspFileSystemAddDirInfo(NULL, Buffer, Length, PBytesTransferred);
     }
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS FspReadDirectory(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PWSTR Pattern,
+                                 PWSTR Marker, PVOID Buffer, ULONG Length, PULONG PBytesTransferred) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspReadDirectory_impl(FileSystem, FileContext, Pattern, Marker,
+                                        Buffer, Length, PBytesTransferred);
+    if (_zt0) {
+        ULONG bytes = PBytesTransferred ? *PBytesTransferred : 0;
+        ztrace_record_complete("winfsp", "FspReadDirectory", _zt0, ztrace_now_qpc() - _zt0,
+                               0, (uint64_t)bytes, (int64_t)st, ZTRACE_ARGS_IO);
+    }
+    return st;
 }
 
 static const FSP_FILE_SYSTEM_INTERFACE g_winfsp_iface = {

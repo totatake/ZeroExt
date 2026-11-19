@@ -1,5 +1,6 @@
 #include "overlay_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,7 @@ struct ext4_overlay_ctx {
     ov_ino_entry_t  *entries;
     uint32_t         next_synth_ino;
     LONG             tmp_seq;
+    volatile LONG64  copyup_bytes;
 };
 
 static int win32_err_to_errno(DWORD err) {
@@ -203,13 +205,20 @@ static int ensure_upper_parents_w(const ext4_overlay_ctx_t *ov, const char *norm
 }
 
 static int create_marker_file_w(const wchar_t *path_w) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
     HANDLE h = CreateFileW(path_w, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, NULL);
+    int rc = 0;
     if (h == INVALID_HANDLE_VALUE) {
-        return win32_err_to_errno(GetLastError());
+        rc = win32_err_to_errno(GetLastError());
+    } else {
+        CloseHandle(h);
     }
-    CloseHandle(h);
-    return 0;
+    if (_zt0) {
+        ztrace_record_complete("overlay", "overlay_whiteout", _zt0, ztrace_now_qpc() - _zt0,
+                               0, 1, (int64_t)rc, ZTRACE_ARGS_OVERLAY);
+    }
+    return rc;
 }
 
 static int delete_tree_w(const wchar_t *path_w) {
@@ -370,8 +379,8 @@ typedef struct ov_resolution {
     ext4_stat_t lower_st;
 } ov_resolution_t;
 
-static int overlay_resolve(ext4_vfs_ctx_t *ctx, const char *raw_path,
-                           char *out_norm, size_t out_norm_sz, ov_resolution_t *res) {
+static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
+                                char *out_norm, size_t out_norm_sz, ov_resolution_t *res) {
     ext4_overlay_ctx_t *ov = ctx->overlay;
     char norm[1024];
     int rc;
@@ -521,6 +530,18 @@ static int overlay_resolve(ext4_vfs_ctx_t *ctx, const char *raw_path,
     return 0;
 }
 
+static int overlay_resolve(ext4_vfs_ctx_t *ctx, const char *raw_path,
+                           char *out_norm, size_t out_norm_sz, ov_resolution_t *res) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    int rc = overlay_resolve_impl(ctx, raw_path, out_norm, out_norm_sz, res);
+    if (_zt0) {
+        ztrace_record_complete("overlay", "overlay_resolve", _zt0, ztrace_now_qpc() - _zt0,
+                               0, (rc == 0 && res) ? (uint64_t)res->in_upper : 0ULL,
+                               (int64_t)rc, ZTRACE_ARGS_OVERLAY);
+    }
+    return rc;
+}
+
 static void fill_stat_from_upper(ext4_vfs_ctx_t *ctx, const char *norm_path,
                                  const wchar_t *upper_path_w, ext2_ino_t lower_ino,
                                  ext4_stat_t *out_st) {
@@ -576,6 +597,7 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
 
     /* Stream regular file content from Lower (Direct Extent I/O) into a temp file on Upper, then atomically replace */
     {
+        uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
         wchar_t tmp_w[1040];
         HANDLE hf;
         uint8_t *buf;
@@ -589,13 +611,22 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
 
         hf = CreateFileW(tmp_w, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hf == INVALID_HANDLE_VALUE) {
-            return win32_err_to_errno(GetLastError());
+            rc = win32_err_to_errno(GetLastError());
+            if (_zt0) {
+                ztrace_record_complete("overlay", "overlay_copy_up", _zt0, ztrace_now_qpc() - _zt0,
+                                       total, 0, (int64_t)rc, ZTRACE_ARGS_OVERLAY);
+            }
+            return rc;
         }
 
         buf = (uint8_t *)malloc(chunk_sz);
         if (!buf) {
             CloseHandle(hf);
             DeleteFileW(tmp_w);
+            if (_zt0) {
+                ztrace_record_complete("overlay", "overlay_copy_up", _zt0, ztrace_now_qpc() - _zt0,
+                                       total, 0, (int64_t)-ENOMEM, ZTRACE_ARGS_OVERLAY);
+            }
             return -ENOMEM;
         }
 
@@ -625,18 +656,34 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
 
         if (rc != 0) {
             DeleteFileW(tmp_w);
+            if (_zt0) {
+                ztrace_record_complete("overlay", "overlay_copy_up", _zt0, ztrace_now_qpc() - _zt0,
+                                       off, 0, (int64_t)rc, ZTRACE_ARGS_OVERLAY);
+            }
             return rc;
         }
 
         if (!MoveFileExW(tmp_w, res->upper_path_w, MOVEFILE_REPLACE_EXISTING)) {
             DWORD err = GetLastError();
             DeleteFileW(tmp_w);
-            return win32_err_to_errno(err);
+            rc = win32_err_to_errno(err);
+            if (_zt0) {
+                ztrace_record_complete("overlay", "overlay_copy_up", _zt0, ztrace_now_qpc() - _zt0,
+                                       total, 0, (int64_t)rc, ZTRACE_ARGS_OVERLAY);
+            }
+            return rc;
         }
 
         /* Ensure upper copy is writable when copy-up happened for modification, preserving hidden bit */
         DWORD dst_attrs = res->lower_st.file_attributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE);
         SetFileAttributesW(res->upper_path_w, dst_attrs ? dst_attrs : FILE_ATTRIBUTE_ARCHIVE);
+
+        if (_zt0) {
+            LONG64 cum = InterlockedAdd64(&ov->copyup_bytes, (LONG64)total);
+            ztrace_record_complete("overlay", "overlay_copy_up", _zt0, ztrace_now_qpc() - _zt0,
+                                   total, 0, 0, ZTRACE_ARGS_OVERLAY);
+            ztrace_record_counter("overlay", "Overlay CopyUp Bytes", (uint64_t)cum, 0, 0, ZTRACE_ARGS_COUNTER);
+        }
     }
 
     return overlay_resolve(ctx, norm_path, NULL, 0, res);
@@ -1114,44 +1161,40 @@ int overlay_vfs_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t of
     if (res.is_dir) return -EISDIR;
 
     if (res.in_upper) {
+        uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+        DWORD got_bytes = 0;
+        int urc = 0;
         HANDLE hf = CreateFileW(res.upper_path_w, GENERIC_READ,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                 NULL, OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, NULL);
         if (hf == INVALID_HANDLE_VALUE) {
-            return win32_err_to_errno(GetLastError());
-        }
-        {
+            urc = win32_err_to_errno(GetLastError());
+        } else {
             LARGE_INTEGER fsz;
             if (!GetFileSizeEx(hf, &fsz)) {
-                DWORD err = GetLastError();
-                CloseHandle(hf);
-                return win32_err_to_errno(err);
-            }
-            if (offset >= (uint64_t)fsz.QuadPart) {
-                CloseHandle(hf);
-                *out_read = 0;
-                return 0;
-            }
-            {
+                urc = win32_err_to_errno(GetLastError());
+            } else if (offset < (uint64_t)fsz.QuadPart) {
                 uint64_t avail = (uint64_t)fsz.QuadPart - offset;
                 DWORD want = (avail < length) ? (DWORD)avail : length;
                 OVERLAPPED ovp;
-                DWORD got = 0;
                 memset(&ovp, 0, sizeof(ovp));
                 ovp.Offset = (DWORD)(offset & 0xFFFFFFFFULL);
                 ovp.OffsetHigh = (DWORD)(offset >> 32);
-                if (!ReadFile(hf, buf, want, &got, &ovp)) {
+                if (!ReadFile(hf, buf, want, &got_bytes, &ovp)) {
                     DWORD err = GetLastError();
                     if (err != ERROR_HANDLE_EOF) {
-                        CloseHandle(hf);
-                        return win32_err_to_errno(err);
+                        urc = win32_err_to_errno(err);
                     }
                 }
-                CloseHandle(hf);
-                *out_read = got;
-                return 0;
             }
+            CloseHandle(hf);
         }
+        if (_zt0) {
+            ztrace_record_complete("overlay", "overlay_read_upper", _zt0, ztrace_now_qpc() - _zt0,
+                                   (uint64_t)got_bytes, 1, (int64_t)urc, ZTRACE_ARGS_OVERLAY);
+        }
+        if (urc == 0) *out_read = got_bytes;
+        return urc;
     }
 
     return ext4_vfs_lower_read(ctx, res.lower_st.ino, buf, offset, length, out_read);
@@ -1178,6 +1221,7 @@ int overlay_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint
         if (res.is_dir) {
             rc = -EISDIR;
         } else {
+            uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
             HANDLE hf = CreateFileW(res.upper_path_w, GENERIC_READ | GENERIC_WRITE,
                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1211,6 +1255,10 @@ int overlay_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint
                     }
                 }
                 CloseHandle(hf);
+            }
+            if (_zt0) {
+                ztrace_record_complete("overlay", "overlay_write_upper", _zt0, ztrace_now_qpc() - _zt0,
+                                       (uint64_t)(*out_written), 1, (int64_t)rc, ZTRACE_ARGS_OVERLAY);
             }
         }
     }

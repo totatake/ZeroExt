@@ -43,6 +43,7 @@ namespace ZeroExt.Gui.Models
         public bool EnableDebugLog { get; set; }
         public string VolumeLabel { get; set; } = string.Empty;
         public bool AutoOpenExplorer { get; set; } = true;
+        public string TraceOutputPath { get; set; } = string.Empty;
     }
 
     public sealed class ActiveMountInfo : INotifyPropertyChanged
@@ -69,6 +70,8 @@ namespace ZeroExt.Gui.Models
         public bool FellBackToRo { get; init; }
         public int ProcessId { get; init; }
         public DateTime StartedAt { get; init; } = DateTime.Now;
+        public string TraceOutputPath { get; init; } = string.Empty;
+        public bool IsTracing => !string.IsNullOrWhiteSpace(TraceOutputPath);
 
         public ulong ReadBytes
         {

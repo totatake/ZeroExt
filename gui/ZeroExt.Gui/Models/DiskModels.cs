@@ -328,6 +328,15 @@ namespace ZeroExt.Gui.Models
 
         [JsonPropertyName("write_ops")]
         public long? WriteOps { get; set; }
+
+        [JsonPropertyName("trace_path")]
+        public string? TracePath { get; set; }
+
+        [JsonPropertyName("trace_events")]
+        public ulong? TraceEvents { get; set; }
+
+        [JsonPropertyName("trace_dropped")]
+        public ulong? TraceDropped { get; set; }
     }
 
     public static class ByteFormatter

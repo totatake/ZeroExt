@@ -263,6 +263,28 @@ namespace ZeroExt.Gui.Views
             _vm.StatusMessage = "CLI コマンドをクリップボードにコピーしました";
         }
 
+        private void OnBrowseTraceOutputClick(object sender, RoutedEventArgs e)
+        {
+            var dlg = new SaveFileDialog
+            {
+                Title = "Perfetto トレース出力先を指定",
+                Filter = "Perfetto / Chrome Trace JSON (*.json)|*.json|すべてのファイル (*.*)|*.*",
+                DefaultExt = ".json",
+                FileName = string.IsNullOrWhiteSpace(_vm.TraceOutputPath)
+                    ? "zeroext_trace.json"
+                    : Path.GetFileName(_vm.TraceOutputPath),
+            };
+            if (dlg.ShowDialog(this) == true)
+            {
+                _vm.TraceOutputPath = dlg.FileName;
+            }
+        }
+
+        private void OnClearTraceOutputClick(object sender, RoutedEventArgs e)
+        {
+            _vm.TraceOutputPath = string.Empty;
+        }
+
         private void OnCopyLogsClick(object sender, RoutedEventArgs e)
         {
             if (_vm.LogEntries.Count == 0) return;

@@ -59,5 +59,6 @@ int run_suite_partition_and_probe(void);
 int run_suite_vfs_operations(void);
 int run_suite_winfsp_callbacks(void);
 int run_suite_extent_and_overlay(void);
+int run_suite_perfetto_trace(void);
 
 #endif /* ZEROEXT_TEST_COMMON_H */

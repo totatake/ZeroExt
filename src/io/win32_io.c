@@ -1,5 +1,6 @@
 #include "win32_io.h"
 #include "../common/ext4_errno.h"
+#include "../trace/perfetto_trace.h"
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -159,9 +160,10 @@ static void cache_remove_from_hash_locked(win32_private_t *priv, cache_entry_t *
 
 static void cache_put_block(win32_private_t *priv, uint64_t block, const void *data, int blk_sz) {
     cache_entry_t *e;
+    ztrace_lock_guard_t lg;
     if (priv->disable_cache || priv->max_cache_blocks == 0 || blk_sz <= 0) return;
 
-    AcquireSRWLockExclusive(&priv->cache_lock);
+    lg = ztrace_srw_acquire_exclusive(&priv->cache_lock, "win32_io.cache_lock wait (X)", "win32_io.cache_lock hold (X)");
     if (priv->cache_block_size != blk_sz) {
         cache_clear_locked(priv);
         priv->cache_block_size = blk_sz;
@@ -172,7 +174,7 @@ static void cache_put_block(win32_private_t *priv, uint64_t block, const void *d
         memcpy(e->data, data, (size_t)blk_sz);
         lru_unlink(priv, e);
         lru_push_front(priv, e);
-        ReleaseSRWLockExclusive(&priv->cache_lock);
+        ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
         return;
     }
 
@@ -200,15 +202,17 @@ static void cache_put_block(win32_private_t *priv, uint64_t block, const void *d
             free(e);
         }
     }
-    ReleaseSRWLockExclusive(&priv->cache_lock);
+    ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
 }
 
 static int cache_get_block(win32_private_t *priv, uint64_t block, void *dst, int blk_sz) {
     cache_entry_t *e;
     int hit = 0;
+    uint64_t hits = 0, misses = 0, rmw = 0;
+    ztrace_lock_guard_t lg;
     if (priv->disable_cache || priv->max_cache_blocks == 0 || blk_sz <= 0) return 0;
 
-    AcquireSRWLockExclusive(&priv->cache_lock);
+    lg = ztrace_srw_acquire_exclusive(&priv->cache_lock, "win32_io.cache_lock wait (X)", "win32_io.cache_lock hold (X)");
     if (priv->cache_block_size == blk_sz) {
         e = cache_find_locked(priv, block);
         if (e) {
@@ -222,17 +226,27 @@ static int cache_get_block(win32_private_t *priv, uint64_t block, void *dst, int
     if (!hit) {
         priv->stats.cache_misses++;
     }
-    ReleaseSRWLockExclusive(&priv->cache_lock);
+    hits = priv->stats.cache_hits;
+    misses = priv->stats.cache_misses;
+    rmw = (uint64_t)InterlockedCompareExchange64((LONG64 *)&priv->stats.rmw_operations, 0, 0);
+    ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
+
+    if (ztrace_is_enabled()) {
+        if (!hit || hits == 1 || (hits & 63ULL) == 0ULL) {
+            ztrace_record_counter("io", "LRU Block Cache", hits, misses, (int64_t)rmw, ZTRACE_ARGS_LRU_COUNTER);
+        }
+    }
     return hit;
 }
 
 static void cache_invalidate_range(win32_private_t *priv, uint64_t logical_off, size_t len, int blk_sz) {
     uint64_t first_blk, last_blk, b;
+    ztrace_lock_guard_t lg;
     if (priv->disable_cache || blk_sz <= 0 || len == 0) return;
     first_blk = logical_off / (uint64_t)blk_sz;
     last_blk = (logical_off + len - 1) / (uint64_t)blk_sz;
 
-    AcquireSRWLockExclusive(&priv->cache_lock);
+    lg = ztrace_srw_acquire_exclusive(&priv->cache_lock, "win32_io.cache_lock wait (X)", "win32_io.cache_lock hold (X)");
     if (priv->cache_block_size == blk_sz) {
         for (b = first_blk; b <= last_blk; b++) {
             cache_entry_t *e = cache_find_locked(priv, b);
@@ -245,11 +259,13 @@ static void cache_invalidate_range(win32_private_t *priv, uint64_t logical_off, 
             }
         }
     }
-    ReleaseSRWLockExclusive(&priv->cache_lock);
+    ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
 }
 
 static DWORD raw_pread_exact(HANDLE h, uint64_t offset, void *buf, DWORD len, DWORD *out_read) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
     DWORD total = 0;
+    DWORD res = ERROR_SUCCESS;
     if (out_read) *out_read = 0;
     while (total < len) {
         OVERLAPPED ov;
@@ -259,22 +275,30 @@ static DWORD raw_pread_exact(HANDLE h, uint64_t offset, void *buf, DWORD len, DW
         ov.Offset = (DWORD)(pos & 0xFFFFFFFFULL);
         ov.OffsetHigh = (DWORD)(pos >> 32);
         if (!ReadFile(h, (uint8_t *)buf + total, len - total, &got, &ov)) {
-            DWORD err = GetLastError();
+            res = GetLastError();
             if (out_read) *out_read = total;
-            return err;
+            goto done;
         }
         if (got == 0) {
             if (out_read) *out_read = total;
-            return ERROR_HANDLE_EOF;
+            res = ERROR_HANDLE_EOF;
+            goto done;
         }
         total += got;
     }
     if (out_read) *out_read = total;
-    return ERROR_SUCCESS;
+done:
+    if (_zt0) {
+        ztrace_record_complete("io", "ReadFile", _zt0, ztrace_now_qpc() - _zt0,
+                               offset, (uint64_t)total, (int64_t)res, ZTRACE_ARGS_WIN32_IO);
+    }
+    return res;
 }
 
 static DWORD raw_pwrite_exact(HANDLE h, uint64_t offset, const void *buf, DWORD len) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
     DWORD total = 0;
+    DWORD res = ERROR_SUCCESS;
     while (total < len) {
         OVERLAPPED ov;
         DWORD put = 0;
@@ -283,14 +307,21 @@ static DWORD raw_pwrite_exact(HANDLE h, uint64_t offset, const void *buf, DWORD 
         ov.Offset = (DWORD)(pos & 0xFFFFFFFFULL);
         ov.OffsetHigh = (DWORD)(pos >> 32);
         if (!WriteFile(h, (const uint8_t *)buf + total, len - total, &put, &ov)) {
-            return GetLastError();
+            res = GetLastError();
+            goto done;
         }
         if (put == 0) {
-            return ERROR_WRITE_FAULT;
+            res = ERROR_WRITE_FAULT;
+            goto done;
         }
         total += put;
     }
-    return ERROR_SUCCESS;
+done:
+    if (_zt0) {
+        ztrace_record_complete("io", "WriteFile", _zt0, ztrace_now_qpc() - _zt0,
+                               offset, (uint64_t)total, (int64_t)res, ZTRACE_ARGS_WIN32_IO);
+    }
+    return res;
 }
 
 static errcode_t win32_aligned_read(win32_private_t *priv, uint64_t logical_off, void *dst, size_t len) {
@@ -388,12 +419,23 @@ static errcode_t win32_aligned_write(win32_private_t *priv, uint64_t logical_off
         memset(tmp, 0, aligned_len);
 
         if ((phys_off % sec) != 0 || (len % sec) != 0) {
+            uint64_t _zt_rmw = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+            LONG64 rmw_cnt;
             err = raw_pread_exact(priv->handle, aligned_start, tmp, (DWORD)aligned_len, &got);
+            if (_zt_rmw) {
+                ztrace_record_complete("io", "win32_rmw_read", _zt_rmw, ztrace_now_qpc() - _zt_rmw,
+                                       aligned_start, (uint64_t)aligned_len, (int64_t)err, ZTRACE_ARGS_WIN32_IO);
+            }
             if (err != ERROR_SUCCESS && err != ERROR_HANDLE_EOF) {
                 _aligned_free(tmp);
                 return EXT2_ET_SHORT_READ;
             }
-            InterlockedIncrement64((LONG64 *)&priv->stats.rmw_operations);
+            rmw_cnt = InterlockedIncrement64((LONG64 *)&priv->stats.rmw_operations);
+            if (ztrace_is_enabled()) {
+                ztrace_record_counter("io", "LRU Block Cache",
+                                      priv->stats.cache_hits, priv->stats.cache_misses,
+                                      (int64_t)rmw_cnt, ZTRACE_ARGS_LRU_COUNTER);
+            }
         }
         memcpy(tmp + (phys_off - aligned_start), src, len);
         err = raw_pwrite_exact(priv->handle, aligned_start, tmp, (DWORD)aligned_len);
@@ -515,12 +557,13 @@ static errcode_t win32_close(io_channel channel) {
 
     priv = (win32_private_t *)channel->private_data;
     if (priv) {
+        ztrace_lock_guard_t lg;
         if (!priv->read_only && priv->handle != INVALID_HANDLE_VALUE) {
             FlushFileBuffers(priv->handle);
         }
-        AcquireSRWLockExclusive(&priv->cache_lock);
+        lg = ztrace_srw_acquire_exclusive(&priv->cache_lock, "win32_io.cache_lock wait (X)", "win32_io.cache_lock hold (X)");
         cache_clear_locked(priv);
-        ReleaseSRWLockExclusive(&priv->cache_lock);
+        ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
         if (priv->handle != INVALID_HANDLE_VALUE) {
             CloseHandle(priv->handle);
         }
@@ -538,10 +581,11 @@ static errcode_t win32_set_blksize(io_channel channel, int blksize) {
     if (blksize <= 0) return EXT2_ET_INVALID_ARGUMENT;
     priv = (win32_private_t *)channel->private_data;
     if (channel->block_size != blksize) {
-        AcquireSRWLockExclusive(&priv->cache_lock);
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_exclusive(
+            &priv->cache_lock, "win32_io.cache_lock wait (X)", "win32_io.cache_lock hold (X)");
         cache_clear_locked(priv);
         priv->cache_block_size = blksize;
-        ReleaseSRWLockExclusive(&priv->cache_lock);
+        ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
         channel->block_size = blksize;
     }
     return 0;
@@ -641,20 +685,22 @@ static errcode_t win32_set_option(io_channel channel, const char *option, const 
     if (!option) return EXT2_ET_INVALID_ARGUMENT;
     if (strcmp(option, "offset") == 0 && arg) {
         uint64_t new_off = _strtoui64(arg, NULL, 0);
+        ztrace_lock_guard_t lg;
         priv->partition_offset = new_off;
         if (priv->backing_size > new_off) {
             priv->partition_size = priv->backing_size - new_off;
         }
-        AcquireSRWLockExclusive(&priv->cache_lock);
+        lg = ztrace_srw_acquire_exclusive(&priv->cache_lock, "win32_io.cache_lock wait (X)", "win32_io.cache_lock hold (X)");
         cache_clear_locked(priv);
-        ReleaseSRWLockExclusive(&priv->cache_lock);
+        ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
         return 0;
     }
     if (strcmp(option, "nocache") == 0) {
+        ztrace_lock_guard_t lg;
         priv->disable_cache = 1;
-        AcquireSRWLockExclusive(&priv->cache_lock);
+        lg = ztrace_srw_acquire_exclusive(&priv->cache_lock, "win32_io.cache_lock wait (X)", "win32_io.cache_lock hold (X)");
         cache_clear_locked(priv);
-        ReleaseSRWLockExclusive(&priv->cache_lock);
+        ztrace_srw_release_exclusive(&priv->cache_lock, &lg);
         return 0;
     }
     return EXT2_ET_INVALID_ARGUMENT;
@@ -705,13 +751,21 @@ uint64_t win32_io_get_device_size(io_channel channel) {
 errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
                                 void *dst, size_t len) {
     win32_private_t *priv;
+    uint64_t _zt0;
+    errcode_t rc;
     if (!channel || channel->magic != EXT2_ET_MAGIC_IO_CHANNEL) {
         return EXT2_ET_MAGIC_IO_CHANNEL;
     }
     if (len == 0) return 0;
     if (!dst) return EXT2_ET_INVALID_ARGUMENT;
     priv = (win32_private_t *)channel->private_data;
-    return win32_aligned_read(priv, part_rel_offset, dst, len);
+    _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    rc = win32_aligned_read(priv, part_rel_offset, dst, len);
+    if (_zt0) {
+        ztrace_record_complete("io", "win32_io_pread_direct", _zt0, ztrace_now_qpc() - _zt0,
+                               part_rel_offset, (uint64_t)len, (int64_t)rc, ZTRACE_ARGS_IO);
+    }
+    return rc;
 }
 
 struct struct_io_manager struct_win32_io_manager = {

@@ -5,6 +5,7 @@
 
 #include "vfs/ext4_vfs.h"
 #include "extent/extent_map.h"
+#include "trace/perfetto_trace.h"
 
 #include <windows.h>
 #include <stdint.h>
@@ -41,6 +42,10 @@ static DWORD WINAPI bench_worker(LPVOID param) {
     uint64_t total_pages = w->chunk_sz ? (w->file_size / w->chunk_sz) : 0;
     uint8_t *buf;
     uint64_t done = 0;
+
+    if (ztrace_is_enabled()) {
+        ztrace_set_thread_name("Bench-Worker");
+    }
 
     if (total_pages == 0) {
         w->err = -1;
@@ -109,6 +114,7 @@ static int run_vfs_bench(const char *label, ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
         }
     }
 
+    uint64_t _zt_bench = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
     QueryPerformanceCounter(&t0);
     for (int t = 0; t < threads; t++) {
         args[t].ctx = ctx;
@@ -138,6 +144,11 @@ static int run_vfs_bench(const char *label, ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
         }
     }
     QueryPerformanceCounter(&t1);
+    if (_zt_bench) {
+        ztrace_record_complete("bench", label, _zt_bench, ztrace_now_qpc() - _zt_bench,
+                               (uint64_t)threads, ops_per_thread * (uint64_t)threads,
+                               (int64_t)any_err, ZTRACE_ARGS_IO);
+    }
 
     for (int t = 0; t < threads; t++) {
         if (args[t].err != 0) {
@@ -343,10 +354,10 @@ static int run_winfsp_live_read(const char *file_path, uint32_t chunk_kb,
 
 static void print_usage(const char *prog) {
     printf("Usage:\n");
-    printf("  %s\n", prog);
+    printf("  %s [--trace <output_json>] [--trace-events <N>]\n", prog);
     printf("      Run in-process VFS read benchmark (enable_direct_io=0 vs 1)\n");
-    printf("  %s --read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops]\n", prog);
-    printf("  %s --winfsp-read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops]\n", prog);
+    printf("  %s --read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops] [--trace <output_json>]\n", prog);
+    printf("  %s --winfsp-read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops] [--trace <output_json>]\n", prog);
     printf("      Benchmark Win32 ReadFile throughput against NTFS, WinFsp, or UNC paths\n");
     printf("  %s --help\n", prog);
 }
@@ -354,15 +365,36 @@ static void print_usage(const char *prog) {
 int main(int argc, char **argv) {
     char tmp_dir[MAX_PATH];
     char img_path[MAX_PATH];
+    const char *trace_path = NULL;
+    uint32_t trace_events = 0;
+    int tracing = 0;
     int failed = 0;
 
-    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        print_usage(argv[0]);
-        return 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        }
+        if (strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
+            trace_path = argv[++i];
+        } else if (strcmp(argv[i], "--trace-events") == 0 && i + 1 < argc) {
+            trace_events = (uint32_t)strtoul(argv[++i], NULL, 10);
+        }
+    }
+
+    if (trace_path && trace_path[0] != '\0') {
+        int trc = ztrace_init(trace_path, trace_events);
+        if (trc != 0) {
+            fprintf(stderr, "Failed to initialize Perfetto trace '%s': %d\n", trace_path, trc);
+            return 1;
+        }
+        ztrace_set_thread_name("Bench-Main");
+        tracing = 1;
     }
 
     if (argc >= 2 && (strcmp(argv[1], "--winfsp-read") == 0 || strcmp(argv[1], "--read") == 0)) {
         if (argc < 4) {
+            if (tracing) ztrace_shutdown(NULL);
             print_usage(argv[0]);
             return 1;
         }
@@ -371,8 +403,22 @@ int main(int argc, char **argv) {
             int unbuf = (argc >= 5 && strcmp(argv[4], "unbuf") == 0);
             int rnd = (argc >= 6 && strcmp(argv[5], "rnd") == 0);
             int warm = (argc >= 7 && strcmp(argv[6], "warm") == 0);
-            uint64_t rnd_ops = (argc >= 8) ? (uint64_t)_strtoui64(argv[7], NULL, 10) : 0ULL;
-            return run_winfsp_live_read(argv[2], kb, unbuf, rnd, warm, rnd_ops);
+            uint64_t rnd_ops = (argc >= 8 && argv[7][0] != '-') ? (uint64_t)_strtoui64(argv[7], NULL, 10) : 0ULL;
+            uint64_t _zt0 = tracing ? ztrace_now_qpc() : 0;
+            int rc = run_winfsp_live_read(argv[2], kb, unbuf, rnd, warm, rnd_ops);
+            if (_zt0) {
+                ztrace_record_complete("bench", "winfsp_live_read", _zt0, ztrace_now_qpc() - _zt0,
+                                       (uint64_t)kb, rnd_ops, (int64_t)rc, ZTRACE_ARGS_IO);
+            }
+            if (tracing) {
+                ztrace_summary_t sum;
+                if (ztrace_shutdown(&sum) == 0) {
+                    printf("Trace written to '%s' (events=%llu, dropped=%llu, threads=%u)\n",
+                           trace_path, (unsigned long long)sum.events_written,
+                           (unsigned long long)sum.dropped_events, sum.threads_seen);
+                }
+            }
+            return rc;
         }
     }
 
@@ -382,6 +428,7 @@ int main(int argc, char **argv) {
     printf("Preparing 160MB ext4 benchmark image (/model.gguf 64MB, /frag.bin 32MB)...\n");
     if (prepare_image(img_path) != 0) {
         fprintf(stderr, "Failed to prepare benchmark image\n");
+        if (tracing) ztrace_shutdown(NULL);
         return 1;
     }
 
@@ -402,6 +449,7 @@ int main(int argc, char **argv) {
         if (ext4_vfs_mount(&cfg, &ctx) != 0) {
             fprintf(stderr, "Mount failed (mode=%d)\n", mode);
             DeleteFileA(img_path);
+            if (tracing) ztrace_shutdown(NULL);
             return 1;
         }
         if (ext4_vfs_stat(ctx, "/model.gguf", &st_model) != 0 ||
@@ -409,6 +457,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Stat failed (mode=%d)\n", mode);
             ext4_vfs_unmount(ctx);
             DeleteFileA(img_path);
+            if (tracing) ztrace_shutdown(NULL);
             return 1;
         }
 
@@ -438,5 +487,16 @@ int main(int argc, char **argv) {
     }
 
     DeleteFileA(img_path);
+    if (tracing) {
+        ztrace_summary_t sum;
+        if (ztrace_shutdown(&sum) == 0) {
+            printf("\nPerfetto trace written to '%s' (events=%llu, dropped=%llu, threads=%u). Open at https://ui.perfetto.dev/\n",
+                   trace_path, (unsigned long long)sum.events_written,
+                   (unsigned long long)sum.dropped_events, sum.threads_seen);
+        } else {
+            fprintf(stderr, "Failed to write Perfetto trace '%s'\n", trace_path);
+            failed = 1;
+        }
+    }
     return failed ? 1 : 0;
 }

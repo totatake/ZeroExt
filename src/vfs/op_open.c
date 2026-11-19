@@ -1,6 +1,7 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,13 +28,16 @@ int ext4_vfs_open(ext4_vfs_ctx_t *ctx, const char *path, int writable, ext4_file
     rc = ext4_vfs_normalize_path(path, norm, sizeof(norm));
     if (rc != 0) return rc;
 
-    AcquireSRWLockShared(&ctx->rwlock);
-    rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
-    if (rc == 0) {
-        retval = ext2fs_read_inode(ctx->fs, ino, &ino_st);
-        if (retval) rc = ext4_errcode_to_errno(retval);
+    {
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
+            &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
+        if (rc == 0) {
+            retval = ext2fs_read_inode(ctx->fs, ino, &ino_st);
+            if (retval) rc = ext4_errcode_to_errno(retval);
+        }
+        ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
-    ReleaseSRWLockShared(&ctx->rwlock);
 
     if (rc != 0) return rc;
 

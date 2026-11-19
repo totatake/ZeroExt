@@ -171,6 +171,13 @@ namespace ZeroExt.Gui.Tests
             MountEventMessage? stats = ZeroExtCoreClient.TryParseMountEvent(
                 "{\"event\":\"stats\",\"read_bytes\":1048576,\"write_bytes\":4096,\"read_ops\":10,\"write_ops\":2}");
             Assert(stats != null && stats.ReadBytes == 1048576 && stats.WriteOps == 2, "stats event parsed");
+
+            MountEventMessage? unmounted = ZeroExtCoreClient.TryParseMountEvent(
+                "{\"event\":\"unmounted\",\"mountpoint\":\"M:\",\"trace_path\":\"D:\\\\logs\\\\t.json\",\"trace_events\":1234,\"trace_dropped\":0}");
+            Assert(unmounted != null && unmounted.Event == "unmounted", "unmounted event parsed");
+            AssertEqual(@"D:\logs\t.json", unmounted!.TracePath, "TracePath");
+            AssertEqual(1234UL, unmounted.TraceEvents ?? 0UL, "TraceEvents");
+            AssertEqual(0UL, unmounted.TraceDropped ?? 99UL, "TraceDropped");
         }
 
         private static void Test_ArgBuilder_MountVariantsAndPreview()
@@ -183,6 +190,7 @@ namespace ZeroExt.Gui.Tests
                 Mode = MountMode.ReadOnly,
                 EnableDirectIo = true,
                 CacheBlocks = 2048,
+                TraceOutputPath = @"D:\my traces\zeroext trace.json",
             };
             List<string> roArgs = ZeroExtArgBuilder.BuildMountArgs(roReq, "Local\\Evt1", true, 1000);
             Assert(!roArgs.Contains("--rw"), "RO should not have --rw");
@@ -190,10 +198,12 @@ namespace ZeroExt.Gui.Tests
             Assert(roArgs.Contains("--stop-event") && roArgs.Contains("Local\\Evt1"), "stop-event present");
             Assert(roArgs.Contains("--json-events"), "json-events present");
             Assert(roArgs.Contains("--stats-interval") && roArgs.Contains("1000"), "stats-interval present");
+            Assert(roArgs.Contains("--trace") && roArgs.Contains(@"D:\my traces\zeroext trace.json"), "trace arg present");
             AssertEqual("M:", roArgs[roArgs.IndexOf("--mountpoint") + 1], "normalized drive letter");
 
             string preview = ZeroExtArgBuilder.BuildMountPreviewCommand(roReq);
             Assert(preview.Contains("\"C:\\my images\\disk.img\""), "preview should quote space paths");
+            Assert(preview.Contains("--trace \"D:\\my traces\\zeroext trace.json\""), "preview should quote trace path");
             Assert(!preview.Contains("--stop-event"), "preview should omit internal --stop-event");
             Assert(!preview.Contains("--json-events"), "preview should omit internal --json-events");
 

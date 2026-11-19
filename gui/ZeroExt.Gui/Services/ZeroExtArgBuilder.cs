@@ -144,6 +144,12 @@ namespace ZeroExt.Gui.Services
                 args.Add("--debug");
             }
 
+            if (!string.IsNullOrWhiteSpace(req.TraceOutputPath))
+            {
+                args.Add("--trace");
+                args.Add(req.TraceOutputPath.Trim());
+            }
+
             if (!string.IsNullOrWhiteSpace(stopEventName))
             {
                 args.Add("--stop-event");

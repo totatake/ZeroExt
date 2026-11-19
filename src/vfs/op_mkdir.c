@@ -1,6 +1,7 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -46,7 +47,8 @@ int ext4_vfs_mkdir(ext4_vfs_ctx_t *ctx, const char *path, uint16_t mode, ext2_in
     rc = ext4_vfs_split_parent(norm, parent_path, sizeof(parent_path), name, sizeof(name));
     if (rc != 0) return rc;
 
-    AcquireSRWLockExclusive(&ctx->rwlock);
+    ztrace_lock_guard_t lg = ztrace_srw_acquire_exclusive(
+        &ctx->rwlock, "ctx->rwlock wait (X)", "ctx->rwlock hold (X)");
 
     rc = ext4_vfs_lookup_locked(ctx, parent_path, &parent_ino);
     if (rc != 0) goto out;
@@ -97,7 +99,7 @@ int ext4_vfs_mkdir(ext4_vfs_ctx_t *ctx, const char *path, uint16_t mode, ext2_in
     rc = 0;
 
 out:
-    ReleaseSRWLockExclusive(&ctx->rwlock);
+    ztrace_srw_release_exclusive(&ctx->rwlock, &lg);
     return rc;
 }
 
@@ -105,6 +107,7 @@ int ext4_vfs_can_delete(ext4_vfs_ctx_t *ctx, ext2_ino_t ino) {
     struct ext2_inode ino_st;
     errcode_t retval;
     struct empty_check_ctx check;
+    ztrace_lock_guard_t lg;
 
     if (!ctx || ino == 0) return -EINVAL;
     if (ctx->read_only) return -EROFS;
@@ -113,20 +116,20 @@ int ext4_vfs_can_delete(ext4_vfs_ctx_t *ctx, ext2_ino_t ino) {
     }
     if (ino == EXT2_ROOT_INO) return -EACCES;
 
-    AcquireSRWLockShared(&ctx->rwlock);
+    lg = ztrace_srw_acquire_shared(&ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
     retval = ext2fs_read_inode(ctx->fs, ino, &ino_st);
     if (retval != 0) {
-        ReleaseSRWLockShared(&ctx->rwlock);
+        ztrace_srw_release_shared(&ctx->rwlock, &lg);
         return ext4_errcode_to_errno(retval);
     }
     if (!LINUX_S_ISDIR(ino_st.i_mode)) {
-        ReleaseSRWLockShared(&ctx->rwlock);
+        ztrace_srw_release_shared(&ctx->rwlock, &lg);
         return 0;
     }
 
     check.non_empty = 0;
     retval = (errcode_t)ext2fs_dir_iterate2(ctx->fs, ino, 0, NULL, empty_check_cb, &check);
-    ReleaseSRWLockShared(&ctx->rwlock);
+    ztrace_srw_release_shared(&ctx->rwlock, &lg);
 
     if (retval != 0) return ext4_errcode_to_errno(retval);
     return check.non_empty ? -ENOTEMPTY : 0;

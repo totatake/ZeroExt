@@ -133,6 +133,8 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 #   --stop-event <name>   : 指定 Win32 Event シグナル受信時に安全アンマウント
 #   --json-events         : マウント状態・統計・エラーを 1 行 JSON イベントで標準出力へ通知
 #   --stats-interval <ms> : --json-events 併用時の I/O 統計イベント出力間隔 (ms)
+#   --trace <path.json>   : Perfetto UI (https://ui.perfetto.dev/) 互換 Chrome Trace Event JSON を出力
+#   --trace-events <N>    : スレッドごとのトレースリングバッファ容量（既定 65536、2 のべき乗で 1024..1048576）
 #
 # また list / inspect / ls サブコマンドでは --json フラグにより UTF-8 構造化 JSON 出力が可能です。
 ```
@@ -184,6 +186,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update_e2fsprogs.ps1 -Upstrea
 | `extent_and_overlay` | `test_direct_extent_deep_tree_and_holes` | RW＋`--direct-io` および `--direct-io`＋`--no-direct-io` 矛盾指定拒否 (`-EINVAL`)、RW 自動無効、既定 RO（Direct I/O 自動有効）での 8 断片・多段エクステント木 (`eh_depth >= 1`) 抽出＆スパース横断非アライン直読と `--no-direct-io` 結果一致 | PASS |
 | `extent_and_overlay` | `test_extent_indirect_uninit_and_inline` | 既定 RO（Direct I/O ON）での従来型間接ブロック (`EXT4_STORAGE_INDIRECT`)、インラインデータ (`EXT4_INLINE_DATA_FL`)、未初期化エクステント (`is_uninit`) ゼロ埋め直読 | PASS |
 | `extent_and_overlay` | `test_overlay_vfs_and_persistence` | Dirty ext4 の RO 下位マウント＋既定 Direct I/O 併用、Copy-up 書込・追記・再マウント永続性、ホワイトアウト (`.wh.*`)・不透過ディレクトリ、別 UUID イメージに対する `.wh.__ext4_lower_id` 拒否 (`-EINVAL`)、下位非破壊検証 | PASS |
+| `perfetto_trace` | `test_trace_disabled_noop` | トレース無効時のゼロオーバーヘッド noop 動作検証 | PASS |
+| `perfetto_trace` | `test_trace_vfs_direct_standard_and_overlay` | 4 スレッド並列標準読取・Direct I/O・Overlay Copy-up/Whiteout におけるロック待ち/保持・I/O・キャッシュカウンタ出力検証 | PASS |
+| `perfetto_trace` | `test_trace_winfsp_callback_spans` | WinFsp 全コールバック境界スパン (`FspCreate`/`FspRead`/`FspWrite`/`FspReadDirectory` 等) 出力検証 | PASS |
+| `perfetto_trace` | `test_trace_ring_wrap_and_reinit` | リングバッファラップ時のドロップ数計測と複数セッション再初期化 (`tls_epoch`) 検証 | PASS |
 
 ### 4.2 実行ログ抜粋（Release・MSVC 19.44 x64）
 
@@ -216,6 +222,20 @@ Total Test time (real) =   0.52 sec
 
 ---
 
-## 性能ベンチマーク (`zeroext_bench.exe`)
+## 性能ベンチマーク (`zeroext_bench.exe`) と Perfetto 性能トレース
 
 Direct I/O の有無による VFS 単体層・WinFsp 実マウント経由のスループット比較には `.\build\zeroext_bench.exe` を、同一 NVMe SSD 上での Windows Native (NTFS) / `ZeroExt` / `wsl --mount --vhd` 横並び比較には管理者権限 PowerShell 用の `scripts/bench_compare_ssd.ps1` を使用する。詳細な測定結果・考察・再現手順は [性能評価報告書 (Direct I/O / NTFS / WSL2 比較)](performance_evaluation.md) を参照。
+
+### Perfetto UI による詳細タイムライン解析
+
+`zeroext.exe mount` または `zeroext_bench.exe` に `--trace <output.json>` を指定すると、スレッド別のコールバック・ロック競合・I/O スパンおよびキャッシュカウンタを Chrome Trace Event JSON 形式で記録します（未指定時は単一フラグ分岐のみでオーバーヘッドゼロ）。`ZeroExtGui.exe` の「詳細設定・CLI コマンドプレビュー」からも出力先を指定できます。
+
+```powershell
+# マウント中の動作をトレース（Ctrl+C またはアンマウント時に書き出し）
+.\build\zeroext.exe mount --source test.img --mountpoint M: --trace .\zeroext_mount_trace.json
+
+# ベンチマーク実行中のロック競合・Direct I/O・LRU キャッシュ挙動をトレース
+.\build\zeroext_bench.exe --trace .\zeroext_bench_trace.json
+```
+
+出力された `.json` ファイルをブラウザで [https://ui.perfetto.dev/](https://ui.perfetto.dev/) にドラッグ＆ドロップすると、WinFsp コールバック、`ctx->rwlock` / `win32_io.cache_lock` / `extent_cache.lock` の待ち／保持時間、`win32_io_pread_direct` / `ReadFile` / `WriteFile`、Overlay Copy-up、各種キャッシュヒット／ミスカウンタをスレッド別タイムラインで解析できます。

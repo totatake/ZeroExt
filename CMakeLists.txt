@@ -112,6 +112,7 @@ endif()
 # Static library: Win32 I/O, Disk/Partition/Journal Probe, Modular VFS, WinFsp Interface
 add_library(zeroext_core STATIC
     src/common/ext4_errno.c
+    src/trace/perfetto_trace.c
     src/io/win32_io.c
     src/disk/superblock_probe.c
     src/disk/partition_table.c
@@ -167,6 +168,7 @@ add_executable(zeroext_tests
     tests/test_vfs_operations.c
     tests/test_winfsp_callbacks.c
     tests/test_extent_and_overlay.c
+    tests/test_perfetto_trace.c
 )
 target_link_libraries(zeroext_tests PRIVATE zeroext_core ext2fs)
 if(MSVC)
@@ -178,6 +180,7 @@ add_test(NAME partition_and_probe COMMAND zeroext_tests --suite partition_and_pr
 add_test(NAME vfs_operations      COMMAND zeroext_tests --suite vfs_operations)
 add_test(NAME winfsp_callbacks    COMMAND zeroext_tests --suite winfsp_callbacks)
 add_test(NAME extent_and_overlay  COMMAND zeroext_tests --suite extent_and_overlay)
+add_test(NAME perfetto_trace      COMMAND zeroext_tests --suite perfetto_trace)
 
 # Benchmark executable: zeroext_bench.exe (Direct I/O vs standard VFS/WinFsp read)
 add_executable(zeroext_bench tests/bench_direct_io.c)

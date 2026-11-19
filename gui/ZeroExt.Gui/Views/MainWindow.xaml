@@ -670,6 +670,26 @@
                                                 <CheckBox Content="マウント中は × ボタンでシステムトレイに最小化する"
                                                           IsChecked="{Binding MinimizeToTrayWhenMounted}" Margin="0,0,0,10" />
 
+                                                <TextBlock Text="Perfetto トレース出力先 (--trace・ui.perfetto.dev で可視化):" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,4" />
+                                                <Grid Margin="0,0,0,10">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBox Grid.Column="0" FontFamily="Consolas" FontSize="12"
+                                                             Text="{Binding TraceOutputPath, UpdateSourceTrigger=PropertyChanged}"
+                                                             ToolTip="空欄時はゼロオーバーヘッド（無効）。指定時はアンマウント時に Chrome Trace JSON を書き出します。"
+                                                             Margin="0,0,8,0" />
+                                                    <Button Grid.Column="1" Content="参照..."
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Margin="0,0,6,0"
+                                                            Click="OnBrowseTraceOutputClick" />
+                                                    <Button Grid.Column="2" Content="クリア"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Click="OnClearTraceOutputClick" />
+                                                </Grid>
+
                                                 <TextBlock Text="同等の CLI コマンド:" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,4" />
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
@@ -784,6 +804,11 @@
                                                                 <Border Style="{StaticResource PillBadgeStyle}" Background="{DynamicResource WarningBgBrush}" Margin="6,0,0,0"
                                                                         Visibility="{Binding FellBackToRo, Converter={StaticResource BoolToVis}}">
                                                                     <TextBlock Text="Dirty安全保護 RO" Foreground="{DynamicResource WarningBrush}" FontSize="11" FontWeight="Bold" />
+                                                                </Border>
+                                                                <Border Style="{StaticResource PillBadgeStyle}" Background="{DynamicResource SuccessBgBrush}" Margin="6,0,0,0"
+                                                                        Visibility="{Binding IsTracing, Converter={StaticResource BoolToVis}}"
+                                                                        ToolTip="{Binding TraceOutputPath}">
+                                                                    <TextBlock Text="Perfetto Trace ON" Foreground="{DynamicResource SuccessBrush}" FontSize="11" FontWeight="SemiBold" />
                                                                 </Border>
                                                             </StackPanel>
                                                             <TextBlock Text="{Binding SourceSummary}" FontSize="12"

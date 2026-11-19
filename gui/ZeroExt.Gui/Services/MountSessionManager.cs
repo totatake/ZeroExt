@@ -186,6 +186,7 @@ namespace ZeroExt.Gui.Services
                                 FellBackToRo = ev.FellBackToRo ?? false,
                                 ProcessId = proc.Id,
                                 StartedAt = DateTime.Now,
+                                TraceOutputPath = req.TraceOutputPath.Trim(),
                                 StatusText = (ev.FellBackToRo ?? false) ? "RO フォールバック中" : "マウント中",
                             };
 
@@ -245,6 +246,12 @@ namespace ZeroExt.Gui.Services
                         else if (string.Equals(ev.Event, "unmounted", StringComparison.Ordinal) && session != null)
                         {
                             _logSink?.Invoke($"[{session.Info.MountPoint}] 正常にアンマウントされました。");
+                            if (!string.IsNullOrWhiteSpace(ev.TracePath))
+                            {
+                                _logSink?.Invoke(
+                                    $"[{session.Info.MountPoint}] Perfetto トレース出力完了: {ev.TracePath} " +
+                                    $"(events={ev.TraceEvents ?? 0}, dropped={ev.TraceDropped ?? 0}) — https://ui.perfetto.dev/ で開けます");
+                            }
                         }
                         else if (string.Equals(ev.Event, "error", StringComparison.Ordinal))
                         {

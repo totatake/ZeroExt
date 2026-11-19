@@ -1,12 +1,14 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <string.h>
 
 int ext4_vfs_truncate(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint64_t new_size) {
     ext2_file_t file = NULL;
     errcode_t retval;
+    ztrace_lock_guard_t lg;
 
     if (!ctx || ino == 0) return -EINVAL;
     if (ctx->overlay) {
@@ -14,7 +16,7 @@ int ext4_vfs_truncate(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint64_t new_size) {
     }
     if (ctx->read_only) return -EROFS;
 
-    AcquireSRWLockExclusive(&ctx->rwlock);
+    lg = ztrace_srw_acquire_exclusive(&ctx->rwlock, "ctx->rwlock wait (X)", "ctx->rwlock hold (X)");
     retval = ext2fs_file_open(ctx->fs, ino, EXT2_FILE_WRITE, &file);
     if (retval == 0) {
         struct ext2_inode *inode = ext2fs_file_get_inode(file);
@@ -33,6 +35,6 @@ int ext4_vfs_truncate(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint64_t new_size) {
             ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)&full_ino, sizeof(full_ino));
         }
     }
-    ReleaseSRWLockExclusive(&ctx->rwlock);
+    ztrace_srw_release_exclusive(&ctx->rwlock, &lg);
     return ext4_errcode_to_errno(retval);
 }

@@ -158,6 +158,7 @@ namespace ZeroExt.Gui.ViewModels
         private bool _roFallbackOnDirty = true;
         private bool _forceDirty;
         private bool _enableDebugLog;
+        private string _traceOutputPath = string.Empty;
         private bool _autoOpenExplorer = true;
         private bool _minimizeToTrayWhenMounted = true;
 
@@ -583,6 +584,18 @@ namespace ZeroExt.Gui.ViewModels
             set
             {
                 if (SetProperty(ref _enableDebugLog, value))
+                {
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
+        public string TraceOutputPath
+        {
+            get => _traceOutputPath;
+            set
+            {
+                if (SetProperty(ref _traceOutputPath, value))
                 {
                     NotifyMountStateChanged();
                 }
@@ -1064,6 +1077,7 @@ namespace ZeroExt.Gui.ViewModels
                 RoFallbackOnDirty = RoFallbackOnDirty,
                 ForceDirty = ForceDirty,
                 EnableDebugLog = EnableDebugLog,
+                TraceOutputPath = TraceOutputPath.Trim(),
                 VolumeLabel = SelectedPartition?.Info.VolumeLabel ?? string.Empty,
                 AutoOpenExplorer = AutoOpenExplorer,
             };

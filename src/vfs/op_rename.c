@@ -1,6 +1,7 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -124,7 +125,8 @@ int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_p
     rc = ext4_vfs_split_parent(norm_new, new_parent, sizeof(new_parent), new_name, sizeof(new_name));
     if (rc != 0) return rc;
 
-    AcquireSRWLockExclusive(&ctx->rwlock);
+    ztrace_lock_guard_t lg = ztrace_srw_acquire_exclusive(
+        &ctx->rwlock, "ctx->rwlock wait (X)", "ctx->rwlock hold (X)");
 
     rc = ext4_vfs_lookup_locked(ctx, old_parent, &old_parent_ino);
     if (rc != 0) goto out;
@@ -254,6 +256,6 @@ int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_p
     rc = 0;
 
 out:
-    ReleaseSRWLockExclusive(&ctx->rwlock);
+    ztrace_srw_release_exclusive(&ctx->rwlock, &lg);
     return rc;
 }

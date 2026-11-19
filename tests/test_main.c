@@ -28,6 +28,9 @@ int main(int argc, char **argv) {
     if (!suite || strcmp(suite, "extent_and_overlay") == 0) {
         failures += run_suite_extent_and_overlay();
     }
+    if (!suite || strcmp(suite, "perfetto_trace") == 0) {
+        failures += run_suite_perfetto_trace();
+    }
 
     printf("\nSummary: failures=%d, assertions=%d\n", failures, g_test_assertions);
     return failures == 0 ? 0 : 1;

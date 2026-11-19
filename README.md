@@ -14,6 +14,7 @@ Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高�
   - GPT / MBR / EBR パーティション境界ガード（他パーティションへの誤書込を物理遮断）
   - 2 階層 `SRWLOCK`（データ Read 並列化＋メタデータ直列化）と LRU ブロックキャッシュ
 - **Dirty Journal 安全保護**: マウント前に `EXT3_FEATURE_INCOMPAT_RECOVER` / `EXT2_ERROR_FS` / JBD2 スーパーブロック (`s_start != 0`) を検査し、未再生ジャーナルが残るボリュームへの不用意な RW マウントを自動抑止（または Read-Only 自動フォールバック）。
+- **Perfetto 性能トレース出力 (`--trace`)**: 通常時は単一分岐によるゼロオーバーヘッドを維持しつつ、`--trace <output.json>` 指定時のみスレッドローカルリングバッファ（ロックレス記録・`QueryPerformanceCounter` 精度）へ WinFsp コールバック、`SRWLOCK` 待ち／保持時間、Extent／LRU キャッシュヒット、Direct I/O、`ReadFile`/`WriteFile`、Overlay Copy-up/Whiteout を記録し、[Perfetto UI](https://ui.perfetto.dev/) でタイムライン可視化が可能。
 - **Zero-Patch `e2fsprogs` 追従構造**: `third_party/e2fsprogs` への Windows 固有ハックを排除し、`compat/` と `scripts/generate_e2fsprogs_headers.py` へ分離。
 
 ## ドキュメント

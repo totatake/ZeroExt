@@ -2,6 +2,7 @@
 #include "../common/ext4_errno.h"
 #include "../extent/extent_map.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 
 int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t offset,
@@ -19,9 +20,10 @@ int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t
         ext4_extent_map_t *map = ext4_extent_cache_get(ctx->extent_cache, ino);
         int rc = 0;
         if (!map) {
-            AcquireSRWLockShared(&ctx->rwlock);
+            ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
+                &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
             rc = ext4_extent_extract(ctx->fs, ino, &map);
-            ReleaseSRWLockShared(&ctx->rwlock);
+            ztrace_srw_release_shared(&ctx->rwlock, &lg);
             if (rc == 0 && map) {
                 ext4_extent_cache_put(ctx->extent_cache, map);
             }
@@ -39,21 +41,31 @@ int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t
         }
     }
 
-    AcquireSRWLockShared(&ctx->rwlock);
-    retval = ext2fs_file_open(ctx->fs, ino, 0, &file);
-    if (retval == 0) {
-        struct ext2_inode *inode = ext2fs_file_get_inode(file);
-        if (LINUX_S_ISDIR(inode->i_mode)) {
-            retval = EXT2_ET_IS_A_DIR;
-        } else {
-            retval = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, NULL);
-            if (retval == 0) {
-                retval = ext2fs_file_read(file, buf, length, &got);
+    {
+        uint64_t t_vfs = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
+            &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        retval = ext2fs_file_open(ctx->fs, ino, 0, &file);
+        if (retval == 0) {
+            struct ext2_inode *inode = ext2fs_file_get_inode(file);
+            if (LINUX_S_ISDIR(inode->i_mode)) {
+                retval = EXT2_ET_IS_A_DIR;
+            } else {
+                retval = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, NULL);
+                if (retval == 0) {
+                    retval = ext2fs_file_read(file, buf, length, &got);
+                }
             }
+            ext2fs_file_close(file);
         }
-        ext2fs_file_close(file);
+        ztrace_srw_release_shared(&ctx->rwlock, &lg);
+        if (t_vfs) {
+            uint64_t end = ztrace_now_qpc();
+            int rc_vfs = (retval != 0) ? ext4_errcode_to_errno(retval) : 0;
+            ztrace_record_complete("vfs", "ext2fs_file_read", t_vfs, end - t_vfs,
+                                   (uint64_t)ino, (uint64_t)got, (int64_t)rc_vfs, ZTRACE_ARGS_RW_OP);
+        }
     }
-    ReleaseSRWLockShared(&ctx->rwlock);
 
     if (retval != 0) return ext4_errcode_to_errno(retval);
     *out_read = (uint32_t)got;
@@ -79,11 +91,14 @@ int ext4_vfs_get_extents(ext4_vfs_ctx_t *ctx, const char *path, ext4_extent_map_
     rc = ext4_vfs_normalize_path(path, norm, sizeof(norm));
     if (rc != 0) return rc;
 
-    AcquireSRWLockShared(&ctx->rwlock);
-    rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
-    if (rc == 0) {
-        rc = ext4_extent_extract(ctx->fs, ino, out_map);
+    {
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
+            &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
+        if (rc == 0) {
+            rc = ext4_extent_extract(ctx->fs, ino, out_map);
+        }
+        ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
-    ReleaseSRWLockShared(&ctx->rwlock);
     return rc;
 }

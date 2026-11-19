@@ -1,6 +1,7 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <string.h>
 
@@ -112,16 +113,17 @@ void ext4_fill_stat_from_inode(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
 int ext4_vfs_lower_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st) {
     struct ext2_inode_large ino_st;
     errcode_t retval;
+    ztrace_lock_guard_t lg;
 
     if (!ctx || !out_st || ino == 0) return -EINVAL;
 
-    AcquireSRWLockShared(&ctx->rwlock);
+    lg = ztrace_srw_acquire_shared(&ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
     memset(&ino_st, 0, sizeof(ino_st));
     retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
     if (retval == 0) {
         ext4_fill_stat_from_inode(ctx, ino, &ino_st, leaf_name, out_st);
     }
-    ReleaseSRWLockShared(&ctx->rwlock);
+    ztrace_srw_release_shared(&ctx->rwlock, &lg);
     return ext4_errcode_to_errno(retval);
 }
 
@@ -147,18 +149,21 @@ int ext4_vfs_lower_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_
     leaf = strrchr(norm, '/');
     leaf = leaf ? (leaf + 1) : norm;
 
-    AcquireSRWLockShared(&ctx->rwlock);
-    rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
-    if (rc == 0) {
-        memset(&ino_st, 0, sizeof(ino_st));
-        retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
-        if (retval == 0) {
-            ext4_fill_stat_from_inode(ctx, ino, &ino_st, leaf, out_st);
-        } else {
-            rc = ext4_errcode_to_errno(retval);
+    {
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
+            &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
+        if (rc == 0) {
+            memset(&ino_st, 0, sizeof(ino_st));
+            retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
+            if (retval == 0) {
+                ext4_fill_stat_from_inode(ctx, ino, &ino_st, leaf, out_st);
+            } else {
+                rc = ext4_errcode_to_errno(retval);
+            }
         }
+        ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
-    ReleaseSRWLockShared(&ctx->rwlock);
     return rc;
 }
 
@@ -180,31 +185,34 @@ int ext4_vfs_set_times(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint32_t win_attrs,
     }
     if (ctx->read_only) return -EROFS;
 
-    AcquireSRWLockExclusive(&ctx->rwlock);
-    memset(&ino_st, 0, sizeof(ino_st));
-    retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
-    if (retval == 0) {
-        if (win_attrs != INVALID_FILE_ATTRIBUTES) {
-            if (win_attrs & FILE_ATTRIBUTE_READONLY) {
-                ino_st.i_mode &= (uint16_t)(~0222);
-            } else {
-                ino_st.i_mode |= 0200;
+    {
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_exclusive(
+            &ctx->rwlock, "ctx->rwlock wait (X)", "ctx->rwlock hold (X)");
+        memset(&ino_st, 0, sizeof(ino_st));
+        retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
+        if (retval == 0) {
+            if (win_attrs != INVALID_FILE_ATTRIBUTES) {
+                if (win_attrs & FILE_ATTRIBUTE_READONLY) {
+                    ino_st.i_mode &= (uint16_t)(~0222);
+                } else {
+                    ino_st.i_mode |= 0200;
+                }
             }
+            if (ctime_ft != 0) {
+                filetime_to_ext4_time(ctime_ft, &ino_st.i_crtime, &ino_st.i_crtime_extra);
+            }
+            if (atime_ft != 0) {
+                filetime_to_ext4_time(atime_ft, &ino_st.i_atime, &ino_st.i_atime_extra);
+            }
+            if (mtime_ft != 0) {
+                filetime_to_ext4_time(mtime_ft, &ino_st.i_mtime, &ino_st.i_mtime_extra);
+            }
+            if (chgtime_ft != 0) {
+                filetime_to_ext4_time(chgtime_ft, &ino_st.i_ctime, &ino_st.i_ctime_extra);
+            }
+            retval = ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
         }
-        if (ctime_ft != 0) {
-            filetime_to_ext4_time(ctime_ft, &ino_st.i_crtime, &ino_st.i_crtime_extra);
-        }
-        if (atime_ft != 0) {
-            filetime_to_ext4_time(atime_ft, &ino_st.i_atime, &ino_st.i_atime_extra);
-        }
-        if (mtime_ft != 0) {
-            filetime_to_ext4_time(mtime_ft, &ino_st.i_mtime, &ino_st.i_mtime_extra);
-        }
-        if (chgtime_ft != 0) {
-            filetime_to_ext4_time(chgtime_ft, &ino_st.i_ctime, &ino_st.i_ctime_extra);
-        }
-        retval = ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
+        ztrace_srw_release_exclusive(&ctx->rwlock, &lg);
     }
-    ReleaseSRWLockExclusive(&ctx->rwlock);
     return ext4_errcode_to_errno(retval);
 }

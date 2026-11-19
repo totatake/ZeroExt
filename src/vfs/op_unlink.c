@@ -1,6 +1,7 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <string.h>
 #include <time.h>
@@ -170,11 +171,14 @@ int ext4_vfs_unlink(ext4_vfs_ctx_t *ctx, const char *path) {
     rc = ext4_vfs_split_parent(norm, parent_path, sizeof(parent_path), name, sizeof(name));
     if (rc != 0) return rc;
 
-    AcquireSRWLockExclusive(&ctx->rwlock);
-    rc = ext4_vfs_lookup_locked(ctx, parent_path, &parent_ino);
-    if (rc == 0) {
-        rc = ext4_vfs_unlink_locked(ctx, parent_ino, name);
+    {
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_exclusive(
+            &ctx->rwlock, "ctx->rwlock wait (X)", "ctx->rwlock hold (X)");
+        rc = ext4_vfs_lookup_locked(ctx, parent_path, &parent_ino);
+        if (rc == 0) {
+            rc = ext4_vfs_unlink_locked(ctx, parent_ino, name);
+        }
+        ztrace_srw_release_exclusive(&ctx->rwlock, &lg);
     }
-    ReleaseSRWLockExclusive(&ctx->rwlock);
     return rc;
 }

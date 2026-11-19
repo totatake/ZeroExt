@@ -1,17 +1,19 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
 #include "../overlay/overlay_vfs.h"
+#include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <string.h>
 
 int ext4_vfs_lower_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
     uint64_t blk_sz;
     uint32_t serial = 0;
+    ztrace_lock_guard_t lg;
 
     if (!ctx || !out_vol) return -EINVAL;
     memset(out_vol, 0, sizeof(*out_vol));
 
-    AcquireSRWLockShared(&ctx->rwlock);
+    lg = ztrace_srw_acquire_shared(&ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
     blk_sz = ctx->fs->blocksize;
     out_vol->block_size = (uint32_t)blk_sz;
     out_vol->total_bytes = ext2fs_blocks_count(ctx->fs->super) * blk_sz;
@@ -23,7 +25,7 @@ int ext4_vfs_lower_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
 
     memcpy(out_vol->volume_label, ctx->fs->super->s_volume_name, 16);
     out_vol->volume_label[16] = '\0';
-    ReleaseSRWLockShared(&ctx->rwlock);
+    ztrace_srw_release_shared(&ctx->rwlock, &lg);
     return 0;
 }
 
@@ -37,11 +39,12 @@ int ext4_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
 int ext4_vfs_set_label(ext4_vfs_ctx_t *ctx, const char *label) {
     size_t len;
     errcode_t retval;
+    ztrace_lock_guard_t lg;
 
     if (!ctx || !label) return -EINVAL;
     if (ctx->read_only || ctx->lower_read_only) return -EROFS;
 
-    AcquireSRWLockExclusive(&ctx->rwlock);
+    lg = ztrace_srw_acquire_exclusive(&ctx->rwlock, "ctx->rwlock wait (X)", "ctx->rwlock hold (X)");
     memset(ctx->fs->super->s_volume_name, 0, sizeof(ctx->fs->super->s_volume_name));
     len = strlen(label);
     if (len > sizeof(ctx->fs->super->s_volume_name)) {
@@ -52,6 +55,6 @@ int ext4_vfs_set_label(ext4_vfs_ctx_t *ctx, const char *label) {
     ctx->volume_label[16] = '\0';
     ext2fs_mark_super_dirty(ctx->fs);
     retval = ext2fs_flush(ctx->fs);
-    ReleaseSRWLockExclusive(&ctx->rwlock);
+    ztrace_srw_release_exclusive(&ctx->rwlock, &lg);
     return ext4_errcode_to_errno(retval);
 }
