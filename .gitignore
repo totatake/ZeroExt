@@ -1,5 +1,6 @@
 # Build artifacts
 build/
+build_*/
 out/
 cmake-build-*/
 .vs/
@@ -24,3 +25,7 @@ gui/**/obj/
 *.raw
 *.log
 *.tmp
+
+# Trace outputs
+*.pftrace
+zeroext_bench_trace.json

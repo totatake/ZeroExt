@@ -194,8 +194,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update_e2fsprogs.ps1 -Upstrea
 ### 4.2 実行ログ抜粋（Release・MSVC 19.44 x64）
 
 ```text
-Internal ctest changing into directory: D:/ZeroExt/build
-Test project D:/ZeroExt/build
+Internal ctest changing into directory: <repo>/build
+Test project <repo>/build
     Start 1: win32_io
 1/5 Test #1: win32_io .........................   Passed    0.09 sec
     Start 2: partition_and_probe

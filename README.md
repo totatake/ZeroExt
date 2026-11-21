@@ -143,4 +143,4 @@ zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --ov
 
 ## ライセンス
 
-本プロジェクトは `e2fsprogs` (`libext2fs`) に基づくため **GNU General Public License v2.0 (GPLv2)** の下で提供されます。詳細は [LICENSE](LICENSE) を参照してください。
+本プロジェクトは `e2fsprogs` (`libext2fs`) に基づくため **GNU General Public License v2.0 (GPLv2)** の下で提供されます。詳細は [LICENSE](LICENSE) およびサードパーティ表記 ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) を参照してください。
