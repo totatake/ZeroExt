@@ -24,16 +24,19 @@ static errcode_t write_primary_super(ext2_filsys fs, struct ext2_super_block *sb
 }
 
 static errcode_t write_backup_super_and_bgd(ext2_filsys fs) {
+    char *blk_buf = NULL;
     struct ext2_super_block *sb_copy = NULL;
     errcode_t retval;
+    unsigned int alloc_sz = fs->blocksize >= sizeof(*sb_copy) ? fs->blocksize : (unsigned int)sizeof(*sb_copy);
     dgrp_t g, i;
     dgrp_t groups_per_block = (dgrp_t)(fs->blocksize / EXT2_DESC_SIZE(fs->super));
     unsigned int first_meta_bg = fs->super->s_first_meta_bg;
 
-    retval = ext2fs_get_mem(sizeof(*sb_copy), &sb_copy);
+    retval = ext2fs_get_memzero(alloc_sz, &blk_buf);
     if (retval) {
         return retval;
     }
+    sb_copy = (struct ext2_super_block *)blk_buf;
 
     for (g = 1; g < fs->group_desc_count; g++) {
         blk64_t group_blk;
@@ -44,7 +47,7 @@ static errcode_t write_backup_super_and_bgd(ext2_filsys fs) {
         memcpy(sb_copy, fs->super, sizeof(*sb_copy));
         sb_copy->s_block_group_nr = (__u16)g;
         ext2fs_superblock_csum_set(fs, sb_copy);
-        retval = io_channel_write_blk64(fs->io, group_blk, 1, sb_copy);
+        retval = io_channel_write_blk64(fs->io, group_blk, 1, blk_buf);
         if (retval) {
             break;
         }
@@ -70,7 +73,7 @@ static errcode_t write_backup_super_and_bgd(ext2_filsys fs) {
     }
 
 out:
-    ext2fs_free_mem(&sb_copy);
+    ext2fs_free_mem(&blk_buf);
     return retval;
 }
 

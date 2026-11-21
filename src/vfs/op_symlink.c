@@ -33,6 +33,9 @@ int ext4_vfs_symlink(ext4_vfs_ctx_t *ctx, const char *link_path, const char *tar
                 rc = -EEXIST;
             } else {
                 retval = ext2fs_symlink(ctx->fs, parent_ino, 0, name, target_path);
+                if (retval == 0) {
+                    ext4_dentry_cache_invalidate(ctx);
+                }
                 rc = ext4_errcode_to_errno(retval);
             }
         }

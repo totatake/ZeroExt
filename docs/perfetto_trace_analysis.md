@@ -214,14 +214,17 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 > [!NOTE]
 > 各ステップの実装完了後、`zeroext_bench.exe --trace ... --trace-events 524288` および `scripts/bench_compare_ssd.ps1` を再実行し、本表へ改善後実測値を追記する。
 
-| 指標 | Before (`aa37709`) | Step 1 後 (`OVERLAPPED`) | Step 2 後 (`INFINITE` Timeout) | Step 3 後 (`Cache Shard`) | Step 4 後 |
+| 指標 | Before (`aa37709`) | Step 1 後 (`OVERLAPPED`) | Step 2 後 (`INFINITE` Timeout) | Step 3 後 (`Cache Shard`) | Step 4 後 (`Metadata / Write Opt`) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| `VFS DIO 8T Seq 64KB` (`MB/s` / `ReadFile` max) | `5,404.1 MB/s` / `37.96 ms` (`98.6%` 連続独占) | **`31,835.1 MB/s`** / `0.240 ms` (`0.4%` 連続) | — | **`32,795.1 MB/s`** (`524,721 IOPS`) | _未計測_ |
-| `VFS DIO 8T Rnd 4KB /model.gguf` (`MB/s` / `ReadFile` mean) | `632.4 MB/s` (`0.63x`) / `49.11 µs` | **`1,155.4 MB/s`** (`0.88x`) / `24.51 µs` | — | **`1,248.8 MB/s`** (`24.19 µs`) | _未計測_ |
-| `VFS DIO 8T Rnd 4KB /frag.bin` (`MB/s` / `ReadFile` mean) | `640.6 MB/s` (`0.79x`) / `49.71 µs` | **`1,260.7 MB/s`** (`1.13x`) / `24.46 µs` | — | **`1,241.4 MB/s`** (`24.01 µs`) | _未計測_ |
-| `同一 SSD Warm/Cached Seq 1024KB` (`MB/s`) | `1,490.5 MB/s` | _未計測_ | `9,190.0 MB/s` <br><sub>(`.img` ライブ A/B: `2,359.0` → **`9,190.0 MB/s`**; 同一 SSD スクリプト未実施)</sub> | — | _未計測_ |
-| `同一 SSD Warm/Cached Rnd 4KB` (`MB/s`) | `36.8 MB/s` | _未計測_ | `1,015.3 MB/s` <br><sub>(`.img` ライブ A/B: `134.1` → **`1,015.3 MB/s`**; 同一 SSD スクリプト未実施)</sub> | — | _未計測_ |
-| `cache_lock wait` 合計 / max (`M0_8T_Rnd_4KB_frag`) | `43.7 ms` / `262.0 µs` | `798.0 ms` / `353.5 µs` | — | **`44.3 ms`** (`X:16.8 + S:27.5`) / `221.2 µs` | _未計測_ |
+| `VFS DIO 8T Seq 64KB` (`MB/s` / `ReadFile` max) | `5,404.1 MB/s` / `37.96 ms` (`98.6%` 連続独占) | **`31,835.1 MB/s`** / `0.240 ms` (`0.4%` 連続) | — | **`32,795.1 MB/s`** (`524,721 IOPS`) | **`33,066.3 MB/s`** <br><sub>(3 回中央値; 最大 `33,225.9 MB/s` / 回帰なし)</sub> |
+| `VFS DIO 8T Rnd 4KB /model.gguf` (`MB/s` / `ReadFile` mean) | `632.4 MB/s` (`0.63x`) / `49.11 µs` | **`1,155.4 MB/s`** (`0.88x`) / `24.51 µs` | — | **`1,248.8 MB/s`** (`24.19 µs`) | **`1,237.7 MB/s`** <br><sub>(3 回中央値; `316,860 IOPS` / 回帰なし)</sub> |
+| `VFS DIO 8T Rnd 4KB /frag.bin` (`MB/s` / `ReadFile` mean) | `640.6 MB/s` (`0.79x`) / `49.71 µs` | **`1,260.7 MB/s`** (`1.13x`) / `24.46 µs` | — | **`1,241.4 MB/s`** (`24.01 µs`) | **`1,245.3 MB/s`** <br><sub>(3 回中央値; `318,798 IOPS` / 回帰なし)</sub> |
+| `同一 SSD Warm/Cached Seq 1024KB` (`MB/s`) | `1,490.5 MB/s` | _未計測_ | `9,190.0 MB/s` <br><sub>(`.img` ライブ A/B: `2,359.0` → **`9,190.0 MB/s`**; 同一 SSD スクリプト未実施)</sub> | — | — |
+| `同一 SSD Warm/Cached Rnd 4KB` (`MB/s`) | `36.8 MB/s` | _未計測_ | `1,015.3 MB/s` <br><sub>(`.img` ライブ A/B: `134.1` → **`1,015.3 MB/s`**; 同一 SSD スクリプト未実施)</sub> | — | — |
+| `cache_lock wait` 合計 / max (`M0_8T_Rnd_4KB_frag`) | `43.7 ms` / `262.0 µs` | `798.0 ms` / `353.5 µs` | — | **`44.3 ms`** (`X:16.8 + S:27.5`) / `221.2 µs` | — |
+| `ライブ RO 負ルックアップ 2000 回` (`FspGetSecurityByName`) | — | — | — | `220.72 ms` (`59.11 µs/call`) | **`52.98 ms`** (`4.94 µs/call`, **4.17x / コールバック 11.97x**) |
+| `ライブ RO 単一 FindFirst 1000 回` (`FspGetDirInfoByName`) | — | — | — | `344.41 ms` (`FspReadDirectory` 1450 回) | **`122.98 ms`** (`FspGetDirInfoByName` 1000 回 / **`2.34 µs`**) |
+| `ライブ RO 200ファイル列挙 x50` (`ctx->rwlock (S)` 合計) | — | — | — | `68.08 ms` (`550.60 ms` hold) | **`32.12 ms`** (`45.41 ms` hold, **-91.8%**) |
 
 ### 5.1 Step 1 (`FILE_FLAG_OVERLAPPED`) 効果検証結果
 
@@ -283,3 +286,39 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
      - あわせて [FspRead_impl](../src/driver/winfsp_driver.c#L366) → `ext4_vfs_read_handle` により、ライブ WinFsp マウント経由の同一ファイル読込時は `ext4_file_handle_t` に保持した `cached_extents` を参照するため、`extent_cache.lock` の取得自体を初回のみへ削減した。
    - **次の残存ボトルネック（Step 4 対象）**:
      - `M0_8T_Rnd_4KB_frag` の総 VFS 時間 `2,958.3 ms` から `ReadFile` (`1,397.6 ms`) と `cache_lock` (`139.8 ms`) を引いた約 **`1,421 ms`（10.8 µs/op、約 48%）** は、毎回の `ext2fs_file_open/llseek/read/close` による純粋な `libext2fs` CPU コストが占めている。またライブ GUI トレース側のメタデータ経路（負のルックアップ、`FspOpen` 二重読込、`FspReadDirectory`）が Step 4 の改善対象となる。
+
+### 5.4 Step 4 (メタデータ経路・書込最適化) 効果検証結果
+
+200 ファイルを含む 32 MB の ext4 イメージ（`/bigdir/file_0000.dat`〜`file_0199.dat` 各 4 KB）を実 WinFsp ドライブとしてマウントし、カーネル側のメタデータキャッシュを無効化した `--file-info-timeout 0`（＋`--trace-events 524288`）条件でユーザー空間コールバックの純粋な改善率を Before (`cd5e279`) / After（Step 4 実装＋`PassQueryDirectoryFileName = 1` 有効化）で A/B 比較した。
+
+1. **実装した最適化項目**:
+   - **16 シャード正／負 Dentry キャッシュ**（[src/vfs/op_init.c](../src/vfs/op_init.c)）: 16 シャード×256 スロット（計 4,096 エントリ）、Shared ロック参照・CLOCK インプレース置換・世代エポックによる $O(1)$ 一括無効化（`op_create`, `op_mkdir`, `op_unlink`, `op_rename`, `op_symlink` で `ctx->rwlock (X)` 保持下に無効化）。大文字小文字無視時にもディスク上の実ケースパスを保持し、`ext4_vfs_lookup_locked_ex` で `CasePreservedNames` を維持。
+   - **単一ロック・単一 inode 読込の統合 Open+Stat / Lookup+Stat**（[op_open.c](../src/vfs/op_open.c), [op_getattr.c](../src/vfs/op_getattr.c), [winfsp_driver.c](../src/driver/winfsp_driver.c)）: `ext4_vfs_open_stat` により `FspOpen` / `FspCreate` 直後の 2 回目の `ext4_vfs_stat_ino` を廃止。
+   - **早期 Marker スキップ＋`FspGetDirInfoByName` 実装**（[op_readdir.c](../src/vfs/op_readdir.c), [winfsp_driver.c](../src/driver/winfsp_driver.c)）: `ext4_vfs_readdir_from` で `ext2fs_read_inode_full` より前に Marker 照合を行い既処理エントリの inode 読込を回避。さらに `FspGetDirInfoByName` を実装し、`winfsp_driver_build_volume_params` で `PassQueryDirectoryFileName = 1` を設定して WinFsp が単一ファイル検索を `FspReadDirectory` にフォールバックしないようにした。
+   - **書込時冗長 inode I/O 削減**（[op_write.c](../src/vfs/op_write.c), [winfsp_driver.c](../src/driver/winfsp_driver.c)）: `ext4_vfs_write_stat` により 1 回の `ctx->rwlock (X)`＋1 回の `ext2fs_read_inode_full`＋`ext2fs_file_open2` で 256B 拡張時刻と `FileInfo` を同時に返し、`FspWrite` 後の `ext4_vfs_stat_ino` と二重 inode 読込を削減。
+   - **付随バグ修正（[closefs.c](../third_party/e2fsprogs/lib/ext2fs/closefs.c)）**: 無計測 160 MB `zeroext_bench.exe` 検証時に `write_backup_super_and_bgd` が 4 KB ブロック環境でも `sizeof(*sb_copy)` (1,024 B) しか確保せず `io_channel_write_blk64` に渡していたため、ヒープページ境界で `win32_aligned_write` が `0xC0000005`（読み出し範囲外）を起こし得る既存バグを発見・修正し、140 MB マルチグループ回帰テスト（`test_multi_group_backup_superblock_flush`）を追加した。
+
+2. **ライブ WinFsp ワークロード計測比較（`--file-info-timeout 0`）**:
+   | ワークロード（Win32 API） | Before (`cd5e279`) | Step 4 後 (`PassQueryDirectoryFileName=1`) | 速度比 |
+   | :--- | ---: | ---: | ---: |
+   | `RO_NegLookup_2000` (存在しない 5 種×400 `GetFileAttributesW`) | `220.72 ms` (`110.36 µs/op`) | **`52.98 ms`** (`26.49 µs/op`, `37,749 ops/s`) | **4.17x** |
+   | `RO_PosOpenClose_1000` (200 ファイル大文字パス×5 `CreateFileW`) | `350.70 ms` (`350.70 µs/op`) | **`233.79 ms`** (`233.79 µs/op`, `4,277 ops/s`) | **1.50x** |
+   | `RO_SingleFindFirst_1000` (単一ファイル正500+負500 `FindFirstFileW`) | `344.41 ms` (`344.41 µs/op`) | **`122.98 ms`** (`122.98 µs/op`, `8,131 ops/s`) | **2.80x** |
+   | `RO_ReadDir200_50x` (200 ファイル全列挙 `FindFirst/NextFileW` ×50) | `68.08 ms` (`1.362 ms/round`) | **`32.12 ms`** (`0.642 ms/round`, `entries=10100`) | **2.12x** |
+   | `RW_Write_1000x4KB` (`FILE_FLAG_WRITE_THROUGH` 4KB 追記500+上書500) | `46.84 ms` (`0.047 ms/op`) | **`46.09 ms`** (`0.046 ms/op`, `21,696 ops/s`) | `1.02x` |
+
+3. **Perfetto トレース解析（Before vs After コールバック別内訳）**:
+   - **RO メタデータトレース（総イベント数 `817,185` → `101,093`、-87.6%）**:
+     | イベント | Before 回数 / 合計 (`平均`) | Step 4 後 回数 / 合計 (`平均`) | 改善効果 |
+     | :--- | ---: | ---: | ---: |
+     | `winfsp\|FspGetSecurityByName` | `4,052` / `239.532 ms` (`59.11 µs`) | `4,052` / **`20.005 ms`** (**`4.94 µs`**) | **11.97x 高速化** (`-91.6%`) |
+     | `winfsp\|FspOpen` | `2,052` / `78.828 ms` (`38.42 µs`) | `2,052` / **`2.854 ms`** (**`1.39 µs`**) | **27.62x 高速化** (`-96.4%`) |
+     | `winfsp\|FspReadDirectory` | `1,450` / `227.418 ms` (`156.84 µs`) | **`450`** / **`15.668 ms`** (**`34.82 µs`**) | **14.51x 削減** (`-93.1%`) |
+     | `winfsp\|FspGetDirInfoByName` | `0`（`ReadDirectory` へフォールバック） | **`1,000`** / **`2.345 ms`** (**`2.34 µs`**) | **単一検索直行を達成** |
+     | `lock\|ctx->rwlock hold (S)` | `15,712` / `550.595 ms` (`35.04 µs`) | `13,660` / **`45.408 ms`** (**`3.32 µs`**) | **12.13x 短縮** (`-91.8%`) |
+     | `lock\|win32_io.cache_lock hold (S)` | `384,084` / `25.258 ms` | **`28,090`** / **`2.917 ms`** | **メタデータ読込 -92.7%** |
+   - **RW 4KB 書込トレース（`1,000` 回 `FspWrite`）**:
+     - `lock|ctx->rwlock hold (S)` が `1,023` 回（`1.017 ms`）→ **`20` 回**（`0.220 ms`, **-98.0%**）へ激減し、`win32_io.cache_lock hold (S)` も `7,097` → **`5,082` 回**（`-28.4%`）に減少した（壁時計時間の約 65.6% [`18.967 ms` / `28.897 ms`] は同期 `WriteFile` ディスク I/O が支配）。
+
+4. **無計測 `zeroext_bench.exe` 回帰チェック（3 回連続実行）**:
+   - 全 3 回とも `EXIT=0` で完了。Mode 1 (`enable_direct_io=1`) の 3 回中央値は `8T Seq 64KB` **`33,066.3 MB/s`**（最大 `33,225.9 MB/s` / `531,615 IOPS`）、`8T Rnd 4KB /model.gguf` **`1,237.7 MB/s`**、`/frag.bin` **`1,245.3 MB/s`**、Mode 0 `8T Rnd 4KB /model.gguf` **`1,660.8 MB/s`**（最大 `1,725.9 MB/s`）・`/frag.bin` **`1,368.9 MB/s`** となり、Step 3 比で性能回帰がないことを確認した。

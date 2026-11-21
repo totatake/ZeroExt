@@ -104,6 +104,7 @@ int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t 
         rc = ext4_errcode_to_errno(retval);
         goto out;
     }
+    ext4_dentry_cache_invalidate(ctx);
 
     /* Re-read parent_st because ext2fs_link -> ext2fs_expand_dir may have updated i_size/i_block */
     memset(&parent_st, 0, sizeof(parent_st));

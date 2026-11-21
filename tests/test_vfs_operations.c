@@ -482,6 +482,237 @@ static int test_gpt_partition_rw_isolation(void) {
     return 0;
 }
 
+typedef struct {
+    ext4_vfs_ctx_t *ctx;
+    int             tid;
+    int             error;
+} mt_dentry_arg_t;
+
+static DWORD WINAPI mt_dentry_worker(LPVOID param) {
+    mt_dentry_arg_t *arg = (mt_dentry_arg_t *)param;
+    ext4_stat_t st;
+    for (int iter = 0; iter < 150; iter++) {
+        char path[128];
+        if ((iter & 1) == 0) {
+            int fidx = (arg->tid * 7 + iter) % 20;
+            snprintf(path, sizeof(path), (iter & 2) ? "/CACHEDIR/ITEM_%02d.DAT" : "/CacheDir/item_%02d.dat", fidx);
+            if (ext4_vfs_stat(arg->ctx, path, &st) != 0) {
+                arg->error = 1;
+                return 1;
+            }
+        } else {
+            snprintf(path, sizeof(path), "/CacheDir/missing_%d.ini", (arg->tid + iter) % 5);
+            if (ext4_vfs_stat(arg->ctx, path, &st) != -ENOENT) {
+                arg->error = 2;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_dentry_cache_positive_negative_and_invalidation(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st, st_open;
+    ext4_dentry_cache_stats_t s0, s1, s2;
+    char actual_leaf[EXT2_NAME_LEN + 1];
+    HANDLE threads[8];
+    mt_dentry_arg_t targs[8];
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_dentry_cache.img");
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "DENTRY"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/CacheDir", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/CacheDir/CaseFile.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+
+    ext4_vfs_get_dentry_cache_stats(ctx, &s0);
+
+    /* Negative miss then repeated negative cache hits */
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/CacheDir/NoSuch.ini", &st));
+    for (int i = 0; i < 5; i++) {
+        TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/cachedir/nosuch.ini", &st));
+    }
+    ext4_vfs_get_dentry_cache_stats(ctx, &s1);
+    TEST_ASSERT(s1.misses > s0.misses);
+    TEST_ASSERT(s1.neg_hits >= s0.neg_hits + 5);
+
+    /* Case-insensitive positive cache + preserved case leaf + open_stat single-lock path */
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/CACHEDIR/CASEFILE.TXT", &st,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "CaseFile.txt") == 0);
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/cachedir/CaseFile.txt", &st,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "CaseFile.txt") == 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/CACHEDIR/casefile.txt", 0, &h, &st_open));
+    TEST_ASSERT_EQ_INT((long long)st.ino, (long long)st_open.ino);
+    TEST_ASSERT_EQ_INT((long long)st.ino, (long long)h->ino);
+    ext4_vfs_close_handle(h);
+    ext4_vfs_get_dentry_cache_stats(ctx, &s2);
+    TEST_ASSERT(s2.pos_hits >= s1.pos_hits + 2);
+
+    /* Creating the previously negatively-cached path must invalidate negative entry immediately */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/CacheDir/NoSuch.ini", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    ext4_vfs_get_dentry_cache_stats(ctx, &s1);
+    TEST_ASSERT(s1.invalidations > s2.invalidations);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/cachedir/nosuch.ini", &st));
+
+    /* Case-only rename & cross-name rename must invalidate stale entries */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/CacheDir/NoSuch.ini", "/CacheDir/NoSuch.REN", 0));
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/cachedir/nosuch.ren", &st,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "NoSuch.REN") == 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/CacheDir/NoSuch.REN", "/CacheDir/Moved.dat", 0));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/CacheDir/NoSuch.REN", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/CacheDir/Moved.dat", &st));
+
+    /* Symlink & unlink invalidation */
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/CacheDir/sym.lnk", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/CacheDir/sym.lnk", "Moved.dat"));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/CacheDir/sym.lnk", &st));
+    TEST_ASSERT_EQ_INT(1, st.is_symlink);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/CacheDir/Moved.dat"));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/CacheDir/Moved.dat", &st));
+
+    /* Populate 20 files and verify 8-thread concurrent positive/negative cached stat lookups */
+    for (int i = 0; i < 20; i++) {
+        char fpath[128];
+        snprintf(fpath, sizeof(fpath), "/CacheDir/item_%02d.dat", i);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, fpath, 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, fpath, &st));
+    }
+    for (int t = 0; t < 8; t++) {
+        targs[t].ctx = ctx;
+        targs[t].tid = t;
+        targs[t].error = 0;
+        threads[t] = CreateThread(NULL, 0, mt_dentry_worker, &targs[t], 0, NULL);
+        TEST_ASSERT(threads[t] != NULL);
+    }
+    WaitForMultipleObjects(8, threads, TRUE, INFINITE);
+    for (int t = 0; t < 8; t++) {
+        CloseHandle(threads[t]);
+        TEST_ASSERT_EQ_INT(0, targs[t].error);
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    DeleteFileA(img_path);
+    return 0;
+}
+
+static int test_write_stat_preserves_extra_times_and_extents(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st_init, st_w1, st_w2, st_w0, st_ro;
+    uint8_t w1[8192], w2[512], rbuf[8192];
+    uint32_t written = 0, got = 0;
+    uint64_t new_sz = 0;
+
+    for (size_t i = 0; i < sizeof(w1); i++) w1[i] = (uint8_t)((i * 29 + 3) & 0xFF);
+    for (size_t i = 0; i < sizeof(w2); i++) w2[i] = (uint8_t)(0xA5 ^ (i & 0xFF));
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_write_stat.img");
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "WRSTAT"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/WriteStat.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/WriteStat.bin", 1, &h, &st_init));
+    TEST_ASSERT(st_init.creation_time > 0);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write_stat(ctx, h->ino, w1, 0, sizeof(w1), 0, "WriteStat.bin",
+                                              &written, &new_sz, &st_w1));
+    TEST_ASSERT_EQ_INT(sizeof(w1), written);
+    TEST_ASSERT_EQ_INT(sizeof(w1), new_sz);
+    TEST_ASSERT_EQ_INT(sizeof(w1), st_w1.size);
+    TEST_ASSERT_EQ_INT(st_init.creation_time, st_w1.creation_time);
+
+    /* Partial overwrite in middle */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write_stat(ctx, h->ino, w2, 2048, sizeof(w2), 0, "WriteStat.bin",
+                                              &written, &new_sz, &st_w2));
+    TEST_ASSERT_EQ_INT(sizeof(w2), written);
+    TEST_ASSERT_EQ_INT(sizeof(w1), new_sz);
+    TEST_ASSERT_EQ_INT(sizeof(w1), st_w2.size);
+
+    /* Zero-length non-EOF write */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write_stat(ctx, h->ino, w2, 0, 0, 0, "WriteStat.bin",
+                                              &written, &new_sz, &st_w0));
+    TEST_ASSERT_EQ_INT(0, written);
+    TEST_ASSERT_EQ_INT(sizeof(w1), st_w0.size);
+
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Remount RO and verify persisted data + metadata checksum */
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/WriteStat.bin", 0, &h, &st_ro));
+    TEST_ASSERT_EQ_INT(sizeof(w1), st_ro.size);
+    TEST_ASSERT_EQ_INT(st_init.creation_time, st_ro.creation_time);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, rbuf, 0, sizeof(rbuf), &got));
+    TEST_ASSERT_EQ_INT(sizeof(w1), got);
+    memcpy(w1 + 2048, w2, sizeof(w2));
+    TEST_ASSERT(memcmp(w1, rbuf, sizeof(w1)) == 0);
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+
+    DeleteFileA(img_path);
+    return 0;
+}
+
+static int test_multi_group_backup_superblock_flush(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_stat_t st;
+    uint8_t blk_buf[4096];
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_multigrp.img");
+    /* 140 MB creates 2 block groups (group 1 has backup superblock at block 32768) */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 140ULL * 1024ULL * 1024ULL, "MULTIGRP"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx->fs->group_desc_count >= 2);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/grp_check.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Remount RO, verify /grp_check.txt and backup superblock block 32768 + zero tail */
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/grp_check.txt", &st));
+    {
+        blk64_t g1_blk = ext2fs_group_first_block2(ctx->fs, 1);
+        struct ext2_super_block *bak = (struct ext2_super_block *)blk_buf;
+        TEST_ASSERT_EQ_INT(0, io_channel_read_blk64(ctx->fs->io, g1_blk, 1, blk_buf));
+        TEST_ASSERT_EQ_INT(EXT2_SUPER_MAGIC, bak->s_magic);
+        TEST_ASSERT_EQ_INT(1, bak->s_block_group_nr);
+        TEST_ASSERT(ext2fs_superblock_csum_verify(ctx->fs, bak));
+        for (size_t i = sizeof(*bak); i < sizeof(blk_buf); i++) {
+            TEST_ASSERT_EQ_INT(0, blk_buf[i]);
+        }
+    }
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -490,5 +721,8 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_dirty_journal_safety_policy);
     RUN_TEST(test_multiblock_directory_expansion);
     RUN_TEST(test_gpt_partition_rw_isolation);
+    RUN_TEST(test_dentry_cache_positive_negative_and_invalidation);
+    RUN_TEST(test_write_stat_preserves_extra_times_and_extents);
+    RUN_TEST(test_multi_group_backup_superblock_flush);
     return suite_failures;
 }

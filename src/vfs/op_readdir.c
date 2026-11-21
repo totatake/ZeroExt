@@ -9,6 +9,9 @@ struct vfs_readdir_bridge {
     ext4_vfs_ctx_t *ctx;
     ext4_readdir_cb cb;
     void           *user_ctx;
+    const char     *marker_utf8;
+    size_t          marker_len;
+    int             past_marker;
     int             stop;
     int             err;
 };
@@ -30,6 +33,14 @@ static int vfs_readdir_cb_internal(ext2_ino_t dir, int entry, struct ext2_dir_en
     if (de->inode == 0) return 0;
     if (de->name_len > EXT2_NAME_LEN) return 0;
 
+    if (b->marker_utf8 && !b->past_marker) {
+        if (de->name_len == b->marker_len &&
+            memcmp(de->name, b->marker_utf8, de->name_len) == 0) {
+            b->past_marker = 1;
+        }
+        return 0;
+    }
+
     memcpy(name_buf, de->name, de->name_len);
     name_buf[de->name_len] = '\0';
 
@@ -47,7 +58,8 @@ static int vfs_readdir_cb_internal(ext2_ino_t dir, int entry, struct ext2_dir_en
     return 0;
 }
 
-int ext4_vfs_lower_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx) {
+int ext4_vfs_lower_readdir_from(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, const char *marker_utf8,
+                                ext4_readdir_cb cb, void *user_ctx) {
     struct vfs_readdir_bridge bridge;
     int ret;
 
@@ -57,6 +69,9 @@ int ext4_vfs_lower_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir
     bridge.ctx = ctx;
     bridge.cb = cb;
     bridge.user_ctx = user_ctx;
+    bridge.marker_utf8 = (marker_utf8 && marker_utf8[0] != '\0') ? marker_utf8 : NULL;
+    bridge.marker_len = bridge.marker_utf8 ? strlen(bridge.marker_utf8) : 0;
+    bridge.past_marker = (bridge.marker_utf8 == NULL);
 
     {
         ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
@@ -69,9 +84,18 @@ int ext4_vfs_lower_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir
     return bridge.err;
 }
 
-int ext4_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx) {
+int ext4_vfs_lower_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx) {
+    return ext4_vfs_lower_readdir_from(ctx, dir_ino, NULL, cb, user_ctx);
+}
+
+int ext4_vfs_readdir_from(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, const char *marker_utf8,
+                          ext4_readdir_cb cb, void *user_ctx) {
     if (ctx && ctx->overlay) {
         return overlay_vfs_readdir(ctx, dir_ino, cb, user_ctx);
     }
-    return ext4_vfs_lower_readdir(ctx, dir_ino, cb, user_ctx);
+    return ext4_vfs_lower_readdir_from(ctx, dir_ino, marker_utf8, cb, user_ctx);
+}
+
+int ext4_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx) {
+    return ext4_vfs_readdir_from(ctx, dir_ino, NULL, cb, user_ctx);
 }

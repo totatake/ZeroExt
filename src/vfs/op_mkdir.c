@@ -85,6 +85,7 @@ int ext4_vfs_mkdir(ext4_vfs_ctx_t *ctx, const char *path, uint16_t mode, ext2_in
         rc = ext4_errcode_to_errno(retval);
         goto out;
     }
+    ext4_dentry_cache_invalidate(ctx);
 
     if (mode != 0 && mode != 0755) {
         struct ext2_inode_large dir_st;

@@ -17,6 +17,7 @@ extern "C" {
 struct ext4_extent_map;
 struct ext4_extent_cache;
 struct ext4_overlay_ctx;
+struct ext4_dentry_cache;
 
 typedef struct ext4_mount_config {
     const char *source_path;
@@ -54,6 +55,7 @@ typedef struct ext4_vfs_ctx {
     uint64_t                  partition_size;
     char                      volume_label[32];
     struct ext4_extent_cache *extent_cache;
+    struct ext4_dentry_cache *dentry_cache;
     struct ext4_overlay_ctx  *overlay;
     int                       stats_enabled;
     volatile LONG64           stat_read_bytes;
@@ -98,6 +100,13 @@ typedef struct ext4_file_handle {
     char                     path[1024];
 } ext4_file_handle_t;
 
+typedef struct ext4_dentry_cache_stats {
+    uint64_t pos_hits;
+    uint64_t neg_hits;
+    uint64_t misses;
+    uint64_t invalidations;
+} ext4_dentry_cache_stats_t;
+
 typedef int (*ext4_readdir_cb)(const char *name, const ext4_stat_t *st, void *user_ctx);
 
 /* Lifecycle & mkfs (op_init.c) */
@@ -110,6 +119,10 @@ int ext4_vfs_normalize_path(const char *in_path, char *out_path, size_t out_sz);
 int ext4_vfs_split_parent(const char *norm_path, char *out_parent, size_t parent_sz,
                           char *out_name, size_t name_sz);
 int ext4_vfs_lookup_locked(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_ino_t *out_ino);
+int ext4_vfs_lookup_locked_ex(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_ino_t *out_ino,
+                              char *out_leaf, size_t out_leaf_sz);
+void ext4_dentry_cache_invalidate(ext4_vfs_ctx_t *ctx);
+void ext4_vfs_get_dentry_cache_stats(ext4_vfs_ctx_t *ctx, ext4_dentry_cache_stats_t *out_stats);
 void ext4_fill_stat_from_inode(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                                const struct ext2_inode_large *ino_st,
                                const char *leaf_name, ext4_stat_t *out_st);
@@ -125,9 +138,13 @@ int ext4_vfs_set_times(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint32_t win_attrs,
 
 /* Directory enumeration (op_readdir.c) */
 int ext4_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx);
+int ext4_vfs_readdir_from(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, const char *marker_utf8,
+                          ext4_readdir_cb cb, void *user_ctx);
 
 /* Handle open/close (op_open.c) */
 int ext4_vfs_open(ext4_vfs_ctx_t *ctx, const char *path, int writable, ext4_file_handle_t **out_handle);
+int ext4_vfs_open_stat(ext4_vfs_ctx_t *ctx, const char *path, int writable,
+                       ext4_file_handle_t **out_handle, ext4_stat_t *out_st);
 void ext4_vfs_close_handle(ext4_file_handle_t *handle);
 
 /* File read/write (op_read.c / op_write.c) */
@@ -137,6 +154,9 @@ int ext4_vfs_read_handle(ext4_vfs_ctx_t *ctx, ext4_file_handle_t *handle, void *
                          uint64_t offset, uint32_t length, uint32_t *out_read);
 int ext4_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint64_t offset,
                    uint32_t length, int write_to_eof, uint32_t *out_written, uint64_t *out_new_size);
+int ext4_vfs_write_stat(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint64_t offset,
+                        uint32_t length, int write_to_eof, const char *leaf_name,
+                        uint32_t *out_written, uint64_t *out_new_size, ext4_stat_t *out_st);
 
 /* Creation, mkdir, delete, rename, truncate, symlink, statfs, flush */
 int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t mode,
@@ -154,8 +174,12 @@ int ext4_vfs_flush(ext4_vfs_ctx_t *ctx);
 
 /* Lower-layer direct helpers (bypass overlay routing; used by overlay_vfs & tools) */
 int ext4_vfs_lower_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st);
+int ext4_vfs_lower_stat_with_name(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st,
+                                  char *out_leaf, size_t out_leaf_sz);
 int ext4_vfs_lower_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st);
 int ext4_vfs_lower_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb cb, void *user_ctx);
+int ext4_vfs_lower_readdir_from(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, const char *marker_utf8,
+                                ext4_readdir_cb cb, void *user_ctx);
 int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t offset,
                         uint32_t length, uint32_t *out_read);
 int ext4_vfs_lower_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol);

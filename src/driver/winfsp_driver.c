@@ -177,7 +177,7 @@ static NTSTATUS FspCreate_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT
     rc = ext4_vfs_create(ctx, path_utf8, is_dir, is_dir ? 0755 : 0644, FileAttributes, &ino);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
 
-    rc = ext4_vfs_open(ctx, path_utf8, 1, &handle);
+    rc = ext4_vfs_open_stat(ctx, path_utf8, 1, &handle, FileInfo ? &st : NULL);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
 
     handle->create_options = CreateOptions;
@@ -186,12 +186,7 @@ static NTSTATUS FspCreate_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT
     }
 
     if (FileInfo) {
-        const char *leaf = strrchr(handle->path, '/');
-        leaf = leaf ? (leaf + 1) : handle->path;
-        rc = ext4_vfs_stat_ino(ctx, ino, leaf, &st);
-        if (rc == 0) {
-            fill_fsp_file_info(&st, FileInfo);
-        }
+        fill_fsp_file_info(&st, FileInfo);
     }
 
     *PFileContext = handle;
@@ -229,7 +224,8 @@ static NTSTATUS FspOpen_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32
         return STATUS_OBJECT_NAME_INVALID;
     }
 
-    rc = ext4_vfs_open(ctx, path_utf8, wants_write && !ctx->read_only, &handle);
+    rc = ext4_vfs_open_stat(ctx, path_utf8, wants_write && !ctx->read_only,
+                            &handle, FileInfo ? &st : NULL);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
 
     if ((CreateOptions & FILE_DIRECTORY_FILE) && !handle->is_dir) {
@@ -247,13 +243,6 @@ static NTSTATUS FspOpen_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32
     }
 
     if (FileInfo) {
-        const char *leaf = strrchr(handle->path, '/');
-        leaf = leaf ? (leaf + 1) : handle->path;
-        rc = ext4_vfs_stat_ino(ctx, handle->ino, leaf, &st);
-        if (rc != 0) {
-            ext4_vfs_close_handle(handle);
-            return ext4_errno_to_ntstatus(rc);
-        }
         fill_fsp_file_info(&st, FileInfo);
     }
 
@@ -416,21 +405,22 @@ static NTSTATUS FspWrite_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PV
         }
     }
 
-    rc = ext4_vfs_write(ctx, handle->ino, Buffer, Offset, effective_len,
-                        WriteToEndOfFile ? 1 : 0, &written, &new_size);
-    if (rc != 0) return ext4_errno_to_ntstatus(rc);
-
-    if (ctx->stats_enabled && written > 0) {
-        InterlockedAdd64(&ctx->stat_write_bytes, (LONG64)written);
-        InterlockedIncrement64(&ctx->stat_write_ops);
-    }
-
-    *PBytesTransferred = written;
-    if (FileInfo) {
+    {
         ext4_stat_t st;
         const char *leaf = strrchr(handle->path, '/');
         leaf = leaf ? (leaf + 1) : handle->path;
-        if (ext4_vfs_stat_ino(ctx, handle->ino, leaf, &st) == 0) {
+        rc = ext4_vfs_write_stat(ctx, handle->ino, Buffer, Offset, effective_len,
+                                 WriteToEndOfFile ? 1 : 0, leaf, &written, &new_size,
+                                 FileInfo ? &st : NULL);
+        if (rc != 0) return ext4_errno_to_ntstatus(rc);
+
+        if (ctx->stats_enabled && written > 0) {
+            InterlockedAdd64(&ctx->stat_write_bytes, (LONG64)written);
+            InterlockedIncrement64(&ctx->stat_write_ops);
+        }
+
+        *PBytesTransferred = written;
+        if (FileInfo) {
             fill_fsp_file_info(&st, FileInfo);
         }
     }
@@ -716,13 +706,26 @@ static NTSTATUS FspReadDirectory_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileCon
     *PBytesTransferred = 0;
 
     memset(&state, 0, sizeof(state));
-    state.marker = Marker;
-    state.past_marker = (Marker == NULL);
     state.buffer = Buffer;
     state.length = Length;
     state.transferred = PBytesTransferred;
 
-    rc = ext4_vfs_readdir(ctx, handle->ino, fsp_readdir_cb, &state);
+    if (!ctx->overlay && Marker && Marker[0] != L'\0') {
+        char marker_utf8[EXT2_NAME_LEN * 3 + 1];
+        if (ext4_wide_to_utf8(Marker, marker_utf8, sizeof(marker_utf8)) == 0) {
+            state.marker = NULL;
+            state.past_marker = 1;
+            rc = ext4_vfs_readdir_from(ctx, handle->ino, marker_utf8, fsp_readdir_cb, &state);
+        } else {
+            state.marker = Marker;
+            state.past_marker = 0;
+            rc = ext4_vfs_readdir(ctx, handle->ino, fsp_readdir_cb, &state);
+        }
+    } else {
+        state.marker = Marker;
+        state.past_marker = (Marker == NULL);
+        rc = ext4_vfs_readdir(ctx, handle->ino, fsp_readdir_cb, &state);
+    }
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
 
     if (!state.buffer_full) {
@@ -740,6 +743,94 @@ static NTSTATUS FspReadDirectory(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
         ULONG bytes = PBytesTransferred ? *PBytesTransferred : 0;
         ztrace_record_complete("winfsp", "FspReadDirectory", _zt0, ztrace_now_qpc() - _zt0,
                                0, (uint64_t)bytes, (int64_t)st, ZTRACE_ARGS_IO);
+    }
+    return st;
+}
+
+static NTSTATUS FspGetDirInfoByName_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                                         PWSTR FileName, FSP_FSCTL_DIR_INFO *DirInfo) {
+    ext4_vfs_ctx_t *ctx = (ext4_vfs_ctx_t *)FileSystem->UserContext;
+    ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
+    char req_utf8[1024];
+    const char *leaf_req;
+    char actual_leaf[EXT2_NAME_LEN + 1];
+    ext4_stat_t st;
+    WCHAR wname[EXT2_NAME_LEN + 1];
+    size_t wlen;
+    int rc;
+
+    if (!ctx || !handle || !FileName || !DirInfo) return STATUS_INVALID_PARAMETER;
+    if (!handle->is_dir) return STATUS_NOT_A_DIRECTORY;
+    if (ext4_wide_to_utf8(FileName, req_utf8, sizeof(req_utf8)) != 0) {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+
+    leaf_req = req_utf8;
+    if (leaf_req[0] == '\\' || leaf_req[0] == '/') {
+        leaf_req++;
+    }
+    if (leaf_req[0] == '\0' || strchr(leaf_req, '\\') != NULL || strchr(leaf_req, '/') != NULL) {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+
+    actual_leaf[0] = '\0';
+    if (strcmp(leaf_req, ".") == 0) {
+        rc = ext4_vfs_stat_ino(ctx, handle->ino, ".", &st);
+        strcpy_s(actual_leaf, sizeof(actual_leaf), ".");
+    } else if (strcmp(leaf_req, "..") == 0) {
+        char parent_path[1024];
+        char dummy_leaf[EXT2_NAME_LEN + 1];
+        if (strcmp(handle->path, "/") == 0) {
+            strcpy_s(parent_path, sizeof(parent_path), "/");
+        } else if (ext4_vfs_split_parent(handle->path, parent_path, sizeof(parent_path),
+                                         dummy_leaf, sizeof(dummy_leaf)) != 0) {
+            return STATUS_OBJECT_NAME_INVALID;
+        }
+        rc = ext4_vfs_stat(ctx, parent_path, &st);
+        strcpy_s(actual_leaf, sizeof(actual_leaf), "..");
+    } else {
+        char full_path[1024];
+        int n;
+        if (strcmp(handle->path, "/") == 0) {
+            n = snprintf(full_path, sizeof(full_path), "/%s", leaf_req);
+        } else {
+            n = snprintf(full_path, sizeof(full_path), "%s/%s", handle->path, leaf_req);
+        }
+        if (n < 0 || (size_t)n >= sizeof(full_path)) {
+            return STATUS_OBJECT_NAME_INVALID;
+        }
+        if (!ctx->overlay) {
+            rc = ext4_vfs_lower_stat_with_name(ctx, full_path, &st, actual_leaf, sizeof(actual_leaf));
+        } else {
+            rc = ext4_vfs_stat(ctx, full_path, &st);
+            strcpy_s(actual_leaf, sizeof(actual_leaf), leaf_req);
+        }
+    }
+
+    if (rc != 0) return ext4_errno_to_ntstatus(rc);
+    if (actual_leaf[0] == '\0') {
+        strcpy_s(actual_leaf, sizeof(actual_leaf), leaf_req);
+    }
+    if (ext4_utf8_to_wide(actual_leaf, wname, _countof(wname)) != 0) {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+
+    wlen = wcslen(wname);
+    memset(DirInfo, 0, sizeof(FSP_FSCTL_DIR_INFO));
+    DirInfo->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + wlen * sizeof(WCHAR));
+    fill_fsp_file_info(&st, &DirInfo->FileInfo);
+    memcpy(DirInfo->FileNameBuf, wname, wlen * sizeof(WCHAR));
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS FspGetDirInfoByName(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                                    PWSTR FileName, FSP_FSCTL_DIR_INFO *DirInfo) {
+    uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    NTSTATUS st = FspGetDirInfoByName_impl(FileSystem, FileContext, FileName, DirInfo);
+    if (_zt0) {
+        ztrace_record_complete("winfsp", "FspGetDirInfoByName", _zt0, ztrace_now_qpc() - _zt0,
+                               (st == STATUS_SUCCESS && DirInfo) ? DirInfo->FileInfo.IndexNumber : 0ULL,
+                               0, (int64_t)st, ZTRACE_ARGS_STATUS);
     }
     return st;
 }
@@ -764,6 +855,7 @@ static const FSP_FILE_SYSTEM_INTERFACE g_winfsp_iface = {
     .GetSecurity       = FspGetSecurity,
     .SetSecurity       = FspSetSecurity,
     .ReadDirectory     = FspReadDirectory,
+    .GetDirInfoByName  = FspGetDirInfoByName,
     .SetDelete         = FspSetDelete,
 };
 
@@ -796,6 +888,7 @@ void winfsp_driver_build_volume_params(ext4_vfs_ctx_t *ctx, FSP_FSCTL_VOLUME_PAR
     out_params->PersistentAcls = 0;
     out_params->ReadOnlyVolume = ctx->read_only ? 1 : 0;
     out_params->PostCleanupWhenModifiedOnly = 1;
+    out_params->PassQueryDirectoryFileName = 1;
     out_params->SupportsPosixUnlinkRename = 1;
     out_params->UmFileContextIsUserContext2 = 1;
     wcscpy_s(out_params->FileSystemName, _countof(out_params->FileSystemName), L"ext4");

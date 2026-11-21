@@ -115,6 +115,7 @@ int ext4_vfs_unlink_locked(ext4_vfs_ctx_t *ctx, ext2_ino_t parent_ino, const cha
 
     retval = ext2fs_unlink(ctx->fs, parent_ino, fctx.actual_name, fctx.ino, 0);
     if (retval) return ext4_errcode_to_errno(retval);
+    ext4_dentry_cache_invalidate(ctx);
 
     memset(&parent_st, 0, sizeof(parent_st));
     if (ext2fs_read_inode_full(ctx->fs, parent_ino, (struct ext2_inode *)&parent_st, sizeof(parent_st)) == 0) {

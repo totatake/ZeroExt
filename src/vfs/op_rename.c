@@ -183,7 +183,11 @@ int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_p
                 rc = ext4_errcode_to_errno(retval);
                 goto out;
             }
+            ext4_dentry_cache_invalidate(ctx);
             retval = ext2fs_link(ctx->fs, new_parent_ino, new_name, src_ctx.ino, ext2fs_file_type(src_st.i_mode));
+            if (retval == 0) {
+                ext4_dentry_cache_invalidate(ctx);
+            }
             rc = ext4_errcode_to_errno(retval);
             goto out;
         }
@@ -216,6 +220,7 @@ int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_p
         rc = ext4_errcode_to_errno(retval);
         goto out;
     }
+    ext4_dentry_cache_invalidate(ctx);
 
     retval = ext2fs_unlink(ctx->fs, old_parent_ino, src_ctx.actual_name, src_ctx.ino, 0);
     if (retval) {

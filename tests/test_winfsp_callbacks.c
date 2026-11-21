@@ -43,6 +43,7 @@ static int test_winfsp_interface_e2e(void) {
         TEST_ASSERT_EQ_INT(4096, vp.SectorSize);
         TEST_ASSERT_EQ_INT(0, vp.ReadOnlyVolume);
         TEST_ASSERT_EQ_INT(1000, vp.FileInfoTimeout);
+        TEST_ASSERT_EQ_INT(1, vp.PassQueryDirectoryFileName);
         TEST_ASSERT_EQ_INT(1, vp.UmFileContextIsUserContext2);
         TEST_ASSERT(wcscmp(vp.FileSystemName, L"ext4") == 0);
     }
@@ -258,9 +259,125 @@ static int test_winfsp_volume_params_ro_cache_timeout(void) {
     return 0;
 }
 
+static int test_winfsp_get_dir_info_by_name_and_large_readdir(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    FSP_FILE_SYSTEM *fs = NULL;
+    const FSP_FILE_SYSTEM_INTERFACE *iface = NULL;
+    FSP_FSCTL_FILE_INFO fi;
+    PVOID dir_ctx = NULL, file_ctx = NULL;
+    UINT8 di_buf[sizeof(FSP_FSCTL_DIR_INFO) + (EXT2_NAME_LEN + 1) * sizeof(WCHAR)];
+    FSP_FSCTL_DIR_INFO *di = (FSP_FSCTL_DIR_INFO *)di_buf;
+    ULONG transferred = 0;
+    uint8_t payload[1234];
+
+    for (size_t i = 0; i < sizeof(payload); i++) payload[i] = (uint8_t)(i & 0xFF);
+
+    test_make_temp_path(img_path, sizeof(img_path), "winfsp_dirinfo.img");
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 16ULL * 1024ULL * 1024ULL, "DIRINFO"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_create_test_fs(ctx, &fs));
+    iface = winfsp_driver_get_interface();
+    TEST_ASSERT(iface != NULL);
+    TEST_ASSERT(iface->GetDirInfoByName != NULL);
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Create(fs, L"\\GdbDir", FILE_DIRECTORY_FILE, FILE_GENERIC_WRITE,
+                                     FILE_ATTRIBUTE_DIRECTORY, NULL, 0, &dir_ctx, &fi));
+    iface->Close(fs, dir_ctx);
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Create(fs, L"\\GdbDir\\MixedCase.bin", FILE_NON_DIRECTORY_FILE,
+                                     FILE_WRITE_DATA, FILE_ATTRIBUTE_ARCHIVE, NULL, 0, &file_ctx, &fi));
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(fs, file_ctx, payload, 0, sizeof(payload), FALSE, FALSE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT((long long)sizeof(payload), fi.FileSize);
+
+    /* Non-directory handle passed to GetDirInfoByName must return STATUS_NOT_A_DIRECTORY */
+    TEST_ASSERT_EQ_INT(STATUS_NOT_A_DIRECTORY,
+                       iface->GetDirInfoByName(fs, file_ctx, L"child.txt", di));
+    iface->Close(fs, file_ctx);
+
+    /* Populate 120 extra entries for paginated ReadDirectory verification */
+    for (int i = 0; i < 120; i++) {
+        wchar_t fpath[64];
+        PVOID fctx = NULL;
+        swprintf(fpath, 64, L"\\GdbDir\\entry_%03d.txt", i);
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                           iface->Create(fs, fpath, FILE_NON_DIRECTORY_FILE, FILE_WRITE_DATA,
+                                         FILE_ATTRIBUTE_ARCHIVE, NULL, 0, &fctx, &fi));
+        iface->Close(fs, fctx);
+    }
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Open(fs, L"\\GdbDir", FILE_DIRECTORY_FILE, FILE_LIST_DIRECTORY, &dir_ctx, &fi));
+
+    /* Exact & case-insensitive GetDirInfoByName */
+    memset(di_buf, 0, sizeof(di_buf));
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->GetDirInfoByName(fs, dir_ctx, L"MIXEDCASE.BIN", di));
+    TEST_ASSERT_EQ_INT((long long)sizeof(payload), di->FileInfo.FileSize);
+    TEST_ASSERT_EQ_INT((long long)(sizeof(FSP_FSCTL_DIR_INFO) + wcslen(L"MixedCase.bin") * sizeof(WCHAR)), di->Size);
+    TEST_ASSERT(wcsncmp(di->FileNameBuf, L"MixedCase.bin", wcslen(L"MixedCase.bin")) == 0);
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->GetDirInfoByName(fs, dir_ctx, L".", di));
+    TEST_ASSERT_EQ_INT(STATUS_OBJECT_NAME_NOT_FOUND,
+                       iface->GetDirInfoByName(fs, dir_ctx, L"missing_probe.bin", di));
+    TEST_ASSERT_EQ_INT(STATUS_OBJECT_NAME_INVALID,
+                       iface->GetDirInfoByName(fs, dir_ctx, L"sub\\nested", di));
+
+    /* Small-buffer ReadDirectory pagination with early Marker skip across 123 entries */
+    {
+        uint8_t page[512];
+        wchar_t marker[256];
+        wchar_t *marker_ptr = NULL;
+        int total_entries = 0;
+        int found_mixed = 0;
+        int found_last = 0;
+
+        for (int round = 0; round < 64; round++) {
+            ULONG bytes = 0;
+            TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                               iface->ReadDirectory(fs, dir_ctx, NULL, marker_ptr, page, sizeof(page), &bytes));
+            if (bytes == 0) break;
+
+            ULONG off = 0;
+            wchar_t last_name[256] = {0};
+            while (off + sizeof(UINT16) <= bytes) {
+                FSP_FSCTL_DIR_INFO *item = (FSP_FSCTL_DIR_INFO *)(page + off);
+                if (item->Size == 0) break;
+                size_t nchars = (item->Size - sizeof(FSP_FSCTL_DIR_INFO)) / sizeof(WCHAR);
+                memcpy(last_name, item->FileNameBuf, nchars * sizeof(WCHAR));
+                last_name[nchars] = L'\0';
+                if (wcscmp(last_name, L"MixedCase.bin") == 0) found_mixed = 1;
+                if (wcscmp(last_name, L"entry_119.txt") == 0) found_last = 1;
+                total_entries++;
+                off += FSP_FSCTL_DEFAULT_ALIGN_UP(item->Size, 8);
+            }
+            wcscpy_s(marker, _countof(marker), last_name);
+            marker_ptr = marker;
+        }
+        TEST_ASSERT_EQ_INT(1, found_mixed);
+        TEST_ASSERT_EQ_INT(1, found_last);
+        TEST_ASSERT_EQ_INT(123, total_entries); /* '.', '..', 'MixedCase.bin', 120 'entry_XXX.txt' */
+    }
+
+    iface->Close(fs, dir_ctx);
+    winfsp_driver_destroy_test_fs(fs);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_winfsp_callbacks(void) {
     int suite_failures = 0;
     RUN_TEST(test_winfsp_interface_e2e);
     RUN_TEST(test_winfsp_volume_params_ro_cache_timeout);
+    RUN_TEST(test_winfsp_get_dir_info_by_name_and_large_readdir);
     return suite_failures;
 }

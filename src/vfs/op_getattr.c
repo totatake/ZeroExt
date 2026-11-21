@@ -134,30 +134,33 @@ int ext4_vfs_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name
     return ext4_vfs_lower_stat_ino(ctx, ino, leaf_name, out_st);
 }
 
-int ext4_vfs_lower_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
+int ext4_vfs_lower_stat_with_name(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st,
+                                  char *out_leaf, size_t out_leaf_sz) {
     char norm[1024];
+    char actual_leaf[EXT2_NAME_LEN + 1];
     ext2_ino_t ino = 0;
     struct ext2_inode_large ino_st;
     errcode_t retval;
     int rc;
-    const char *leaf;
 
     if (!ctx || !path || !out_st) return -EINVAL;
     rc = ext4_vfs_normalize_path(path, norm, sizeof(norm));
     if (rc != 0) return rc;
 
-    leaf = strrchr(norm, '/');
-    leaf = leaf ? (leaf + 1) : norm;
+    actual_leaf[0] = '\0';
 
     {
         ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
             &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
-        rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
+        rc = ext4_vfs_lookup_locked_ex(ctx, norm, &ino, actual_leaf, sizeof(actual_leaf));
         if (rc == 0) {
             memset(&ino_st, 0, sizeof(ino_st));
             retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
             if (retval == 0) {
-                ext4_fill_stat_from_inode(ctx, ino, &ino_st, leaf, out_st);
+                ext4_fill_stat_from_inode(ctx, ino, &ino_st, actual_leaf, out_st);
+                if (out_leaf && out_leaf_sz > 0) {
+                    strcpy_s(out_leaf, out_leaf_sz, actual_leaf);
+                }
             } else {
                 rc = ext4_errcode_to_errno(retval);
             }
@@ -165,6 +168,10 @@ int ext4_vfs_lower_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
     return rc;
+}
+
+int ext4_vfs_lower_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
+    return ext4_vfs_lower_stat_with_name(ctx, path, out_st, NULL, 0);
 }
 
 int ext4_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
