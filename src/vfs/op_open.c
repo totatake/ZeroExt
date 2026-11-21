@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../extent/extent_map.h"
 #include "../overlay/overlay_vfs.h"
 #include "../trace/perfetto_trace.h"
 #include <errno.h>
@@ -52,5 +53,7 @@ int ext4_vfs_open(ext4_vfs_ctx_t *ctx, const char *path, int writable, ext4_file
 }
 
 void ext4_vfs_close_handle(ext4_file_handle_t *handle) {
+    if (!handle) return;
+    ext4_extent_map_release(handle->cached_extents);
     free(handle);
 }

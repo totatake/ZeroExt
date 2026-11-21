@@ -209,7 +209,9 @@ static int test_trace_vfs_direct_standard_and_overlay(void) {
     TEST_ASSERT(strstr(json, "\"VFS-Reader\"") != NULL);
     TEST_ASSERT(strstr(json, "\"ctx->rwlock wait (S)\"") != NULL);
     TEST_ASSERT(strstr(json, "\"ctx->rwlock hold (S)\"") != NULL);
+    TEST_ASSERT(strstr(json, "\"win32_io.cache_lock wait (S)\"") != NULL);
     TEST_ASSERT(strstr(json, "\"win32_io.cache_lock wait (X)\"") != NULL);
+    TEST_ASSERT(strstr(json, "\"extent_cache.lock wait (S)\"") != NULL);
     TEST_ASSERT(strstr(json, "\"extent_cache.lock wait (X)\"") != NULL);
     TEST_ASSERT(strstr(json, "\"ext2fs_file_read\"") != NULL);
     TEST_ASSERT(strstr(json, "\"ext4_extent_extract\"") != NULL);

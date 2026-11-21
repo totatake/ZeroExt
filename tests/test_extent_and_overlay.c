@@ -438,11 +438,101 @@ static int test_overlay_vfs_and_persistence(void) {
     return 0;
 }
 
+typedef struct handle_reader_arg {
+    ext4_vfs_ctx_t     *ctx;
+    ext4_file_handle_t *handle;
+    int                 tid_idx;
+    int                 err;
+} handle_reader_arg_t;
+
+static DWORD WINAPI handle_reader_worker(LPVOID param) {
+    handle_reader_arg_t *a = (handle_reader_arg_t *)param;
+    uint8_t buf[4096];
+    for (uint64_t iter = 0; iter < 64; iter++) {
+        uint64_t pg = ((iter * 3U + (uint64_t)a->tid_idx) % 16U);
+        uint32_t got = 0;
+        int rc = ext4_vfs_read_handle(a->ctx, a->handle, buf, pg * 4096ULL, sizeof(buf), &got);
+        if (rc != 0 || got != sizeof(buf)) {
+            a->err = rc ? rc : -5;
+            return 1;
+        }
+        for (size_t b = 0; b < sizeof(buf); b++) {
+            uint8_t expected = (uint8_t)((pg + b) & 0xFFU);
+            if (buf[b] != expected) {
+                a->err = -6;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_read_handle_cached_extents(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext2_ino_t ino = 0;
+    ext4_file_handle_t *h = NULL;
+    uint8_t page[4096];
+    uint32_t w = 0;
+    handle_reader_arg_t args[4];
+    HANDLE threads[4];
+
+    test_make_temp_path(img_path, sizeof(img_path), "ext_handle.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "EXTHDL"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/data.bin", 0, 0644, 0, &ino));
+    for (uint32_t pg = 0; pg < 16; pg++) {
+        for (size_t b = 0; b < sizeof(page); b++) page[b] = (uint8_t)((pg + b) & 0xFFU);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, page, (uint64_t)pg * 4096ULL, sizeof(page), 0, &w, NULL));
+        TEST_ASSERT_EQ_INT(sizeof(page), w);
+    }
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    /* Mount strictly Read-Only with Direct I/O ON (default) */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/data.bin", 0, &h));
+    TEST_ASSERT(h != NULL);
+    TEST_ASSERT(h->cached_extents == NULL);
+
+    for (int i = 0; i < 4; i++) {
+        args[i].ctx = ctx;
+        args[i].handle = h;
+        args[i].tid_idx = i;
+        args[i].err = 0;
+        threads[i] = CreateThread(NULL, 0, handle_reader_worker, &args[i], 0, NULL);
+        TEST_ASSERT(threads[i] != NULL);
+    }
+    WaitForMultipleObjects(4, threads, TRUE, INFINITE);
+    for (int i = 0; i < 4; i++) {
+        CloseHandle(threads[i]);
+        TEST_ASSERT_EQ_INT(0, args[i].err);
+    }
+    TEST_ASSERT(h->cached_extents != NULL);
+
+    ext4_vfs_close_handle(h);
+    ext4_vfs_unmount(ctx);
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_extent_and_overlay(void) {
     int suite_failures = 0;
     printf("\n=== Suite: extent_and_overlay ===\n");
     RUN_TEST(test_direct_extent_deep_tree_and_holes);
     RUN_TEST(test_extent_indirect_uninit_and_inline);
     RUN_TEST(test_overlay_vfs_and_persistence);
+    RUN_TEST(test_read_handle_cached_extents);
     return suite_failures;
 }

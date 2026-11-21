@@ -244,11 +244,117 @@ static int test_overlapped_concurrent_pread(void) {
     return 0;
 }
 
+typedef struct sharded_cache_worker_arg {
+    io_channel io;
+    uint32_t   seed;
+    int        err;
+} sharded_cache_worker_arg_t;
+
+static DWORD WINAPI sharded_cache_reader_worker(LPVOID param) {
+    sharded_cache_worker_arg_t *arg = (sharded_cache_worker_arg_t *)param;
+    uint8_t buf[4096];
+    uint32_t s = arg->seed;
+
+    for (int iter = 0; iter < 1024; iter++) {
+        uint32_t pg;
+        errcode_t rc;
+        s = s * 1664525U + 1013904223U;
+        pg = (s >> 8) % 256U;
+        rc = io_channel_read_blk64(arg->io, (unsigned long long)pg, 1, buf);
+        if (rc != 0) {
+            arg->err = (int)rc;
+            return 1;
+        }
+        for (size_t b = 0; b < sizeof(buf); b++) {
+            uint8_t expected = (uint8_t)(((pg * 41U) + b) & 0xFFU);
+            if (buf[b] != expected) {
+                arg->err = -3;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_sharded_cache_concurrent_eviction_and_invalidate(void) {
+    char path[MAX_PATH];
+    win32_io_config_t cfg;
+    io_channel io = NULL;
+    FILE *fp;
+    uint8_t page[4096];
+    sharded_cache_worker_arg_t args[8];
+    HANDLE threads[8];
+    win32_io_stats_t stats;
+    uint8_t patch[4096];
+
+    test_make_temp_path(path, sizeof(path), "io_sharded_cache.img");
+    fp = fopen(path, "wb");
+    TEST_ASSERT(fp != NULL);
+    for (uint32_t p = 0; p < 256; p++) {
+        for (size_t b = 0; b < sizeof(page); b++) {
+            page[b] = (uint8_t)(((p * 41U) + b) & 0xFFU);
+        }
+        TEST_ASSERT_EQ_INT(sizeof(page), fwrite(page, 1, sizeof(page), fp));
+    }
+    fclose(fp);
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sector_size = 4096;
+    cfg.max_cache_blocks = 64; /* 2 blocks per shard -> forces heavy CLOCK eviction across 256 pages */
+    cfg.read_only = 0;
+    win32_io_set_next_config(&cfg);
+
+    TEST_ASSERT_EQ_INT(0, io_channel_open(win32_io_manager, path, IO_FLAG_RW, &io));
+    TEST_ASSERT_EQ_INT(0, io_channel_set_blksize(io, 4096));
+
+    for (int i = 0; i < 8; i++) {
+        args[i].io = io;
+        args[i].seed = 0x517CC1B7U + (uint32_t)i * 1013U;
+        args[i].err = 0;
+        threads[i] = CreateThread(NULL, 0, sharded_cache_reader_worker, &args[i], 0, NULL);
+        TEST_ASSERT(threads[i] != NULL);
+    }
+    WaitForMultipleObjects(8, threads, TRUE, INFINITE);
+    for (int i = 0; i < 8; i++) {
+        CloseHandle(threads[i]);
+        TEST_ASSERT_EQ_INT(0, args[i].err);
+    }
+
+    win32_io_get_stats(io, &stats);
+    TEST_ASSERT(stats.cache_hits > 0);
+    TEST_ASSERT(stats.cache_misses > 0);
+    TEST_ASSERT(stats.bytes_read > 0);
+
+    /* Coherency after overwrite and multi-byte write invalidation */
+    TEST_ASSERT_EQ_INT(0, io_channel_read_blk64(io, 5, 1, page));
+    memset(patch, 0xE7, sizeof(patch));
+    TEST_ASSERT_EQ_INT(0, io_channel_write_blk64(io, 5, 1, patch));
+    memset(page, 0, sizeof(page));
+    TEST_ASSERT_EQ_INT(0, io_channel_read_blk64(io, 5, 1, page));
+    for (size_t b = 0; b < sizeof(page); b++) TEST_ASSERT_EQ_INT(0xE7, page[b]);
+
+    {
+        uint8_t byte_patch[16];
+        memset(byte_patch, 0x19, sizeof(byte_patch));
+        TEST_ASSERT_EQ_INT(0, io_channel_write_byte(io, 5UL * 4096UL + 128UL, (int)sizeof(byte_patch), byte_patch));
+        memset(page, 0, sizeof(page));
+        TEST_ASSERT_EQ_INT(0, io_channel_read_blk64(io, 5, 1, page));
+        for (size_t b = 0; b < 128; b++) TEST_ASSERT_EQ_INT(0xE7, page[b]);
+        for (size_t b = 128; b < 144; b++) TEST_ASSERT_EQ_INT(0x19, page[b]);
+        for (size_t b = 144; b < sizeof(page); b++) TEST_ASSERT_EQ_INT(0xE7, page[b]);
+    }
+
+    io_channel_close(io);
+    DeleteFileA(path);
+    return 0;
+}
+
 int run_suite_win32_io(void) {
     int suite_failures = 0;
     RUN_TEST(test_4kb_rmw_and_alignment);
     RUN_TEST(test_partition_boundary_guard);
     RUN_TEST(test_read_only_and_lru_cache);
     RUN_TEST(test_overlapped_concurrent_pread);
+    RUN_TEST(test_sharded_cache_concurrent_eviction_and_invalidate);
     return suite_failures;
 }

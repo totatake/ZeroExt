@@ -89,12 +89,13 @@ typedef struct ext4_volume_stat {
 } ext4_volume_stat_t;
 
 typedef struct ext4_file_handle {
-    ext2_ino_t ino;
-    int        is_dir;
-    int        open_writable;
-    int        delete_on_close;
-    uint32_t   create_options;
-    char       path[1024];
+    ext2_ino_t               ino;
+    int                      is_dir;
+    int                      open_writable;
+    int                      delete_on_close;
+    uint32_t                 create_options;
+    struct ext4_extent_map  *cached_extents;
+    char                     path[1024];
 } ext4_file_handle_t;
 
 typedef int (*ext4_readdir_cb)(const char *name, const ext4_stat_t *st, void *user_ctx);
@@ -132,6 +133,8 @@ void ext4_vfs_close_handle(ext4_file_handle_t *handle);
 /* File read/write (op_read.c / op_write.c) */
 int ext4_vfs_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t offset,
                   uint32_t length, uint32_t *out_read);
+int ext4_vfs_read_handle(ext4_vfs_ctx_t *ctx, ext4_file_handle_t *handle, void *buf,
+                         uint64_t offset, uint32_t length, uint32_t *out_read);
 int ext4_vfs_write(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, uint64_t offset,
                    uint32_t length, int write_to_eof, uint32_t *out_written, uint64_t *out_new_size);
 

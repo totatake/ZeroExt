@@ -363,7 +363,7 @@ static NTSTATUS FspRead_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PVO
     *PBytesTransferred = 0;
     if (Length == 0) return STATUS_SUCCESS;
 
-    rc = ext4_vfs_read(ctx, handle->ino, Buffer, Offset, Length, &got);
+    rc = ext4_vfs_read_handle(ctx, handle, Buffer, Offset, Length, &got);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
     if (got == 0) return STATUS_END_OF_FILE;
 

@@ -3,29 +3,39 @@
 #include "../io/win32_io.h"
 #include "../trace/perfetto_trace.h"
 #include <errno.h>
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define EXTENT_CACHE_HASH_BUCKETS 4096U
+#define EXTENT_CACHE_SHARDS        16U
+#define EXTENT_CACHE_SHARD_BUCKETS 256U /* 16 * 256 = 4096 total buckets */
 
 typedef struct extent_cache_node {
     ext2_ino_t                 ino;
     ext4_extent_map_t         *map;
+    volatile LONG              referenced;
     struct extent_cache_node  *hash_next;
     struct extent_cache_node  *lru_prev;
     struct extent_cache_node  *lru_next;
 } extent_cache_node_t;
 
-struct ext4_extent_cache {
+#pragma warning(push)
+#pragma warning(disable: 4324)
+typedef struct __declspec(align(64)) ext4_extent_cache_shard {
     SRWLOCK               lock;
     size_t                max_entries;
     size_t                count;
-    uint64_t              hits;
-    uint64_t              misses;
-    extent_cache_node_t  *buckets[EXTENT_CACHE_HASH_BUCKETS];
+    volatile LONG64       hits;
+    volatile LONG64       misses;
+    extent_cache_node_t  *buckets[EXTENT_CACHE_SHARD_BUCKETS];
     extent_cache_node_t  *lru_head;
     extent_cache_node_t  *lru_tail;
+} ext4_extent_cache_shard_t;
+
+struct __declspec(align(64)) ext4_extent_cache {
+    ext4_extent_cache_shard_t shards[EXTENT_CACHE_SHARDS];
 };
+#pragma warning(pop)
 
 static int extent_append_run(ext4_extent_map_t *map, uint64_t logical_off,
                              uint64_t physical_off, uint64_t length, int is_uninit) {
@@ -371,40 +381,49 @@ int ext4_extent_pread(io_channel io, const ext4_extent_map_t *map, void *buf,
     return rc;
 }
 
-/* ---- Thread-safe Extent Map LRU Cache ---- */
+/* ---- Thread-safe Sharded Extent Map CLOCK Cache ---- */
 
-static void cache_lru_unlink(ext4_extent_cache_t *c, extent_cache_node_t *n) {
+static __inline uint32_t ext_shard_idx(ext2_ino_t ino) {
+    return (uint32_t)(ino & (EXTENT_CACHE_SHARDS - 1U));
+}
+
+static __inline uint32_t ext_shard_bkt(ext2_ino_t ino) {
+    return (uint32_t)((ino >> 4) & (EXTENT_CACHE_SHARD_BUCKETS - 1U));
+}
+
+static void cache_lru_unlink(ext4_extent_cache_shard_t *sh, extent_cache_node_t *n) {
     if (n->lru_prev) n->lru_prev->lru_next = n->lru_next;
-    else c->lru_head = n->lru_next;
+    else sh->lru_head = n->lru_next;
     if (n->lru_next) n->lru_next->lru_prev = n->lru_prev;
-    else c->lru_tail = n->lru_prev;
+    else sh->lru_tail = n->lru_prev;
     n->lru_prev = NULL;
     n->lru_next = NULL;
 }
 
-static void cache_lru_push_front(ext4_extent_cache_t *c, extent_cache_node_t *n) {
+static void cache_lru_push_front(ext4_extent_cache_shard_t *sh, extent_cache_node_t *n) {
     n->lru_prev = NULL;
-    n->lru_next = c->lru_head;
-    if (c->lru_head) c->lru_head->lru_prev = n;
-    c->lru_head = n;
-    if (!c->lru_tail) c->lru_tail = n;
+    n->lru_next = sh->lru_head;
+    if (sh->lru_head) sh->lru_head->lru_prev = n;
+    sh->lru_head = n;
+    if (!sh->lru_tail) sh->lru_tail = n;
 }
 
-static void cache_hash_remove(ext4_extent_cache_t *c, extent_cache_node_t *n) {
-    uint32_t bkt = (uint32_t)(n->ino % EXTENT_CACHE_HASH_BUCKETS);
-    extent_cache_node_t **pp = &c->buckets[bkt];
+static void cache_hash_remove(ext4_extent_cache_shard_t *sh, extent_cache_node_t *n) {
+    uint32_t bkt = ext_shard_bkt(n->ino);
+    extent_cache_node_t **pp = &sh->buckets[bkt];
     while (*pp) {
         if (*pp == n) {
             *pp = n->hash_next;
+            n->hash_next = NULL;
             break;
         }
         pp = &((*pp)->hash_next);
     }
 }
 
-static extent_cache_node_t *cache_find_locked(ext4_extent_cache_t *c, ext2_ino_t ino) {
-    uint32_t bkt = (uint32_t)(ino % EXTENT_CACHE_HASH_BUCKETS);
-    extent_cache_node_t *n = c->buckets[bkt];
+static extent_cache_node_t *cache_find_locked(ext4_extent_cache_shard_t *sh, ext2_ino_t ino) {
+    uint32_t bkt = ext_shard_bkt(ino);
+    extent_cache_node_t *n = sh->buckets[bkt];
     while (n) {
         if (n->ino == ino) return n;
         n = n->hash_next;
@@ -412,63 +431,90 @@ static extent_cache_node_t *cache_find_locked(ext4_extent_cache_t *c, ext2_ino_t
     return NULL;
 }
 
+static void collect_extent_cache_totals(const ext4_extent_cache_t *c,
+                                        uint64_t *out_hits, uint64_t *out_misses) {
+    uint64_t h = 0, m = 0;
+    for (uint32_t i = 0; i < EXTENT_CACHE_SHARDS; i++) {
+        h += (uint64_t)InterlockedCompareExchange64((LONG64 *)&c->shards[i].hits, 0, 0);
+        m += (uint64_t)InterlockedCompareExchange64((LONG64 *)&c->shards[i].misses, 0, 0);
+    }
+    *out_hits = h;
+    *out_misses = m;
+}
+
 ext4_extent_cache_t *ext4_extent_cache_create(size_t max_entries) {
-    ext4_extent_cache_t *c = (ext4_extent_cache_t *)calloc(1, sizeof(*c));
+    ext4_extent_cache_t *c = (ext4_extent_cache_t *)_aligned_malloc(sizeof(*c), 64);
+    size_t total;
+    size_t base, rem;
     if (!c) return NULL;
-    InitializeSRWLock(&c->lock);
-    c->max_entries = max_entries ? max_entries : 4096U;
+    memset(c, 0, sizeof(*c));
+    total = max_entries ? max_entries : 4096U;
+    base = total / EXTENT_CACHE_SHARDS;
+    rem = total % EXTENT_CACHE_SHARDS;
+    for (uint32_t i = 0; i < EXTENT_CACHE_SHARDS; i++) {
+        InitializeSRWLock(&c->shards[i].lock);
+        c->shards[i].max_entries = base + (i < rem ? 1U : 0U);
+        if (c->shards[i].max_entries == 0U) {
+            c->shards[i].max_entries = 1U;
+        }
+    }
     return c;
 }
 
 void ext4_extent_cache_clear(ext4_extent_cache_t *cache) {
-    extent_cache_node_t *cur;
-    ztrace_lock_guard_t lg;
     if (!cache) return;
-    lg = ztrace_srw_acquire_exclusive(&cache->lock, "extent_cache.lock wait (X)", "extent_cache.lock hold (X)");
-    cur = cache->lru_head;
-    while (cur) {
-        extent_cache_node_t *next = cur->lru_next;
-        ext4_extent_map_release(cur->map);
-        free(cur);
-        cur = next;
+    for (uint32_t i = 0; i < EXTENT_CACHE_SHARDS; i++) {
+        ext4_extent_cache_shard_t *sh = &cache->shards[i];
+        extent_cache_node_t *cur;
+        ztrace_lock_guard_t lg = ztrace_srw_acquire_exclusive(
+            &sh->lock, "extent_cache.lock wait (X)", "extent_cache.lock hold (X)");
+        cur = sh->lru_head;
+        memset(sh->buckets, 0, sizeof(sh->buckets));
+        sh->lru_head = NULL;
+        sh->lru_tail = NULL;
+        sh->count = 0;
+        ztrace_srw_release_exclusive(&sh->lock, &lg);
+        while (cur) {
+            extent_cache_node_t *next = cur->lru_next;
+            ext4_extent_map_release(cur->map);
+            free(cur);
+            cur = next;
+        }
     }
-    memset(cache->buckets, 0, sizeof(cache->buckets));
-    cache->lru_head = NULL;
-    cache->lru_tail = NULL;
-    cache->count = 0;
-    ztrace_srw_release_exclusive(&cache->lock, &lg);
 }
 
 void ext4_extent_cache_destroy(ext4_extent_cache_t *cache) {
     if (!cache) return;
     ext4_extent_cache_clear(cache);
-    free(cache);
+    _aligned_free(cache);
 }
 
 ext4_extent_map_t *ext4_extent_cache_get(ext4_extent_cache_t *cache, ext2_ino_t ino) {
+    ext4_extent_cache_shard_t *sh;
     extent_cache_node_t *n;
     ext4_extent_map_t *map = NULL;
-    uint64_t hits = 0, misses = 0;
+    uint64_t sh_cnt;
     ztrace_lock_guard_t lg;
     if (!cache || ino == 0) return NULL;
 
-    lg = ztrace_srw_acquire_exclusive(&cache->lock, "extent_cache.lock wait (X)", "extent_cache.lock hold (X)");
-    n = cache_find_locked(cache, ino);
+    sh = &cache->shards[ext_shard_idx(ino)];
+    lg = ztrace_srw_acquire_shared(&sh->lock, "extent_cache.lock wait (S)", "extent_cache.lock hold (S)");
+    n = cache_find_locked(sh, ino);
     if (n) {
-        cache_lru_unlink(cache, n);
-        cache_lru_push_front(cache, n);
         map = n->map;
         ext4_extent_map_retain(map);
-        cache->hits++;
-    } else {
-        cache->misses++;
+        if (!n->referenced) n->referenced = 1;
     }
-    hits = cache->hits;
-    misses = cache->misses;
-    ztrace_srw_release_exclusive(&cache->lock, &lg);
+    ztrace_srw_release_shared(&sh->lock, &lg);
+
+    sh_cnt = map
+        ? (uint64_t)InterlockedIncrement64(&sh->hits)
+        : (uint64_t)InterlockedIncrement64(&sh->misses);
 
     if (ztrace_is_enabled()) {
-        if (!map || hits == 1 || (hits & 63ULL) == 0ULL) {
+        if (!map || sh_cnt == 1 || (sh_cnt & 63ULL) == 0ULL) {
+            uint64_t hits = 0, misses = 0;
+            collect_extent_cache_totals(cache, &hits, &misses);
             ztrace_record_counter("extent", "Extent Cache", hits, misses, 0, ZTRACE_ARGS_CACHE_COUNTER);
         }
     }
@@ -476,58 +522,103 @@ ext4_extent_map_t *ext4_extent_cache_get(ext4_extent_cache_t *cache, ext2_ino_t 
 }
 
 void ext4_extent_cache_put(ext4_extent_cache_t *cache, ext4_extent_map_t *map) {
+    ext4_extent_cache_shard_t *sh;
     extent_cache_node_t *n;
+    extent_cache_node_t *pre_node = NULL;
+    ext4_extent_map_t *old_map = NULL;
     ztrace_lock_guard_t lg;
     if (!cache || !map || map->ino == 0) return;
 
-    lg = ztrace_srw_acquire_exclusive(&cache->lock, "extent_cache.lock wait (X)", "extent_cache.lock hold (X)");
-    n = cache_find_locked(cache, map->ino);
-    if (n) {
-        ext4_extent_map_release(n->map);
-        ext4_extent_map_retain(map);
-        n->map = map;
-        cache_lru_unlink(cache, n);
-        cache_lru_push_front(cache, n);
-        ztrace_srw_release_exclusive(&cache->lock, &lg);
-        return;
+    sh = &cache->shards[ext_shard_idx(map->ino)];
+    if (sh->count < sh->max_entries) {
+        pre_node = (extent_cache_node_t *)calloc(1, sizeof(*pre_node));
     }
 
-    if (cache->count >= cache->max_entries && cache->lru_tail) {
-        extent_cache_node_t *victim = cache->lru_tail;
-        cache_lru_unlink(cache, victim);
-        cache_hash_remove(cache, victim);
-        ext4_extent_map_release(victim->map);
-        free(victim);
-        cache->count--;
+    for (;;) {
+        lg = ztrace_srw_acquire_exclusive(&sh->lock, "extent_cache.lock wait (X)", "extent_cache.lock hold (X)");
+        n = cache_find_locked(sh, map->ino);
+        if (n) {
+            old_map = n->map;
+            ext4_extent_map_retain(map);
+            n->map = map;
+            n->referenced = 1;
+            cache_lru_unlink(sh, n);
+            cache_lru_push_front(sh, n);
+            ztrace_srw_release_exclusive(&sh->lock, &lg);
+            break;
+        }
+
+        if (sh->count >= sh->max_entries && sh->lru_tail) {
+            size_t scanned = 0;
+            extent_cache_node_t *victim = sh->lru_tail;
+            while (victim && victim->referenced && scanned < sh->count) {
+                victim->referenced = 0;
+                cache_lru_unlink(sh, victim);
+                cache_lru_push_front(sh, victim);
+                victim = sh->lru_tail;
+                scanned++;
+            }
+            if (victim) {
+                uint32_t bkt = ext_shard_bkt(map->ino);
+                cache_lru_unlink(sh, victim);
+                cache_hash_remove(sh, victim);
+                old_map = victim->map;
+                victim->ino = map->ino;
+                victim->map = map;
+                victim->referenced = 0;
+                ext4_extent_map_retain(map);
+                victim->hash_next = sh->buckets[bkt];
+                sh->buckets[bkt] = victim;
+                cache_lru_push_front(sh, victim);
+            }
+            ztrace_srw_release_exclusive(&sh->lock, &lg);
+            break;
+        }
+
+        if (!pre_node) {
+            ztrace_srw_release_exclusive(&sh->lock, &lg);
+            pre_node = (extent_cache_node_t *)calloc(1, sizeof(*pre_node));
+            if (!pre_node) return;
+            continue;
+        }
+
+        {
+            uint32_t bkt = ext_shard_bkt(map->ino);
+            pre_node->ino = map->ino;
+            pre_node->map = map;
+            pre_node->referenced = 0;
+            ext4_extent_map_retain(map);
+            pre_node->hash_next = sh->buckets[bkt];
+            sh->buckets[bkt] = pre_node;
+            cache_lru_push_front(sh, pre_node);
+            sh->count++;
+            pre_node = NULL;
+        }
+        ztrace_srw_release_exclusive(&sh->lock, &lg);
+        break;
     }
 
-    n = (extent_cache_node_t *)calloc(1, sizeof(*n));
-    if (n) {
-        uint32_t bkt = (uint32_t)(map->ino % EXTENT_CACHE_HASH_BUCKETS);
-        n->ino = map->ino;
-        n->map = map;
-        ext4_extent_map_retain(map);
-        n->hash_next = cache->buckets[bkt];
-        cache->buckets[bkt] = n;
-        cache_lru_push_front(cache, n);
-        cache->count++;
-    }
-    ztrace_srw_release_exclusive(&cache->lock, &lg);
+    ext4_extent_map_release(old_map);
+    free(pre_node);
 }
 
 void ext4_extent_cache_invalidate(ext4_extent_cache_t *cache, ext2_ino_t ino) {
+    ext4_extent_cache_shard_t *sh;
     extent_cache_node_t *n;
     ztrace_lock_guard_t lg;
     if (!cache || ino == 0) return;
 
-    lg = ztrace_srw_acquire_exclusive(&cache->lock, "extent_cache.lock wait (X)", "extent_cache.lock hold (X)");
-    n = cache_find_locked(cache, ino);
+    sh = &cache->shards[ext_shard_idx(ino)];
+    lg = ztrace_srw_acquire_exclusive(&sh->lock, "extent_cache.lock wait (X)", "extent_cache.lock hold (X)");
+    n = cache_find_locked(sh, ino);
     if (n) {
-        cache_lru_unlink(cache, n);
-        cache_hash_remove(cache, n);
+        cache_lru_unlink(sh, n);
+        cache_hash_remove(sh, n);
+        sh->count--;
+    }
+    ztrace_srw_release_exclusive(&sh->lock, &lg);
+    if (n) {
         ext4_extent_map_release(n->map);
         free(n);
-        cache->count--;
     }
-    ztrace_srw_release_exclusive(&cache->lock, &lg);
 }
