@@ -1,126 +1,128 @@
 # `ZeroExt` (`zeroext`)
 
-Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高速 ext2 / ext3 / ext4 ユーザー空間ファイルシステムドライバ、管理 CLI ツール（`zeroext.exe`）、およびデスクトップ GUI マウントマネージャー（`ZeroExtGui.exe`）です。
+**Language:** English | [日本語](README.ja.md)
 
-> **なぜ作ったのか**: Linux パーティション上に置いた巨大な AI モデル（GGUF / Safetensors 等）や開発データを **複製せず・ext4 を壊さず・BSOD リスクゼロのユーザー空間動作のまま、Windows Native NTFS 並みの速度で共有する** ために設計されています。
+A high-performance **ext2 / ext3 / ext4** user-space filesystem driver, CLI tool (`zeroext.exe`), and desktop GUI mount manager (`ZeroExtGui.exe`) for Windows 11 / 10, built on upstream **`libext2fs` (`e2fsprogs`) + `WinFsp`**.
 
-## 他手法との違い・実測ハイライト
+> **Why ZeroExt?** It is designed to share large AI models (GGUF / Safetensors, etc.) and development datasets stored on Linux partitions **directly with Windows at Native NTFS-class speed—without copying files, without risking ext4 corruption, and with zero BSOD risk** in user space.
 
-| 方式 | マウント形態 | Warm 読取 (`1MB` / `4KB Rnd`) | Cold 実 SSD (`1MB`) | 現代 ext4 対応 | BSOD リスク | 非破壊書込 |
+## Comparison & Benchmark Highlights
+
+| Approach | Mount Style | Warm Read (`1MB` / `4KB Rnd`) | Cold NVMe (`1MB`) | Modern ext4 | BSOD Risk | Non-Destructive Write |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt` (既定 RO / DIO)** | **◎ (`M:` 等)** | **`10,524` / `1,017 MB/s`**<br><sub>(`Native NTFS` 比 `1.01x〜1.04x`)</sub> | **`1,551 MB/s`** | **◎ (`libext2fs`)** | **ゼロ** | **◎ (`--overlay`)** |
-| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost`) | `198` / `17.6 MB/s`<br><sub>(`ZeroExt` 比 `1/53〜1/69`)</sub> | `168 MB/s` | ◎ | 低（VM 要） | × |
-| **旧来のカーネル FSD (`Ext2Fsd` 等)** | ◎ | 高速 | 高速 | △〜× | **高** | × |
-| **商用ドライバ / 読取ビューア** | ◎ / × | 高速 / 複製要 | 高速 / 複製要 | ◎ / ○ | 中 / ゼロ | × |
+| **`ZeroExt` (Default RO / DIO)** | **Drive (`M:` etc.)** | **`10,524` / `1,017 MB/s`**<br><sub>(`1.01x–1.04x` vs Native NTFS)</sub> | **`1,551 MB/s`** | **Yes (`libext2fs`)** | **Zero** | **Yes (`--overlay`)** |
+| **WSL2 (`wsl --mount` + 9P)** | UNC (`\\wsl.localhost`) | `198` / `17.6 MB/s`<br><sub>(`1/53–1/69` of `ZeroExt`)</sub> | `168 MB/s` | Yes | Low (VM req.) | No |
+| **Legacy Kernel FSD (`Ext2Fsd`, etc.)** | Drive | Fast | Fast | Partial / Legacy | **High** | No |
+| **Commercial Drivers / Viewers** | Drive / Viewer | Fast / Copy req. | Fast / Copy req. | Yes / Partial | Medium / Zero | No |
 
-### 速さのしくみ（2-Tier I/O バイパス）
+### How It Achieves This Speed (2-Tier I/O Bypass)
 
 ```mermaid
 flowchart LR
-    App["Windows アプリ / mmap (LM Studio / llama.cpp 等)"] --> Sys["winfsp-x64.sys (MS 署名済 FSD)"]
-    Sys -->|"2回目以降 / RO FileInfoTimeout=INFINITE"| Hot["NT Cache Manager (CcCopyRead)\nユーザー空間バイパス: 10.5 GB/s / 260K IOPS"]
-    Sys -->|"初回 / Unbuffered"| Cold["Handle Extent 二分探索 O(log N)\n+ FILE_FLAG_OVERLAPPED 並列直読: 1.55 GB/s"]
-    App -.->|"比較: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM 境界 RPC 往復\n198 MB/s (4KB Rnd 17.6 MB/s)"]
+    App["Windows App / mmap (LM Studio / llama.cpp / etc.)"] --> Sys["winfsp-x64.sys (MS-Signed FSD)"]
+    Sys -->|"Warm / RO FileInfoTimeout=INFINITE"| Hot["NT Cache Manager (CcCopyRead)\nUser-space bypass: 10.5 GB/s / 260K IOPS"]
+    Sys -->|"Cold / Unbuffered"| Cold["Handle Extent Binary Search O(log N)\n+ FILE_FLAG_OVERLAPPED Parallel Direct Read: 1.55 GB/s"]
+    App -.->|"Compare: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM Boundary RPC Roundtrips\n198 MB/s (4KB Rnd 17.6 MB/s)"]
 ```
 
-- 技術的な目新しさ・詳細シーケンス比較・全ベンチマーク解説は **[ZeroExt 技術解説・既存手法比較・ユースケースガイド](docs/why_zeroext.md)** および **[性能評価報告書](docs/performance_evaluation.md)** を参照してください。
+- For architectural novelty, sequence diagrams, and full benchmark details, see **[Why ZeroExt: Architecture Comparison & Use Cases](docs/why_zeroext.md)** and **[Performance Evaluation Report](docs/performance_evaluation.md)** (Japanese docs).
 
-## 主なユースケース
+## Key Use Cases
 
-- **デュアルブートでの巨大 AI モデル共有**: Linux 側 ext4 に配置した 10〜100 GB 級の GGUF / Safetensors を Windows 側の LM Studio / `llama.cpp` / ComfyUI から複製なしで高速 `mmap` 読込（`--overlay` で設定・キャッシュ書込も Linux 側を汚さず分離）。
-- **ML データセット / 動画・3D アセット共有**: 大量ファイルを含むフォルダも 16 シャード正/負 Dentry キャッシュと `FspGetDirInfoByName` により軽快に走査・共有。
-- **Linux 外付け NVMe / microSD 保守・救出**: Raspberry Pi / Jetson / Steam Deck / Linux サーバーのディスクを接続し、Dirty Journal 検査＋Read-Only マウントで安全に救出。
-- **組込み・VM イメージ (`.img`) の非破壊検証**: `--overlay` で差分だけ NTFS 上に保持しつつ動作確認（WinFsp なし環境では GUI / CLI のオフライン閲覧も利用可）。
-- **停止済み WSL2 (`ext4.vhdx`) の高速検索**: `\\wsl.localhost`（`17.6 MB/s`）を回避し、ネイティブツールから最大 57 倍以上のランダム応答で参照可能。
+- **Dual-Boot Large AI Model Sharing**: `mmap` and load 10–100 GB GGUF / Safetensors models directly from your Linux ext4 partition into Windows LM Studio / `llama.cpp` / ComfyUI with zero duplication (pair with `--overlay` to isolate Windows-side caches/configs without touching ext4).
+- **ML Datasets / Video & 3D Asset Sharing**: Traverse large directories smoothly via a 16-shard positive/negative dentry cache and `FspGetDirInfoByName`.
+- **External Linux NVMe / microSD Recovery**: Inspect JBD2 dirty journals and mount read-only to safely recover data from Raspberry Pi / Jetson / Steam Deck / Linux server drives.
+- **Non-Destructive Embedded / VM Image (`.img`) Inspection**: Test modifications in an NTFS `--overlay` while keeping the base `.img` untouched (offline CLI/GUI browsing also works without WinFsp).
+- **Fast Access to Stopped WSL2 (`ext4.vhdx`) Images**: Bypass `\\wsl.localhost` (`17.6 MB/s`) and access files up to 57x+ faster on random reads from native Windows tools.
 
-各ユースケースの具体的なコマンド例や注意点は [docs/why_zeroext.md](docs/why_zeroext.md#3-有効に利用できる実践ユースケース) を参照してください。
+See [docs/why_zeroext.md](docs/why_zeroext.md#3-有効に利用できる実践ユースケース) for concrete command examples and caveats.
 
-## 特徴
+## Features
 
-- **本家 `e2fsprogs` (`libext2fs`) 採用**: 64bit ブロック番号、ext4 エクステント (`EXT4_EXTENTS_FL`)、256B+ iノード（ナノ秒タイムスタンプ・`crtime`）、`metadata_csum` (CRC32C)、HTree ディレクトリに対応。
-- **2-Tier 高速・安全 WinFsp I/O パイプライン**: Read-Only マウント時は既定で `FileInfoTimeout = INFINITE` により Windows NT Cache Manager (`CcCopyRead`) / Memory Manager (`Mm`) と完全協調（`--file-info-timeout` で変更可）。`PassQueryDirectoryFileName = 1`＋`FspGetDirInfoByName`＋早期 `Marker` スキップ＋統合 Open/Write Stat によりメタデータ経路も高速化。
-- **ダイレクト・エクステント I/O エンジン（RO / Overlay 時既定有効、`--no-direct-io` で無効化可）**: 開いたファイルハンドル (`ext4_file_handle_t`) および 16 シャード Shared ロック式 `extent_cache` にエクステントマップを保持し、`O(log N)` 二分探索＋ロックレス物理セクタ直読 (`win32_io_pread_direct`) を実行（`--rw` モードでは整合性維持のため自動的に無効化）。
-- **非破壊 NTFS Overlay マウント (`--overlay`)**: Lower 側の ext4 を厳密 Read-Only に保ったまま NTFS ディレクトリを上層に重ね合わせ、Copy-up 書込・新規作成・ホワイトアウト削除を透過的に実現（`.wh.__ext4_lower_id` による別 Lower 誤流用ガード付き）。
-- **Windows ネイティブ非同期 I/O マネージャ (`win32_io_manager`)**:
-  - `CreateFileW(FILE_FLAG_OVERLAPPED)`＋`FILE_SKIP_SET_EVENT_ON_HANDLE`＋FLS イベント再利用による真の並列非同期 I/O（`FileObject->Lock` 直列化を解消）
-  - 4KB セクタ境界の自動 Read-Modify-Write (RMW) と GPT / MBR / EBR パーティション境界ガード
-  - 32 シャード（64B 整列・`SRWLOCK` Shared 参照・CLOCK インプレース置換）ブロックキャッシュ＋16 シャード（世代エポック一括無効化付き）正／負 Dentry キャッシュ
-- **Dirty Journal 安全保護**: マウント前に `EXT3_FEATURE_INCOMPAT_RECOVER` / `EXT2_ERROR_FS` / JBD2 スーパーブロック (`s_start != 0`) を検査し、未再生ジャーナルが残るボリュームへの不用意な RW マウントを自動抑止（または Read-Only 自動フォールバック）。
-- **Perfetto 性能トレース出力 (`--trace`)**: 通常時は単一分岐によるゼロオーバーヘッドを維持しつつ、`--trace <output.json>` 指定時のみスレッドローカルリングバッファ（ロックレス記録・`QueryPerformanceCounter` 精度）へ WinFsp コールバック、`SRWLOCK` 待ち／保持時間、Extent／LRU キャッシュヒット、Direct I/O、`ReadFile`/`WriteFile`、Overlay Copy-up/Whiteout を記録し、[Perfetto UI](https://ui.perfetto.dev/) でタイムライン可視化が可能。
-- **Zero-Patch `e2fsprogs` 追従構造**: `third_party/e2fsprogs` への Windows 固有ハックを排除し、`compat/` と `scripts/generate_e2fsprogs_headers.py` へ分離。
+- **Upstream `e2fsprogs` (`libext2fs`)**: Full support for 64-bit block numbers, ext4 extents (`EXT4_EXTENTS_FL`), 256B+ inodes (nanosecond timestamps, `crtime`), `metadata_csum` (CRC32C), and HTree directories.
+- **2-Tier High-Speed WinFsp I/O Pipeline**: Read-only mounts default to `FileInfoTimeout = INFINITE` to cooperate directly with the Windows NT Cache Manager (`CcCopyRead`) and Memory Manager (`Mm`) (configurable via `--file-info-timeout`). Metadata paths are accelerated with `PassQueryDirectoryFileName = 1`, `FspGetDirInfoByName`, early `Marker` skipping, and single-pass Open/Write Stat.
+- **Direct Extent I/O Engine (Default ON for RO / Overlay; disable with `--no-direct-io`)**: Caches file extent maps on open file handles (`ext4_file_handle_t`) and a 16-shard shared-lock `extent_cache`, performing `O(log N)` binary search and lockless physical-sector reads (`win32_io_pread_direct`). Automatically disabled in `--rw` mode for consistency.
+- **Non-Destructive NTFS Overlay Mount (`--overlay`)**: Keeps the lower ext4 volume strictly read-only while transparently redirecting copy-up writes, new files, and whiteout deletions to a Windows NTFS directory (with `.wh.__ext4_lower_id` verification to prevent mismatched lower volumes).
+- **Native Windows Async I/O Manager (`win32_io_manager`)**:
+  - True parallel async I/O via `CreateFileW(FILE_FLAG_OVERLAPPED)`, `FILE_SKIP_SET_EVENT_ON_HANDLE`, and FLS event reuse (eliminating `FileObject->Lock` serialization)
+  - Automatic 4KB sector-boundary Read-Modify-Write (RMW) and GPT / MBR / EBR partition boundary guards
+  - 32-shard (64B-aligned, `SRWLOCK` shared-read, CLOCK in-place eviction) block cache + 16-shard (epoch-based bulk invalidation) positive/negative dentry cache
+- **Dirty Journal Safety Protection**: Inspects `EXT3_FEATURE_INCOMPAT_RECOVER`, `EXT2_ERROR_FS`, and JBD2 superblock (`s_start != 0`) before mounting, preventing unsafe RW mounts on unrecovered journals (or automatically falling back to Read-Only with `--ro-fallback`).
+- **Perfetto Performance Tracing (`--trace`)**: Zero-overhead single-branch fast path when disabled; when `--trace <output.json>` is specified, records WinFsp callbacks, `SRWLOCK` wait/hold durations, Extent/LRU cache hits, Direct I/O, `ReadFile`/`WriteFile`, and Overlay Copy-up/Whiteout spans into lockless thread-local ring buffers (`QueryPerformanceCounter` precision) for visualization in [Perfetto UI](https://ui.perfetto.dev/).
+- **Zero-Patch `e2fsprogs` Integration**: Keeps `third_party/e2fsprogs` free of Windows-specific patches by isolating compatibility shims in `compat/` and `scripts/generate_e2fsprogs_headers.py`.
 
-## ドキュメント
+## Documentation
 
-- **[技術解説・既存手法比較・実践ユースケースガイド (`why_zeroext.md`)](docs/why_zeroext.md)**
-- [要件定義書](docs/requirements.md)
-- [アーキテクチャ設計書・ADR (設計判断記録)](docs/architecture.md)
-- [詳細設計書](docs/detailed_design.md)
-- [テスト報告書・利用ガイド](docs/testing_and_usage.md)
-- [性能評価報告書 (`--direct-io` / NTFS / WSL2 比較)](docs/performance_evaluation.md)
-- [Perfetto トレース定量解析・性能改善計画](docs/perfetto_trace_analysis.md)
-- [今後の構想・ロードマップ](docs/future_roadmap.md)
+*(Most detailed design and evaluation documents are currently written in Japanese.)*
 
-## ビルドとテスト
+- **[Why ZeroExt: Architecture Comparison & Use Cases (`why_zeroext.md`)](docs/why_zeroext.md)**
+- [Requirements Specification](docs/requirements.md)
+- [Architecture & ADRs](docs/architecture.md)
+- [Detailed Design](docs/detailed_design.md)
+- [Testing Report & Usage Guide](docs/testing_and_usage.md)
+- [Performance Evaluation Report (`--direct-io` / NTFS / WSL2)](docs/performance_evaluation.md)
+- [Perfetto Trace Quantitative Analysis & Optimization Plan](docs/perfetto_trace_analysis.md)
+- [Future Roadmap](docs/future_roadmap.md)
 
-Visual Studio 2022 BuildTools 環境で以下を実行します（ビルド時に WinFsp SDK の事前導入は不要です。`.NET 10 SDK` が導入されている環境では GUI アプリ `ZeroExtGui.exe` も自動ビルド・テストされます）：
+## Building & Testing
+
+Run the following on Windows with Visual Studio 2022 (BuildTools / Community / Professional / Enterprise) and Python 3.x (no WinFsp SDK installation is required at build time; if `.NET 10 SDK` is installed, `ZeroExtGui.exe` and `ZeroExt.Gui.Tests` are built and tested automatically):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
 ```
 
-GUI のみをビルド・テストする場合は以下を実行します：
+To build and test the GUI only:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_gui.ps1
 ```
 
-メモリ破壊・メモリリーク・排他競合（ASan / CRT リーク検出 / `/analyze` 静的解析）をまとめて検証する場合は以下を実行します：
+To run AddressSanitizer, MSVC Debug CRT heap leak detection, and `/analyze` static analysis:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
 ```
 
-ビルド完了後は `.\build\gui\ZeroExtGui.exe` から GUI マウントマネージャーを起動できます。
+After building, launch the GUI mount manager from `.\build\gui\ZeroExtGui.exe`.
 
-## GUI アプリケーション (`ZeroExtGui.exe`)
+## GUI Application (`ZeroExtGui.exe`)
 
-- **ディスク／イメージ自動一覧 & 状態検査**: 物理ディスク（非管理者時は 1 クリックで「管理者権限で再起動」）および `.img` ファイル（ドラッグ＆ドロップ対応）の GPT / MBR / EBR パーティション・ラベル・UUID・使用率・JBD2 ジャーナル状態（`CLEAN` / `NEEDS_RECOVERY` / `HAS_ERRORS`）を可視化。
-- **3 つのマウントモード選択**:
-  - **Read-Only（推奨・既定）**: Direct I/O 有効で高速・安全に読取。
-  - **Overlay（非破壊 RW）**: Lower ext4 を RO 保護し、変更・新規作成だけ指定の NTFS Upperdir へ保存（`.wh.__ext4_lower_id` の事前検証付き）。
-  - **Read-Write**: Dirty 状態検出時の自動 RO フォールバック設定（`--ro-fallback`）に対応。
-- **リアルタイム統計・システムトレイ常駐**: 読取／書込速度・累計転送量のリアルタイム表示、「エクスプローラーで開く」、安全なワンクリック・アンマウント、システムトレイ常駐、および CLI コマンドプレビュー。
-- **WinFsp 不要のオフライン機能**: WinFsp 未導入環境でも、ext2/3/4 イメージ内のフォルダ・ファイル閲覧（`ファイルブラウザ` タブ）や新規 `.img` 作成（`mkfs`）、WinFsp 導入ガイド表示を利用可能。
-- **疎結合アーキテクチャ**: GPLv2 の `libext2fs` / `zeroext_core` を直接リンクせず、`zeroext.exe` をサブプロセス（JSON / Named Event IPC）として制御します。
+- **Disk / Image Discovery & Inspection**: Displays physical disks (with one-click "Restart as Administrator" when non-elevated) and `.img` files (drag-and-drop supported), including GPT / MBR / EBR partitions, labels, UUIDs, usage, and JBD2 journal status (`CLEAN` / `NEEDS_RECOVERY` / `HAS_ERRORS`).
+- **Three Mount Modes**:
+  - **Read-Only (Recommended / Default)**: Fast and safe reading with Direct I/O enabled.
+  - **Overlay (Non-Destructive RW)**: Keeps the lower ext4 volume read-only while saving changes to a designated NTFS upper directory (with `.wh.__ext4_lower_id` guard).
+  - **Read-Write**: Supports automatic read-only fallback (`--ro-fallback`) when a dirty journal is detected.
+- **Live Stats & System Tray**: Real-time read/write throughput and cumulative transfer counters, "Open in Explorer", safe one-click unmount, system tray integration, and live CLI command preview.
+- **Offline Features Without WinFsp**: Browse ext2/3/4 image folders/files (`File Browser` tab), create new `.img` files (`mkfs`), and view WinFsp setup guidance even without WinFsp installed.
+- **Loosely Coupled Architecture**: Does not link GPLv2 `libext2fs` / `zeroext_core` directly; controls `zeroext.exe` as a subprocess via JSON / Named Event IPC.
 
-## WinFsp のインストール（ドライブマウント実行時に必須）
+## Installing WinFsp (Required for Drive Mounting)
 
-`zeroext.exe mount` を使用して Windows ドライブレター（例: `M:`）へマウントするには、事前に **WinFsp** ランタイムをインストールする必要があります（オフラインコマンド `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等は WinFsp なしでも動作します）。
+To mount a volume to a Windows drive letter (e.g. `M:`) using `zeroext.exe mount`, install the **WinFsp** runtime first (offline commands such as `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` work without WinFsp):
 
-以下のいずれかの方法でインストールしてください：
-
-- **winget を使用する場合（推奨）**:
+- **Using winget (Recommended)**:
   ```powershell
   winget install WinFsp.WinFsp
   ```
-- **Chocolatey を使用する場合**:
+- **Using Chocolatey**:
   ```powershell
   choco install winfsp
   ```
-- **公式インストーラ（`.msi`）を使用する場合**:
-  1. [WinFsp 公式サイト](https://winfsp.dev/) または [GitHub Releases](https://github.com/winfsp/winfsp/releases) から最新の `winfsp-*.msi` をダウンロードして実行します。
-  2. セットアップ種別は既定の **Core** のみで動作します（実行時に `C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll` を自動検出・動的ロードします）。
+- **Using the Official Installer (`.msi`)**:
+  1. Download the latest `winfsp-*.msi` from [winfsp.dev](https://winfsp.dev/) or [GitHub Releases](https://github.com/winfsp/winfsp/releases).
+  2. The default **Core** installation is sufficient (`zeroext.exe` dynamically discovers and loads `C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll` at runtime).
 
-詳細なビルド手順・テスト結果・CLI リファレンスは [docs/testing_and_usage.md](docs/testing_and_usage.md) を参照してください。
+For full CLI reference and build/test details, see [docs/testing_and_usage.md](docs/testing_and_usage.md).
 
-## CLI 使用例
+## CLI Examples
 
 ```powershell
-# ディスク / パーティション一覧と状態検査
+# List physical disks / partitions and inspect an image
 zeroext.exe list
 zeroext.exe inspect test.img
 
-# クリーンな ext4 イメージ作成・操作
+# Create and manipulate a clean ext4 image
 zeroext.exe mkfs test.img --size-mb 64 --label MYEXT4
 zeroext.exe mkdir test.img /data
 zeroext.exe write test.img /data/hello.txt "Hello from ZeroExt!"
@@ -128,19 +130,19 @@ zeroext.exe ls test.img /data
 zeroext.exe cat test.img /data/hello.txt
 zeroext.exe extents test.img /data/hello.txt
 
-# WinFsp で Windows ドライブへマウント (WinFsp ランタイム要・既定は Read-Only + ダイレクトエクステント直読 ON)
+# Mount to a Windows drive letter via WinFsp (requires WinFsp runtime; defaults to RO + Direct Extent I/O ON)
 zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M:
 
-# Direct I/O を明示的に無効化して標準 LRU キャッシュ経由でマウント
+# Explicitly disable Direct I/O and mount via standard LRU cache
 zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --no-direct-io
 
-# Read-Write マウント（明示的に --rw を指定・Direct I/O は自動無効）
+# Read-Write mount (explicit --rw; Direct I/O is automatically disabled)
 zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
 
-# ext4 は Read-Only + 直読 (既定 ON) に保ち、書き込みだけ Windows NTFS フォルダへ逃がす Overlay マウント
+# Overlay mount: keep ext4 Read-Only + Direct I/O ON, and redirect writes to an NTFS folder
 zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
 ```
 
-## ライセンス
+## License
 
-本プロジェクトは `e2fsprogs` (`libext2fs`) に基づくため **GNU General Public License v2.0 (GPLv2)** の下で提供されます。詳細は [LICENSE](LICENSE) およびサードパーティ表記 ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) を参照してください。
+This project is licensed under the **GNU General Public License v2.0 (GPLv2)** due to linking with `e2fsprogs` (`libext2fs`). See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
