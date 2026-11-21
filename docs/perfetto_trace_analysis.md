@@ -216,9 +216,28 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 | 指標 | Before (`aa37709`) | Step 1 後 (`OVERLAPPED`) | Step 2 後 (`INFINITE` Timeout) | Step 3–4 後 |
 | :--- | ---: | ---: | ---: | ---: |
-| `VFS DIO 8T Seq 64KB` (`MB/s` / `ReadFile` max) | `5,404.1 MB/s` / `37.96 ms` (`98.6%` 連続独占) | _未計測_ | — | _未計測_ |
-| `VFS DIO 8T Rnd 4KB /model.gguf` (`MB/s` / `ReadFile` mean) | `632.4 MB/s` (`0.63x`) / `49.11 µs` | _未計測_ | — | _未計測_ |
-| `VFS DIO 8T Rnd 4KB /frag.bin` (`MB/s` / `ReadFile` mean) | `640.6 MB/s` (`0.79x`) / `49.71 µs` | _未計測_ | — | _未計測_ |
+| `VFS DIO 8T Seq 64KB` (`MB/s` / `ReadFile` max) | `5,404.1 MB/s` / `37.96 ms` (`98.6%` 連続独占) | **`31,835.1 MB/s`** / `0.240 ms` (`0.4%` 連続) | — | _未計測_ |
+| `VFS DIO 8T Rnd 4KB /model.gguf` (`MB/s` / `ReadFile` mean) | `632.4 MB/s` (`0.63x`) / `49.11 µs` | **`1,155.4 MB/s`** (`0.88x`) / `24.51 µs` | — | _未計測_ |
+| `VFS DIO 8T Rnd 4KB /frag.bin` (`MB/s` / `ReadFile` mean) | `640.6 MB/s` (`0.79x`) / `49.71 µs` | **`1,260.7 MB/s`** (`1.13x`) / `24.46 µs` | — | _未計測_ |
 | 同一 SSD `Warm/Cached Seq 1024KB` (`MB/s`) | `1,490.5 MB/s` | _未計測_ | _未計測_ | _未計測_ |
 | 同一 SSD `Warm/Cached Rnd 4KB` (`MB/s`) | `36.8 MB/s` | _未計測_ | _未計測_ | _未計測_ |
-| `cache_lock wait` 合計 / max (`M0_8T_Rnd_4KB_frag`) | `43.7 ms` / `262.0 µs` | — | — | _未計測_ |
+| `cache_lock wait` 合計 / max (`M0_8T_Rnd_4KB_frag`) | `43.7 ms` / `262.0 µs` | `798.0 ms` / `353.5 µs` | — | _未計測_ |
+
+### 5.1 Step 1 (`FILE_FLAG_OVERLAPPED`) 効果検証結果
+
+1. **無計測ベンチマーク（`zeroext_bench.exe`）の変化**:
+   - **Direct I/O (`enable_direct_io=1`)**:
+     - `8T Seq 64KB /model.gguf (2048MB)`: `5,404.1 MB/s` (`0.379 s`) → **`31,835.1 MB/s` (`0.064 s` / `509,361 IOPS`)**（**5.89x**、約 31.8 GB/s）
+     - `8T Rnd 4KB /model.gguf (131K ops)`: `632.4 MB/s` → **`1,155.4 MB/s` (`295,791 IOPS`)**（**1.83x**）
+     - `8T Rnd 4KB /frag.bin (131K ops)`: `640.6 MB/s` → **`1,260.7 MB/s` (`322,751 IOPS`)**（**1.97x**、Mode 0 の `1,117.6 MB/s` を再逆転し **1.13x** へ）
+   - **標準経路 (`enable_direct_io=0`)**:
+     - `8T Seq 64KB /model.gguf (2048MB)`: `2,834.1 MB/s` → **`4,968.9 MB/s`**（**1.75x**）
+     - `8T Rnd 4KB /model.gguf`: `1,000.4 MB/s` → **`1,318.5 MB/s`**（**1.32x**）
+     - `8T Rnd 4KB /frag.bin`: `812.1 MB/s` → **`1,117.6 MB/s`**（**1.38x**）
+2. **Perfetto トレース解析（`--trace-events 524288`）の変化**:
+   - **`FileObject->Lock` 直列化・Lock Convoy の完全解消**:
+     - `M1_8T_Seq_64KB`: 同一スレッド連続完了率が `98.6%`（最大 280 回連続）→ **`0.4%`（最大 4 回）** へ低下。`ReadFile` mean `79.12` → `14.74 µs`（p99 `1,152.4` → `60.4 µs`、max `37,955.5` → `239.6 µs` で最大遅延を **158 分の 1** に短縮）。
+     - `M1_8T_Rnd_4KB`: 同一スレッド連続完了率が `58.9%` → `4.2%`（`/frag.bin` `4.1%`）、`ReadFile` mean `49.11` → `24.51 µs`（max `1,192.9` → `425.2 µs`）。
+   - **次のボトルネック（Step 3 対象の顕在化）**:
+     - `ReadFile` 待機が解けた結果、Mode 0 では **`win32_io.cache_lock` の競合が一気に顕在化**（`M0_8T_Seq_64KB`: `wait 1,337.9 ms` / max `380.6 µs`、`M0_8T_Rnd_4KB_model`: `wait 889.7 ms` vs `hold 122.8 ms` [wait/hold **7.25x**]、`M0_8T_Rnd_4KB_frag`: `wait 798.0 ms`）。
+     - Mode 1 では `extent_cache.lock` の待ちが `M1_8T_Seq_64KB` で `7.3 ms`（`63.5 ms` 中、max `70.3 µs`）、`M1_8T_Rnd_4KB` で `14.7〜16.5 ms`（max `109.7〜249.1 µs`）発生している。

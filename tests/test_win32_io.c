@@ -143,10 +143,112 @@ static int test_read_only_and_lru_cache(void) {
     return 0;
 }
 
+typedef struct overlapped_reader_arg {
+    io_channel io;
+    uint32_t   seed;
+    int        err;
+} overlapped_reader_arg_t;
+
+static DWORD WINAPI overlapped_reader_worker(LPVOID param) {
+    overlapped_reader_arg_t *arg = (overlapped_reader_arg_t *)param;
+    uint8_t *buf = (uint8_t *)_aligned_malloc(16384U, 4096U);
+    uint32_t s = arg->seed;
+    if (!buf) {
+        arg->err = -1;
+        return 1;
+    }
+
+    for (int iter = 0; iter < 1024; iter++) {
+        uint32_t pages;
+        uint32_t start_page;
+        size_t req_len;
+        errcode_t rc;
+
+        s = s * 1664525U + 1013904223U;
+        pages = ((s & 3U) == 0U) ? 4U : (((s & 1U) == 0U) ? 2U : 1U);
+        req_len = (size_t)pages * 4096U;
+        s = s * 1664525U + 1013904223U;
+        start_page = (s >> 8) % (256U - pages + 1U);
+
+        rc = win32_io_pread_direct(arg->io, (uint64_t)start_page * 4096ULL, buf, req_len);
+        if (rc != 0) {
+            arg->err = (int)rc;
+            break;
+        }
+        for (uint32_t p = 0; p < pages; p++) {
+            const uint8_t *pg = buf + (size_t)p * 4096U;
+            uint32_t pg_idx = start_page + p;
+            for (size_t b = 0; b < 4096U; b++) {
+                uint8_t expected = (uint8_t)(((pg_idx * 37U) + b) & 0xFFU);
+                if (pg[b] != expected) {
+                    arg->err = -2;
+                    _aligned_free(buf);
+                    return 1;
+                }
+            }
+        }
+    }
+
+    _aligned_free(buf);
+    return arg->err ? 1 : 0;
+}
+
+static int test_overlapped_concurrent_pread(void) {
+    char path[MAX_PATH];
+    win32_io_config_t cfg;
+    io_channel io = NULL;
+    FILE *fp;
+    uint8_t page[4096];
+    overlapped_reader_arg_t args[8];
+    HANDLE threads[8];
+    uint8_t tail[4096];
+
+    test_make_temp_path(path, sizeof(path), "io_overlapped_mt.img");
+    fp = fopen(path, "wb");
+    TEST_ASSERT(fp != NULL);
+    for (uint32_t p = 0; p < 256; p++) {
+        for (size_t b = 0; b < sizeof(page); b++) {
+            page[b] = (uint8_t)(((p * 37U) + b) & 0xFFU);
+        }
+        TEST_ASSERT_EQ_INT(sizeof(page), fwrite(page, 1, sizeof(page), fp));
+    }
+    fclose(fp);
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sector_size = 4096;
+    cfg.read_only = 1;
+    cfg.disable_cache = 1;
+    win32_io_set_next_config(&cfg);
+
+    TEST_ASSERT_EQ_INT(0, io_channel_open(win32_io_manager, path, 0, &io));
+
+    for (int i = 0; i < 8; i++) {
+        args[i].io = io;
+        args[i].seed = 0x9E3779B9U + (uint32_t)i * 7919U;
+        args[i].err = 0;
+        threads[i] = CreateThread(NULL, 0, overlapped_reader_worker, &args[i], 0, NULL);
+        TEST_ASSERT(threads[i] != NULL);
+    }
+    WaitForMultipleObjects(8, threads, TRUE, INFINITE);
+    for (int i = 0; i < 8; i++) {
+        CloseHandle(threads[i]);
+        TEST_ASSERT_EQ_INT(0, args[i].err);
+    }
+
+    /* Boundary check */
+    TEST_ASSERT_EQ_INT(EXT2_ET_LLSEEK_FAILED,
+                       win32_io_pread_direct(io, 256ULL * 4096ULL, tail, sizeof(tail)));
+
+    io_channel_close(io);
+    DeleteFileA(path);
+    return 0;
+}
+
 int run_suite_win32_io(void) {
     int suite_failures = 0;
     RUN_TEST(test_4kb_rmw_and_alignment);
     RUN_TEST(test_partition_boundary_guard);
     RUN_TEST(test_read_only_and_lru_cache);
+    RUN_TEST(test_overlapped_concurrent_pread);
     return suite_failures;
 }

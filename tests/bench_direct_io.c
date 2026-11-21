@@ -22,6 +22,7 @@ typedef struct worker_arg {
     uint32_t        chunk_sz;
     uint64_t        ops;
     int             random_mode;
+    int             is_worker_thread;
     uint32_t        seed;
     uint64_t        bytes_done;
     int             err;
@@ -43,7 +44,7 @@ static DWORD WINAPI bench_worker(LPVOID param) {
     uint8_t *buf;
     uint64_t done = 0;
 
-    if (ztrace_is_enabled()) {
+    if (w->is_worker_thread && ztrace_is_enabled()) {
         ztrace_set_thread_name("Bench-Worker");
     }
 
@@ -123,6 +124,7 @@ static int run_vfs_bench(const char *label, ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
         args[t].chunk_sz = chunk_sz;
         args[t].ops = ops_per_thread;
         args[t].random_mode = random_mode;
+        args[t].is_worker_thread = (threads > 1) ? 1 : 0;
         args[t].seed = 0x12345U + (uint32_t)t * 7919U;
 
         if (threads == 1) {

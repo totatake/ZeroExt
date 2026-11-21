@@ -48,6 +48,62 @@ typedef struct win32_private {
 static __declspec(thread) win32_io_config_t tls_next_cfg;
 static __declspec(thread) int tls_has_next_cfg = 0;
 
+static INIT_ONCE g_io_fls_once = INIT_ONCE_STATIC_INIT;
+static DWORD g_io_fls_index = FLS_OUT_OF_INDEXES;
+
+static VOID WINAPI io_fls_cleanup_cb(PVOID lpFlsData) {
+    if (lpFlsData) {
+        CloseHandle((HANDLE)lpFlsData);
+    }
+}
+
+static BOOL CALLBACK init_io_fls_slot(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+    (void)once;
+    (void)param;
+    (void)ctx;
+    g_io_fls_index = FlsAlloc(io_fls_cleanup_cb);
+    return TRUE;
+}
+
+static HANDLE acquire_thread_io_event(int *out_owned_temp) {
+    HANDLE ev = NULL;
+    *out_owned_temp = 0;
+    InitOnceExecuteOnce(&g_io_fls_once, init_io_fls_slot, NULL, NULL);
+    if (g_io_fls_index != FLS_OUT_OF_INDEXES) {
+        ev = (HANDLE)FlsGetValue(g_io_fls_index);
+        if (!ev) {
+            ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+            if (ev && !FlsSetValue(g_io_fls_index, ev)) {
+                *out_owned_temp = 1;
+            }
+        }
+        return ev;
+    }
+    ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (ev) {
+        *out_owned_temp = 1;
+    }
+    return ev;
+}
+
+static BOOL overlapped_ioctl(HANDLE h, DWORD code, void *out_buf, DWORD out_sz, DWORD *out_ret) {
+    int temp_ev = 0;
+    HANDLE ev = acquire_thread_io_event(&temp_ev);
+    OVERLAPPED ov;
+    DWORD ret = 0;
+    BOOL ok;
+    if (!ev) return FALSE;
+    memset(&ov, 0, sizeof(ov));
+    ov.hEvent = ev;
+    ok = DeviceIoControl(h, code, NULL, 0, out_buf, out_sz, &ret, &ov);
+    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+        ok = GetOverlappedResult(h, &ov, &ret, TRUE);
+    }
+    if (temp_ev) CloseHandle(ev);
+    if (out_ret) *out_ret = ret;
+    return ok;
+}
+
 void win32_io_set_next_config(const win32_io_config_t *cfg) {
     if (cfg) {
         tls_next_cfg = *cfg;
@@ -76,12 +132,12 @@ static uint64_t query_handle_size_and_sector(HANDLE h, int is_device, uint32_t *
         GET_LENGTH_INFORMATION len_info;
         DWORD returned = 0;
         DISK_GEOMETRY_EX geom;
-        if (DeviceIoControl(h, IOCTL_DISK_GET_LENGTH_INFO, NULL, 0,
-                            &len_info, sizeof(len_info), &returned, NULL)) {
+        if (overlapped_ioctl(h, IOCTL_DISK_GET_LENGTH_INFO,
+                             &len_info, sizeof(len_info), &returned)) {
             size = (uint64_t)len_info.Length.QuadPart;
         }
-        if (DeviceIoControl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
-                            &geom, sizeof(geom), &returned, NULL)) {
+        if (overlapped_ioctl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+                             &geom, sizeof(geom), &returned)) {
             if (out_sector_size && is_power_of_two_u32(geom.Geometry.BytesPerSector) &&
                 geom.Geometry.BytesPerSector >= 512) {
                 *out_sector_size = geom.Geometry.BytesPerSector;
@@ -266,7 +322,13 @@ static DWORD raw_pread_exact(HANDLE h, uint64_t offset, void *buf, DWORD len, DW
     uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
     DWORD total = 0;
     DWORD res = ERROR_SUCCESS;
+    int temp_ev = 0;
+    HANDLE ev = acquire_thread_io_event(&temp_ev);
     if (out_read) *out_read = 0;
+    if (!ev) {
+        res = ERROR_NOT_ENOUGH_MEMORY;
+        goto done;
+    }
     while (total < len) {
         OVERLAPPED ov;
         DWORD got = 0;
@@ -274,10 +336,20 @@ static DWORD raw_pread_exact(HANDLE h, uint64_t offset, void *buf, DWORD len, DW
         memset(&ov, 0, sizeof(ov));
         ov.Offset = (DWORD)(pos & 0xFFFFFFFFULL);
         ov.OffsetHigh = (DWORD)(pos >> 32);
+        ov.hEvent = ev;
         if (!ReadFile(h, (uint8_t *)buf + total, len - total, &got, &ov)) {
-            res = GetLastError();
-            if (out_read) *out_read = total;
-            goto done;
+            DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                if (!GetOverlappedResult(h, &ov, &got, TRUE)) {
+                    res = GetLastError();
+                    if (out_read) *out_read = total;
+                    goto done;
+                }
+            } else {
+                res = err;
+                if (out_read) *out_read = total;
+                goto done;
+            }
         }
         if (got == 0) {
             if (out_read) *out_read = total;
@@ -288,6 +360,9 @@ static DWORD raw_pread_exact(HANDLE h, uint64_t offset, void *buf, DWORD len, DW
     }
     if (out_read) *out_read = total;
 done:
+    if (temp_ev && ev) {
+        CloseHandle(ev);
+    }
     if (_zt0) {
         ztrace_record_complete("io", "ReadFile", _zt0, ztrace_now_qpc() - _zt0,
                                offset, (uint64_t)total, (int64_t)res, ZTRACE_ARGS_WIN32_IO);
@@ -299,6 +374,12 @@ static DWORD raw_pwrite_exact(HANDLE h, uint64_t offset, const void *buf, DWORD 
     uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
     DWORD total = 0;
     DWORD res = ERROR_SUCCESS;
+    int temp_ev = 0;
+    HANDLE ev = acquire_thread_io_event(&temp_ev);
+    if (!ev) {
+        res = ERROR_NOT_ENOUGH_MEMORY;
+        goto done;
+    }
     while (total < len) {
         OVERLAPPED ov;
         DWORD put = 0;
@@ -306,9 +387,18 @@ static DWORD raw_pwrite_exact(HANDLE h, uint64_t offset, const void *buf, DWORD 
         memset(&ov, 0, sizeof(ov));
         ov.Offset = (DWORD)(pos & 0xFFFFFFFFULL);
         ov.OffsetHigh = (DWORD)(pos >> 32);
+        ov.hEvent = ev;
         if (!WriteFile(h, (const uint8_t *)buf + total, len - total, &put, &ov)) {
-            res = GetLastError();
-            goto done;
+            DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                if (!GetOverlappedResult(h, &ov, &put, TRUE)) {
+                    res = GetLastError();
+                    goto done;
+                }
+            } else {
+                res = err;
+                goto done;
+            }
         }
         if (put == 0) {
             res = ERROR_WRITE_FAULT;
@@ -317,6 +407,9 @@ static DWORD raw_pwrite_exact(HANDLE h, uint64_t offset, const void *buf, DWORD 
         total += put;
     }
 done:
+    if (temp_ev && ev) {
+        CloseHandle(ev);
+    }
     if (_zt0) {
         ztrace_record_complete("io", "WriteFile", _zt0, ztrace_now_qpc() - _zt0,
                                offset, (uint64_t)total, (int64_t)res, ZTRACE_ARGS_WIN32_IO);
@@ -490,7 +583,8 @@ static errcode_t win32_open(const char *name, int flags, io_channel *channel) {
     share_mode = (flags & IO_FLAG_EXCLUSIVE) && !priv->read_only && !priv->is_physical_device
                      ? FILE_SHARE_READ
                      : (FILE_SHARE_READ | FILE_SHARE_WRITE);
-    file_flags = priv->is_physical_device ? FILE_FLAG_NO_BUFFERING : FILE_FLAG_RANDOM_ACCESS;
+    file_flags = (priv->is_physical_device ? FILE_FLAG_NO_BUFFERING : FILE_FLAG_RANDOM_ACCESS) |
+                 FILE_FLAG_OVERLAPPED;
 
     h = CreateFileW(wpath, desired_access, share_mode, NULL, OPEN_EXISTING, file_flags, NULL);
     if (h == INVALID_HANDLE_VALUE) {
@@ -505,6 +599,8 @@ static errcode_t win32_open(const char *name, int flags, io_channel *channel) {
         }
         return EIO;
     }
+
+    (void)SetFileCompletionNotificationModes(h, FILE_SKIP_SET_EVENT_ON_HANDLE);
 
     dev_size = query_handle_size_and_sector(h, priv->is_physical_device, &detected_sector);
     priv->handle = h;
