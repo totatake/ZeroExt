@@ -16,6 +16,7 @@ namespace ZeroExt.Gui.Models
     public sealed class GuiSettings
     {
         public string Theme { get; set; } = "Light";
+        public string Language { get; set; } = "auto";
         public bool MinimizeToTrayWhenMounted { get; set; } = true;
         public bool AutoOpenExplorerOnMount { get; set; } = true;
         public bool ShowNonExtPartitions { get; set; }

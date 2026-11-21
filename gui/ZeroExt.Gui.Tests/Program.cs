@@ -1,10 +1,13 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
 using ZeroExt.Gui.Models;
 using ZeroExt.Gui.Services;
 using ZeroExt.Gui.ViewModels;
@@ -25,6 +28,7 @@ namespace ZeroExt.Gui.Tests
             Run("JsonParsing_LsAndMountEvents", Test_JsonParsing_LsAndMountEvents);
             Run("ArgBuilder_MountVariantsAndPreview", Test_ArgBuilder_MountVariantsAndPreview);
             Run("DriveLetterAndOverlayValidation", Test_DriveLetterAndOverlayValidation);
+            Run("Localization_CompletenessAndSwitching", Test_Localization_CompletenessAndSwitching);
             Run("MountErrorTranslator", Test_MountErrorTranslator);
             Run("SettingsService_RoundTrip", Test_SettingsService_RoundTrip);
             Run("MainViewModel_ValidationAndPreview", Test_MainViewModel_ValidationAndPreview);
@@ -47,7 +51,8 @@ namespace ZeroExt.Gui.Tests
             catch (Exception ex)
             {
                 _failed++;
-                Console.WriteLine($"[FAIL] {name}: {ex.Message}");
+                string detail = ex.InnerException != null ? $"{ex.Message} --> {ex.InnerException.Message}" : ex.Message;
+                Console.WriteLine($"[FAIL] {name}: {detail}");
             }
         }
 
@@ -62,7 +67,8 @@ namespace ZeroExt.Gui.Tests
             catch (Exception ex)
             {
                 _failed++;
-                Console.WriteLine($"[FAIL] {name}: {ex.Message}");
+                string detail = ex.InnerException != null ? $"{ex.Message} --> {ex.InnerException.Message}" : ex.Message;
+                Console.WriteLine($"[FAIL] {name}: {detail}");
             }
         }
 
@@ -307,27 +313,85 @@ namespace ZeroExt.Gui.Tests
             }
         }
 
+        private static void Test_Localization_CompletenessAndSwitching()
+        {
+            AssertEqual("ja", LocalizationService.ResolveEffectiveLanguage("auto", CultureInfo.GetCultureInfo("ja-JP")), "auto ja-JP");
+            AssertEqual("en", LocalizationService.ResolveEffectiveLanguage("auto", CultureInfo.GetCultureInfo("en-US")), "auto en-US");
+            AssertEqual("en", LocalizationService.ResolveEffectiveLanguage("auto", CultureInfo.GetCultureInfo("fr-FR")), "auto fr-FR fallback");
+            AssertEqual("ja", LocalizationService.ResolveEffectiveLanguage("ja", CultureInfo.GetCultureInfo("en-US")), "explicit ja");
+            AssertEqual("en", LocalizationService.ResolveEffectiveLanguage("en", CultureInfo.GetCultureInfo("ja-JP")), "explicit en");
+
+            ResourceDictionary enDict = LocalizationService.LoadLanguageDictionary("en");
+            ResourceDictionary jaDict = LocalizationService.LoadLanguageDictionary("ja");
+
+            var enKeys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (DictionaryEntry e in enDict)
+            {
+                if (e.Key is string k)
+                {
+                    enKeys.Add(k);
+                    Assert(e.Value is string s && !string.IsNullOrWhiteSpace(s), $"en key '{k}' must be non-empty string");
+                }
+            }
+
+            var jaKeys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (DictionaryEntry e in jaDict)
+            {
+                if (e.Key is string k)
+                {
+                    jaKeys.Add(k);
+                    Assert(e.Value is string s && !string.IsNullOrWhiteSpace(s), $"ja key '{k}' must be non-empty string");
+                }
+            }
+
+            var missingInJa = enKeys.Except(jaKeys).ToList();
+            var missingInEn = jaKeys.Except(enKeys).ToList();
+            Assert(missingInJa.Count == 0, $"Keys missing in Strings.ja.xaml: {string.Join(", ", missingInJa)}");
+            Assert(missingInEn.Count == 0, $"Keys missing in Strings.en.xaml: {string.Join(", ", missingInEn)}");
+            Assert(enKeys.Count >= 100, $"Expected >= 100 localization keys, got {enKeys.Count}");
+
+            LocalizationService.ApplyLanguage(null, "en");
+            AssertEqual("en", LocalizationService.CurrentLanguage, "CurrentLanguage en");
+            AssertEqual("Ready", LocalizationService.Get("Str_StatusReady"), "en Ready");
+
+            LocalizationService.ApplyLanguage(null, "ja");
+            AssertEqual("ja", LocalizationService.CurrentLanguage, "CurrentLanguage ja");
+            AssertEqual("準備完了", LocalizationService.Get("Str_StatusReady"), "ja Ready");
+        }
+
         private static void Test_MountErrorTranslator()
         {
+            LocalizationService.ApplyLanguage(null, "ja");
             var e1 = MountErrorTranslator.Translate(
                 new MountEventMessage { Event = "error", Code = -22, Message = "Failed" },
                 new[] { "[zeroext:ERROR] Overlay upperdir 'D:\\u' belongs to a different lower ext4 filesystem" });
-            Assert(e1.Title.Contains("一致しません"), "overlay mismatch error translated");
+            Assert(e1.Title.Contains("一致しません"), "overlay mismatch error translated (ja)");
 
             var e2 = MountErrorTranslator.Translate(
                 new MountEventMessage { Event = "error", Code = -30, Message = "EROFS" },
                 Array.Empty<string>());
-            Assert(e2.Title.Contains("Dirty"), "dirty journal error translated");
+            Assert(e2.Title.Contains("Dirty"), "dirty journal error translated (ja)");
 
             var e3 = MountErrorTranslator.Translate(
                 new MountEventMessage { Event = "error", Code = -19, Message = "WinFsp mount failed" },
                 Array.Empty<string>());
-            Assert(e3.Title.Contains("WinFsp"), "winfsp missing error translated");
+            Assert(e3.Title.Contains("WinFsp"), "winfsp missing error translated (ja)");
 
             var e4 = MountErrorTranslator.Translate(
                 new MountEventMessage { Event = "error", Code = -5, Message = "FspFileSystemSetMountPoint failed: NTSTATUS=0xC0000022" },
                 Array.Empty<string>());
-            Assert(e4.Title.Contains("マウント先"), "0xC0000022 error translated");
+            Assert(e4.Title.Contains("マウント先"), "0xC0000022 error translated (ja)");
+
+            LocalizationService.ApplyLanguage(null, "en");
+            var e1En = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -22, Message = "Failed" },
+                new[] { "[zeroext:ERROR] Overlay upperdir 'D:\\u' belongs to a different lower ext4 filesystem" });
+            Assert(e1En.Title.Contains("Mismatch"), "overlay mismatch error translated (en)");
+
+            var e4En = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -5, Message = "FspFileSystemSetMountPoint failed: NTSTATUS=0xC0000022" },
+                Array.Empty<string>());
+            Assert(e4En.Title.Contains("Unavailable"), "0xC0000022 error translated (en)");
         }
 
         private static void Test_SettingsService_RoundTrip()
@@ -339,6 +403,7 @@ namespace ZeroExt.Gui.Tests
                 var s = new GuiSettings
                 {
                     Theme = "Dark",
+                    Language = "en",
                     MinimizeToTrayWhenMounted = false,
                     AutoOpenExplorerOnMount = false,
                     ShowNonExtPartitions = true,
@@ -357,6 +422,7 @@ namespace ZeroExt.Gui.Tests
 
                 GuiSettings loaded = svc.Load();
                 AssertEqual("Dark", loaded.Theme, "Theme");
+                AssertEqual("en", loaded.Language, "Language");
                 AssertEqual(false, loaded.MinimizeToTrayWhenMounted, "MinimizeToTrayWhenMounted");
                 AssertEqual(true, loaded.ShowNonExtPartitions, "ShowNonExtPartitions");
                 AssertEqual(1, loaded.RegisteredImages.Count, "RegisteredImages.Count");

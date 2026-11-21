@@ -1,7 +1,7 @@
 <Window x:Class="ZeroExt.Gui.Views.CreateImageDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="新規 ext4 イメージの作成"
+        Title="{DynamicResource Str_CreateImgTitle}"
         Width="520"
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
@@ -10,26 +10,26 @@
         Foreground="{DynamicResource TextPrimaryBrush}">
     <Border Padding="20">
         <StackPanel>
-            <TextBlock Text="新しい ext4 仮想ディスクイメージ (.img) を作成"
+            <TextBlock Text="{DynamicResource Str_CreateImgHeading}"
                        FontSize="16" FontWeight="Bold" Margin="0,0,0,6" />
-            <TextBlock Text="4KB ブロック・256B iノード・extents・64bit・metadata_csum 有効の ext4 イメージを作成します。"
+            <TextBlock Text="{DynamicResource Str_CreateImgDesc}"
                        Foreground="{DynamicResource TextSecondaryBrush}"
                        TextWrapping="Wrap" Margin="0,0,0,16" />
 
             <Border Style="{StaticResource CardBorderStyle}" Padding="16">
                 <StackPanel>
-                    <TextBlock Text="保存先ファイルパス" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <TextBlock Text="{DynamicResource Str_CreateImgPathLabel}" FontWeight="SemiBold" Margin="0,0,0,6" />
                     <Grid Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="ImagePathBox" Grid.Column="0" Margin="0,0,8,0" />
-                        <Button Grid.Column="1" Content="参照..." Style="{StaticResource SecondaryButtonStyle}"
+                        <Button Grid.Column="1" Content="{DynamicResource Str_CommonBrowse}" Style="{StaticResource SecondaryButtonStyle}"
                                 Click="OnBrowseClick" />
                     </Grid>
 
-                    <TextBlock Text="イメージサイズ (MB)" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <TextBlock Text="{DynamicResource Str_CreateImgSizeLabel}" FontWeight="SemiBold" Margin="0,0,0,6" />
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="120" />
@@ -44,7 +44,7 @@
                         </StackPanel>
                     </Grid>
 
-                    <TextBlock Text="ボリュームラベル（最大 16 バイト）" FontWeight="SemiBold" Margin="0,8,0,6" />
+                    <TextBlock Text="{DynamicResource Str_CreateImgVolLabel}" FontWeight="SemiBold" Margin="0,8,0,6" />
                     <TextBox x:Name="LabelBox" Text="ZEROEXT" MaxLength="16" />
                 </StackPanel>
             </Border>
@@ -63,9 +63,9 @@
             </Border>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                <Button x:Name="CancelBtn" Content="キャンセル" Style="{StaticResource SecondaryButtonStyle}"
+                <Button x:Name="CancelBtn" Content="{DynamicResource Str_CommonCancel}" Style="{StaticResource SecondaryButtonStyle}"
                         Width="100" Margin="0,0,8,0" IsCancel="True" />
-                <Button x:Name="CreateBtn" Content="イメージを作成" Style="{StaticResource PrimaryButtonStyle}"
+                <Button x:Name="CreateBtn" Content="{DynamicResource Str_CreateImgBtn}" Style="{StaticResource PrimaryButtonStyle}"
                         Width="140" IsDefault="True" Click="OnCreateClick" />
             </StackPanel>
         </StackPanel>

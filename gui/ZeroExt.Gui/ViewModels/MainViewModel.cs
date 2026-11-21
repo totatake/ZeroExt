@@ -47,7 +47,9 @@ namespace ZeroExt.Gui.ViewModels
 
         public bool IsMounted => ActiveMount != null;
 
-        public string MountedBadgeText => ActiveMount != null ? $"{ActiveMount.MountPoint} マウント中" : string.Empty;
+        public string MountedBadgeText => ActiveMount != null
+            ? LocalizationService.Format("Str_MountedBadgeFmt", ActiveMount.MountPoint)
+            : string.Empty;
 
         public string DisplayTitle => Info.DisplayName;
 
@@ -67,8 +69,20 @@ namespace ZeroExt.Gui.ViewModels
 
         public string CapacitySummary =>
             Info.IsExtFs && Info.EffectiveTotalBytes > 0
-                ? $"使用中 {ByteFormatter.Format(Info.UsedBytes)} / {ByteFormatter.Format(Info.EffectiveTotalBytes)} (空き {ByteFormatter.Format(Info.FreeBytes)})"
+                ? LocalizationService.Format(
+                    "Str_CapacitySummaryFmt",
+                    ByteFormatter.Format(Info.UsedBytes),
+                    ByteFormatter.Format(Info.EffectiveTotalBytes),
+                    ByteFormatter.Format(Info.FreeBytes))
                 : ByteFormatter.Format(Info.SizeBytes);
+
+        public void RefreshLocalizedText()
+        {
+            OnPropertyChanged(nameof(MountedBadgeText));
+            OnPropertyChanged(nameof(DisplayTitle));
+            OnPropertyChanged(nameof(JournalBadgeText));
+            OnPropertyChanged(nameof(CapacitySummary));
+        }
     }
 
     public sealed class DiskGroupItem : ViewModelBase
@@ -101,8 +115,19 @@ namespace ZeroExt.Gui.ViewModels
 
         public int HiddenNonExtCount => AllPartitions.Count - VisiblePartitions.Count;
         public bool HasHiddenNonExt => HiddenNonExtCount > 0;
-        public string HiddenSummary => $"非 ext パーティション {HiddenNonExtCount} 件を非表示中";
+        public string HiddenSummary => LocalizationService.Format("Str_HiddenNonExtFmt", HiddenNonExtCount);
         public bool HasNoVisibleExtPartitions => Accessible && VisiblePartitions.Count == 0;
+
+        public void RefreshLocalizedText()
+        {
+            OnPropertyChanged(nameof(DisplayTitle));
+            OnPropertyChanged(nameof(SubtitleText));
+            OnPropertyChanged(nameof(HiddenSummary));
+            foreach (PartitionItem p in AllPartitions)
+            {
+                p.RefreshLocalizedText();
+            }
+        }
 
         public void ApplyFilter(bool showNonExt)
         {
@@ -129,6 +154,7 @@ namespace ZeroExt.Gui.ViewModels
         private readonly MountSessionManager _mountManager;
         private readonly Action<Action> _marshalToUi;
         private readonly Action<bool> _applyThemeCallback;
+        private readonly Action<string> _applyLanguageCallback;
         private string? _coreExeOverride;
         private string? _coreExePath;
 
@@ -138,8 +164,9 @@ namespace ZeroExt.Gui.ViewModels
         private bool _isMounting;
         private bool _showNonExtPartitions;
         private bool _isDarkTheme;
+        private string _languageSetting = "auto";
         private int _selectedTabIndex;
-        private string _statusMessage = "準備完了";
+        private string _statusMessage = LocalizationService.Get("Str_StatusReady");
 
         private PartitionItem? _selectedPartition;
         private MountMode _selectedMode = MountMode.ReadOnly;
@@ -150,7 +177,7 @@ namespace ZeroExt.Gui.ViewModels
         private UpperDirCheckResult _upperDirCheck = new UpperDirCheckResult
         {
             Status = UpperDirCheckStatus.None,
-            Message = "Overlay の書き込み先フォルダを指定してください。",
+            Message = LocalizationService.Get("Str_UpperValNone"),
             CanMount = false,
         };
         private bool _enableDirectIo = true;
@@ -197,10 +224,12 @@ namespace ZeroExt.Gui.ViewModels
             SettingsService settingsService,
             Action<bool>? applyThemeCallback = null,
             string? coreExeOverride = null,
-            Action<Action>? marshalToUi = null)
+            Action<Action>? marshalToUi = null,
+            Action<string>? applyLanguageCallback = null)
         {
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _applyThemeCallback = applyThemeCallback ?? (_ => { });
+            _applyLanguageCallback = applyLanguageCallback ?? (lang => LocalizationService.ApplyLanguage(null, lang));
             _coreExeOverride = coreExeOverride;
 
             if (marshalToUi != null)
@@ -217,6 +246,9 @@ namespace ZeroExt.Gui.ViewModels
 
             _settings = _settingsService.Load();
             _isDarkTheme = string.Equals(_settings.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
+            _languageSetting = LocalizationService.NormalizeSetting(_settings.Language);
+            _applyLanguageCallback(_languageSetting);
+            _statusMessage = LocalizationService.Get("Str_StatusReady");
             _showNonExtPartitions = _settings.ShowNonExtPartitions;
             _autoOpenExplorer = _settings.AutoOpenExplorerOnMount;
             _minimizeToTrayWhenMounted = _settings.MinimizeToTrayWhenMounted;
@@ -226,6 +258,7 @@ namespace ZeroExt.Gui.ViewModels
             _coreClient = new ZeroExtCoreClient(() => _coreExePath, AppendLog);
             _mountManager = new MountSessionManager(() => _coreExePath, AppendLog, _marshalToUi);
             _mountManager.ActiveMounts.CollectionChanged += OnActiveMountsChanged;
+            LocalizationService.LanguageChanged += OnLocalizationLanguageChanged;
 
             RefreshDisksCommand = new AsyncRelayCommand(RefreshAllAsync, () => !IsScanning && HasCoreExe);
             MountCommand = new AsyncRelayCommand(ExecuteMountAsync, () => CanMount && !IsMounting);
@@ -280,7 +313,7 @@ namespace ZeroExt.Gui.ViewModels
         }
 
         public bool HasCoreExe => !string.IsNullOrWhiteSpace(_coreExePath) && File.Exists(_coreExePath);
-        public string CoreExeDisplay => _coreExePath ?? "見つかりません (build\\zeroext.exe をビルドしてください)";
+        public string CoreExeDisplay => _coreExePath ?? LocalizationService.Get("Str_CoreNotFoundDisplay");
 
         public bool IsElevated
         {
@@ -365,7 +398,24 @@ namespace ZeroExt.Gui.ViewModels
             }
         }
 
-        public string ThemeToggleLabel => IsDarkTheme ? "☀ ライト" : "🌙 ダーク";
+        public string ThemeToggleLabel => IsDarkTheme
+            ? LocalizationService.Get("Str_ThemeLight")
+            : LocalizationService.Get("Str_ThemeDark");
+
+        public string LanguageSetting
+        {
+            get => _languageSetting;
+            set
+            {
+                string norm = LocalizationService.NormalizeSetting(value);
+                if (SetProperty(ref _languageSetting, norm))
+                {
+                    _settings.Language = norm;
+                    SaveSettingsSafe();
+                    _applyLanguageCallback(norm);
+                }
+            }
+        }
 
         public int SelectedTabIndex
         {
@@ -406,6 +456,7 @@ namespace ZeroExt.Gui.ViewModels
                     OnPropertyChanged(nameof(ShowDirtyRwWarning));
                     OnPropertyChanged(nameof(SelectedVolumeTitle));
                     OnPropertyChanged(nameof(SelectedVolumeSubtitle));
+                    OnPropertyChanged(nameof(SelectedJournalHeaderText));
                     OnPropertyChanged(nameof(ExpectedLowerIdDisplay));
                     LoadPresetForSelectedPartition();
                     RefreshUpperDirValidation();
@@ -432,13 +483,16 @@ namespace ZeroExt.Gui.ViewModels
 
         public string SelectedVolumeTitle =>
             SelectedPartition == null
-                ? "パーティションまたはイメージを選択してください"
+                ? LocalizationService.Get("Str_SelectVolumePrompt")
                 : $"{SelectedPartition.DisplayTitle}  ({SelectedPartition.FsBadgeText})";
 
         public string SelectedVolumeSubtitle =>
             SelectedPartition == null
-                ? "左のリストから ext2/ext3/ext4 ボリュームを選ぶか、.img ファイルをドラッグ＆ドロップします。"
+                ? LocalizationService.Get("Str_SelectVolumeSubPrompt")
                 : $"{SelectedPartition.ParentDisk.DevicePath}  |  {SelectedPartition.PartitionSubtitle}  |  UUID: {(string.IsNullOrWhiteSpace(SelectedPartition.Info.Uuid) ? "-" : SelectedPartition.Info.Uuid)}";
+
+        public string SelectedJournalHeaderText =>
+            LocalizationService.Format("Str_JournalStateFmt", SelectedPartition?.Info.JournalDisplayText ?? "-");
 
         public string ExpectedLowerIdDisplay =>
             SelectedPartition?.Info.ExpectedOverlayLowerId ?? "-";
@@ -645,23 +699,26 @@ namespace ZeroExt.Gui.ViewModels
 
         public string MountButtonText =>
             IsMounting
-                ? "マウント中..."
+                ? LocalizationService.Get("Str_MountBtnMounting")
                 : SelectedMode switch
                 {
-                    MountMode.Overlay => "Overlay でマウントする",
-                    MountMode.ReadWrite => "Read-Write でマウントする",
-                    _ => "Read-Only でマウントする",
+                    MountMode.Overlay => LocalizationService.Get("Str_MountBtnOverlay"),
+                    MountMode.ReadWrite => LocalizationService.Get("Str_MountBtnRw"),
+                    _ => LocalizationService.Get("Str_MountBtnRo"),
                 };
 
         public string MountValidationMessage
         {
             get
             {
-                if (!HasCoreExe) return "zeroext.exe が見つかりません。";
-                if (!IsWinFspAvailable) return "WinFsp ランタイムが未インストールのためマウントできません（右上の WinFsp ガイドを参照）。";
-                if (SelectedPartition == null) return "マウント対象のパーティションまたはイメージを選択してください。";
-                if (!SelectedPartition.Info.IsExtFs) return "選択中のパーティションは ext2 / ext3 / ext4 ではありません。";
-                if (SelectedPartition.IsMounted) return $"既に {SelectedPartition.ActiveMount?.MountPoint} にマウント済みです。";
+                if (!HasCoreExe) return LocalizationService.Get("Str_ValNoCoreExe");
+                if (!IsWinFspAvailable) return LocalizationService.Get("Str_ValNoWinFsp");
+                if (SelectedPartition == null) return LocalizationService.Get("Str_ValNoPartition");
+                if (!SelectedPartition.Info.IsExtFs) return LocalizationService.Get("Str_ValNotExtFs");
+                if (SelectedPartition.IsMounted)
+                {
+                    return LocalizationService.Format("Str_ValAlreadyMountedFmt", SelectedPartition.ActiveMount?.MountPoint);
+                }
 
                 if (UseFolderMountPoint)
                 {
@@ -672,14 +729,14 @@ namespace ZeroExt.Gui.ViewModels
                 {
                     if (string.IsNullOrWhiteSpace(SelectedDriveLetter))
                     {
-                        return "利用可能なドライブレターがありません。";
+                        return LocalizationService.Get("Str_ValNoDriveLetters");
                     }
                     if (ActiveMounts.Any(m => string.Equals(
                         ZeroExtArgBuilder.NormalizeMountPointArg(m.MountPoint),
                         ZeroExtArgBuilder.NormalizeMountPointArg(SelectedDriveLetter),
                         StringComparison.OrdinalIgnoreCase)))
                     {
-                        return $"ドライブレター {SelectedDriveLetter} は既にマウントに使用中です。";
+                        return LocalizationService.Format("Str_ValDriveInUseFmt", SelectedDriveLetter);
                     }
                 }
 
@@ -690,7 +747,7 @@ namespace ZeroExt.Gui.ViewModels
 
                 if (!uint.TryParse(CacheBlocksText, out uint cb) || cb == 0)
                 {
-                    return "キャッシュブロック数は 1 以上の整数を指定してください。";
+                    return LocalizationService.Get("Str_ValInvalidCacheBlocks");
                 }
 
                 return string.Empty;
@@ -700,9 +757,10 @@ namespace ZeroExt.Gui.ViewModels
         public bool CanMount => string.IsNullOrEmpty(MountValidationMessage);
 
         public int ActiveMountCount => ActiveMounts.Count;
+        public string ActiveMountCountText => LocalizationService.Format("Str_StatusBarActiveMountsFmt", ActiveMounts.Count);
         public string ActiveMountsTabHeader => ActiveMounts.Count > 0
-            ? $"アクティブマウント ({ActiveMounts.Count})"
-            : "アクティブマウント";
+            ? LocalizationService.Format("Str_TabActiveMountsCountFmt", ActiveMounts.Count)
+            : LocalizationService.Get("Str_TabActiveMounts");
 
         public string CurrentBrowsePath
         {
@@ -762,12 +820,12 @@ namespace ZeroExt.Gui.ViewModels
         {
             if (!HasCoreExe)
             {
-                StatusMessage = "zeroext.exe が見つかりません。";
+                StatusMessage = LocalizationService.Get("Str_StatusCoreMissing");
                 return;
             }
 
             IsScanning = true;
-            StatusMessage = "ディスクおよび登録済みイメージをスキャンしています...";
+            StatusMessage = LocalizationService.Get("Str_StatusScanning");
             string? previousSelectedKey = SelectedPartition?.UniqueKey;
 
             try
@@ -791,7 +849,7 @@ namespace ZeroExt.Gui.ViewModels
                 {
                     if (!File.Exists(imgPath))
                     {
-                        AppendLog($"[scan] 登録イメージが見つからないため除外: {imgPath}");
+                        AppendLog(LocalizationService.Format("Str_LogScanMissingImgFmt", imgPath));
                         continue;
                     }
                     try
@@ -807,7 +865,7 @@ namespace ZeroExt.Gui.ViewModels
                     }
                     catch (Exception ex)
                     {
-                        AppendLog($"[scan] イメージ検査失敗 '{imgPath}': {ex.Message}");
+                        AppendLog(LocalizationService.Format("Str_LogScanImgFailFmt", imgPath, ex.Message));
                         validImages.Add(imgPath);
                     }
                 }
@@ -847,12 +905,12 @@ namespace ZeroExt.Gui.ViewModels
                 }
 
                 int extCount = DiskGroups.SelectMany(g => g.AllPartitions).Count(p => p.Info.IsExtFs);
-                StatusMessage = $"スキャン完了: {DiskGroups.Count} ソース / ext2-4 ボリューム {extCount} 件検出";
+                StatusMessage = LocalizationService.Format("Str_StatusScanDoneFmt", DiskGroups.Count, extCount);
             }
             catch (Exception ex)
             {
-                AppendLog($"[scan] エラー: {ex.Message}");
-                StatusMessage = $"スキャンエラー: {ex.Message}";
+                AppendLog(LocalizationService.Format("Str_LogScanErrFmt", ex.Message));
+                StatusMessage = LocalizationService.Format("Str_StatusScanErrFmt", ex.Message);
             }
             finally
             {
@@ -878,7 +936,7 @@ namespace ZeroExt.Gui.ViewModels
 
             try
             {
-                StatusMessage = $"イメージを読み込んでいます: {Path.GetFileName(fullPath)}";
+                StatusMessage = LocalizationService.Format("Str_StatusLoadingImgFmt", Path.GetFileName(fullPath));
                 ScanResponse imgScan = await _coreClient.InspectSourceAsync(fullPath);
                 IsElevated = imgScan.IsElevated;
                 IsWinFspAvailable = imgScan.WinFspAvailable;
@@ -910,16 +968,16 @@ namespace ZeroExt.Gui.ViewModels
                     }
                 }
 
-                StatusMessage = $"イメージを読み込みました: {Path.GetFileName(fullPath)}";
+                StatusMessage = LocalizationService.Format("Str_StatusLoadedImgFmt", Path.GetFileName(fullPath));
             }
             catch (Exception ex)
             {
-                AppendLog($"[image] 検査エラー '{fullPath}': {ex.Message}");
+                AppendLog(LocalizationService.Format("Str_LogImgErrFmt", fullPath, ex.Message));
                 ShowErrorNotification?.Invoke(
-                    "イメージファイルを検査できませんでした",
+                    LocalizationService.Get("Str_ErrInspectImgTitle"),
                     ex.Message,
-                    "有効な ext2/ext3/ext4 または GPT/MBR ディスクイメージ (.img) であるか確認してください。");
-                StatusMessage = "イメージ読み込みに失敗しました";
+                    LocalizationService.Get("Str_ErrInspectImgDetail"));
+                StatusMessage = LocalizationService.Get("Str_StatusLoadImgFailed");
             }
         }
 
@@ -951,12 +1009,12 @@ namespace ZeroExt.Gui.ViewModels
             SavePresetForSelectedPartition();
 
             IsMounting = true;
-            StatusMessage = $"{req.MountPoint} へマウントしています...";
+            StatusMessage = LocalizationService.Format("Str_StatusMountingFmt", req.MountPoint);
             try
             {
                 ActiveMountInfo info = await _mountManager.StartMountAsync(req);
                 RefreshAvailableDriveLetters();
-                StatusMessage = $"{info.MountPoint} にマウントしました ({info.ModeDisplay})";
+                StatusMessage = LocalizationService.Format("Str_StatusMountedFmt", info.MountPoint, info.ModeDisplay);
 
                 if (AutoOpenExplorer)
                 {
@@ -970,13 +1028,13 @@ namespace ZeroExt.Gui.ViewModels
                 StatusMessage = mf.Translated.Title;
                 ShowErrorNotification?.Invoke(
                     mf.Translated.Title,
-                    mf.Translated.Message + "\n\n対処方法: " + mf.Translated.Suggestion,
+                    mf.Translated.Message + "\n\n" + LocalizationService.Get("Str_SuggestionPrefix") + mf.Translated.Suggestion,
                     mf.Translated.RawDetail);
             }
             catch (Exception ex)
             {
-                StatusMessage = "マウントに失敗しました";
-                ShowErrorNotification?.Invoke("マウントエラー", ex.Message, null);
+                StatusMessage = LocalizationService.Get("Str_StatusMountFailed");
+                ShowErrorNotification?.Invoke(LocalizationService.Get("Str_ErrMountTitle"), ex.Message, null);
             }
             finally
             {
@@ -987,7 +1045,7 @@ namespace ZeroExt.Gui.ViewModels
 
         public async Task UnmountItemAsync(ActiveMountInfo mount)
         {
-            StatusMessage = $"{mount.MountPoint} を安全にアンマウントしています...";
+            StatusMessage = LocalizationService.Format("Str_StatusUnmountingFmt", mount.MountPoint);
             bool clean = await _mountManager.UnmountAsync(mount);
             if (!clean)
             {
@@ -995,18 +1053,18 @@ namespace ZeroExt.Gui.ViewModels
                 if (force)
                 {
                     await _mountManager.ForceKillAndCleanupAsync(mount);
-                    StatusMessage = $"{mount.MountPoint} を強制終了・クリーンアップしました";
+                    StatusMessage = LocalizationService.Format("Str_StatusForceKilledFmt", mount.MountPoint);
                 }
                 else
                 {
                     mount.IsUnmounting = false;
-                    mount.StatusText = "マウント中";
-                    StatusMessage = "アンマウントを待機しています（開いているファイルを閉じて再試行してください）";
+                    mount.StatusText = LocalizationService.Get("Str_MountStatusActive");
+                    StatusMessage = LocalizationService.Get("Str_StatusUnmountWaiting");
                 }
             }
             else
             {
-                StatusMessage = $"{mount.MountPoint} を安全にアンマウントしました";
+                StatusMessage = LocalizationService.Format("Str_StatusUnmountedFmt", mount.MountPoint);
             }
             RefreshAvailableDriveLetters();
             NotifyMountStateChanged();
@@ -1154,10 +1212,44 @@ namespace ZeroExt.Gui.ViewModels
             SyncActiveMountsToPartitions();
             RefreshAvailableDriveLetters();
             OnPropertyChanged(nameof(ActiveMountCount));
+            OnPropertyChanged(nameof(ActiveMountCountText));
             OnPropertyChanged(nameof(ActiveMountsTabHeader));
             UnmountAllCommand.RaiseCanExecuteChanged();
             UnmountSelectedCommand.RaiseCanExecuteChanged();
             NotifyMountStateChanged();
+        }
+
+        private void OnLocalizationLanguageChanged(object? sender, EventArgs e)
+        {
+            _marshalToUi(() =>
+            {
+                OnPropertyChanged(nameof(ThemeToggleLabel));
+                OnPropertyChanged(nameof(CoreExeDisplay));
+                OnPropertyChanged(nameof(SelectedVolumeTitle));
+                OnPropertyChanged(nameof(SelectedVolumeSubtitle));
+                OnPropertyChanged(nameof(SelectedJournalHeaderText));
+                OnPropertyChanged(nameof(ActiveMountCountText));
+                OnPropertyChanged(nameof(ActiveMountsTabHeader));
+                foreach (DiskGroupItem g in DiskGroups)
+                {
+                    g.RefreshLocalizedText();
+                }
+                foreach (ActiveMountInfo m in ActiveMounts)
+                {
+                    if (!m.IsUnmounting)
+                    {
+                        m.StatusText = m.FellBackToRo
+                            ? LocalizationService.Get("Str_MountStatusFallbackRo")
+                            : LocalizationService.Get("Str_MountStatusActive");
+                    }
+                    else
+                    {
+                        m.StatusText = LocalizationService.Get("Str_MountStatusUnmounting");
+                    }
+                }
+                RefreshUpperDirValidation();
+                NotifyMountStateChanged();
+            });
         }
 
         private void SyncActiveMountsToPartitions()
@@ -1293,7 +1385,7 @@ namespace ZeroExt.Gui.ViewModels
             }
             catch (Exception ex)
             {
-                AppendLog($"[settings] 設定保存エラー: {ex.Message}");
+                AppendLog(LocalizationService.Format("Str_LogSettingsSaveErrFmt", ex.Message));
             }
         }
 
@@ -1314,6 +1406,7 @@ namespace ZeroExt.Gui.ViewModels
 
         public void Dispose()
         {
+            LocalizationService.LanguageChanged -= OnLocalizationLanguageChanged;
             _mountManager.ActiveMounts.CollectionChanged -= OnActiveMountsChanged;
             _mountManager.Dispose();
         }

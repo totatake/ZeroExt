@@ -27,8 +27,8 @@ namespace ZeroExt.Gui.Views
         {
             var dlg = new SaveFileDialog
             {
-                Title = "ext4 イメージの保存先を選択",
-                Filter = "ディスクイメージ (*.img;*.raw)|*.img;*.raw|すべてのファイル (*.*)|*.*",
+                Title = LocalizationService.Get("Str_CreateImgBrowseTitle"),
+                Filter = LocalizationService.Get("Str_CreateImgBrowseFilter"),
                 DefaultExt = ".img",
                 FileName = Path.GetFileName(ImagePathBox.Text),
             };
@@ -57,18 +57,18 @@ namespace ZeroExt.Gui.Views
             string path = ImagePathBox.Text.Trim();
             if (string.IsNullOrWhiteSpace(path))
             {
-                ShowError("保存先ファイルパスを入力してください。");
+                ShowError(LocalizationService.Get("Str_CreateImgErrEmptyPath"));
                 return;
             }
             if (!uint.TryParse(SizeMbBox.Text.Trim(), out uint sizeMb) || sizeMb < 2)
             {
-                ShowError("サイズは 2 MB 以上の整数を指定してください。");
+                ShowError(LocalizationService.Get("Str_CreateImgErrSize"));
                 return;
             }
             string label = LabelBox.Text.Trim();
             if (System.Text.Encoding.UTF8.GetByteCount(label) > 16)
             {
-                ShowError("ボリュームラベルは UTF-8 で 16 バイト以内（日本語約 5 文字、英数字 16 文字まで）にしてください。");
+                ShowError(LocalizationService.Get("Str_CreateImgErrLabelBytes"));
                 return;
             }
 
@@ -76,7 +76,7 @@ namespace ZeroExt.Gui.Views
             {
                 CreateBtn.IsEnabled = false;
                 CancelBtn.IsEnabled = false;
-                CreateBtn.Content = "作成中...";
+                CreateBtn.Content = LocalizationService.Get("Str_CreateImgCreating");
 
                 string? parent = Path.GetDirectoryName(Path.GetFullPath(path));
                 if (!string.IsNullOrEmpty(parent))
@@ -97,7 +97,7 @@ namespace ZeroExt.Gui.Views
             {
                 CreateBtn.IsEnabled = true;
                 CancelBtn.IsEnabled = true;
-                CreateBtn.Content = "イメージを作成";
+                CreateBtn.Content = LocalizationService.Get("Str_CreateImgBtn");
             }
         }
 

@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using ZeroExt.Gui.Services;
 
 namespace ZeroExt.Gui.Models
 {
@@ -55,7 +56,7 @@ namespace ZeroExt.Gui.Models
         private double _readBytesPerSec;
         private double _writeBytesPerSec;
         private bool _isUnmounting;
-        private string _statusText = "マウント中";
+        private string _statusText = LocalizationService.Get("Str_MountStatusActive");
 
         public string Id { get; init; } = string.Empty;
         public string SourcePath { get; init; } = string.Empty;

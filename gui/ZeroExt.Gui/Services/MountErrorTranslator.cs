@@ -31,9 +31,9 @@ namespace ZeroExt.Gui.Services
             {
                 return new TranslatedMountError
                 {
-                    Title = "Overlay Upperdir の識別子が一致しません",
-                    Message = "指定された NTFS 書き込み先フォルダ (.wh.__ext4_lower_id) は、別の ext4 ファイルシステムで使用されたフォルダです。",
-                    Suggestion = "データ混在を防ぐため、新しい空のフォルダを指定するか、該当の Upperdir を別の場所に切り替えてください。",
+                    Title = LocalizationService.Get("Str_ErrOverlayMismatchTitle"),
+                    Message = LocalizationService.Get("Str_ErrOverlayMismatchMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrOverlayMismatchSug"),
                     RawDetail = allText,
                 };
             }
@@ -44,9 +44,9 @@ namespace ZeroExt.Gui.Services
             {
                 return new TranslatedMountError
                 {
-                    Title = "未再生ジャーナル (Dirty) のため RW マウントを拒否しました",
-                    Message = "対象の ext4 ボリュームに未再生の JBD2 ジャーナルまたはエラーフラグが検出されたため、データ破損防止のため書き込みマウントをブロックしました。",
-                    Suggestion = "「Read-Only（推奨）」または「Overlay（非破壊書き込み）」モードを使用するか、詳細オプションの「Dirty 時は自動で Read-Only にフォールバック」を有効にしてください。",
+                    Title = LocalizationService.Get("Str_ErrDirtyRwTitle"),
+                    Message = LocalizationService.Get("Str_ErrDirtyRwMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrDirtyRwSug"),
                     RawDetail = allText,
                 };
             }
@@ -57,9 +57,9 @@ namespace ZeroExt.Gui.Services
             {
                 return new TranslatedMountError
                 {
-                    Title = "WinFsp ランタイムが見つかりません",
-                    Message = "ドライブとしてマウントするには WinFsp (Windows File System Proxy) のインストールが必要です。",
-                    Suggestion = "上部の「WinFsp ガイド」から WinFsp をインストール（winget install WinFsp.WinFsp）したあと再実行してください。ファイル閲覧だけなら「ファイルブラウザ」タブでも利用できます。",
+                    Title = LocalizationService.Get("Str_ErrWinFspTitle"),
+                    Message = LocalizationService.Get("Str_ErrWinFspMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrWinFspSug"),
                     RawDetail = allText,
                 };
             }
@@ -70,9 +70,9 @@ namespace ZeroExt.Gui.Services
             {
                 return new TranslatedMountError
                 {
-                    Title = "マウント先ドライブまたはフォルダを使用できません",
-                    Message = "指定したドライブレターが既に使用中（カードリーダーや残留ドライブ等）か、マウント先フォルダが空ではない可能性があります。",
-                    Suggestion = "別の空いているドライブレターを選択してください。過去の異常終了でドライブ文字が残っている場合は「ツール → 残留ドライブ解除」から解除できます。",
+                    Title = LocalizationService.Get("Str_ErrMountPointTitle"),
+                    Message = LocalizationService.Get("Str_ErrMountPointMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrMountPointSug"),
                     RawDetail = allText,
                 };
             }
@@ -83,9 +83,9 @@ namespace ZeroExt.Gui.Services
             {
                 return new TranslatedMountError
                 {
-                    Title = "ディスクへのアクセスが拒否されました",
-                    Message = "物理ディスク（\\\\.\\PhysicalDriveX）または指定パスへのアクセス権限が不足しています。",
-                    Suggestion = "物理ディスクをマウントする場合は上部の「管理者権限で再起動」ボタンから昇格して再実行してください。",
+                    Title = LocalizationService.Get("Str_ErrAccessDeniedTitle"),
+                    Message = LocalizationService.Get("Str_ErrAccessDeniedMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrAccessDeniedSug"),
                     RawDetail = allText,
                 };
             }
@@ -95,9 +95,9 @@ namespace ZeroExt.Gui.Services
             {
                 return new TranslatedMountError
                 {
-                    Title = "対象のパーティションまたはファイルシステムを開けません",
-                    Message = "指定したソースファイル、パーティション番号、または ext2/3/4 スーパーブロックを読み取れませんでした。",
-                    Suggestion = "ソースのパスとパーティション番号が正しいか、「再スキャン」で最新状態を確認してください。",
+                    Title = LocalizationService.Get("Str_ErrOpenFsTitle"),
+                    Message = LocalizationService.Get("Str_ErrOpenFsMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrOpenFsSug"),
                     RawDetail = allText,
                 };
             }
@@ -108,11 +108,11 @@ namespace ZeroExt.Gui.Services
 
             return new TranslatedMountError
             {
-                Title = "マウントに失敗しました" + codeSuffix,
+                Title = LocalizationService.Get("Str_ErrGenericMountTitle") + codeSuffix,
                 Message = string.IsNullOrWhiteSpace(eventMsg)
-                    ? "zeroext エンジンがマウント中にエラーを返しました。"
+                    ? LocalizationService.Get("Str_ErrGenericMountMsg")
                     : eventMsg,
-                Suggestion = "「詳細 & ログ」タブで詳細な出力を確認してください。",
+                Suggestion = LocalizationService.Get("Str_ErrGenericMountSug"),
                 RawDetail = allText,
             };
         }

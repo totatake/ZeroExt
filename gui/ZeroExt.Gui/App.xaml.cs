@@ -58,9 +58,11 @@ namespace ZeroExt.Gui
                 settingsService,
                 isDark => ThemeManager.ApplyTheme(this, isDark),
                 coreArg,
-                act => Dispatcher.BeginInvoke(act));
+                act => Dispatcher.BeginInvoke(act),
+                lang => LocalizationService.ApplyLanguage(this, lang));
 
             ThemeManager.ApplyTheme(this, _viewModel.IsDarkTheme);
+            LocalizationService.ApplyLanguage(this, _viewModel.LanguageSetting);
 
             _mainWindow = new MainWindow(
                 _viewModel,
@@ -97,9 +99,11 @@ namespace ZeroExt.Gui
                     settingsService,
                     isDark => ThemeManager.ApplyTheme(this, isDark),
                     coreArg,
-                    act => act());
+                    act => act(),
+                    lang => LocalizationService.ApplyLanguage(this, lang));
 
                 ThemeManager.ApplyTheme(this, false);
+                LocalizationService.ApplyLanguage(this, "en");
                 var win = new MainWindow(vm);
                 win.Measure(new Size(1200, 780));
                 win.Arrange(new Rect(0, 0, 1200, 780));
@@ -126,8 +130,10 @@ namespace ZeroExt.Gui
                 win.UpdateLayout();
 
                 ThemeManager.ApplyTheme(this, true);
+                LocalizationService.ApplyLanguage(this, "ja");
                 win.UpdateLayout();
                 ThemeManager.ApplyTheme(this, false);
+                LocalizationService.ApplyLanguage(this, "en");
 
                 var createDlg = new CreateImageDialog(vm.CoreClient);
                 createDlg.Measure(new Size(520, 500));
@@ -210,8 +216,8 @@ namespace ZeroExt.Gui
         {
             if (_selfTestMode) return;
             MessageBox.Show(
-                $"予期しないエラーが発生しました:\n\n{e.Exception.Message}",
-                "ZeroExt GUI エラー",
+                LocalizationService.Format("Str_AppUnexpectedErrorFmt", e.Exception.Message),
+                LocalizationService.Get("Str_AppErrorTitle"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             e.Handled = true;

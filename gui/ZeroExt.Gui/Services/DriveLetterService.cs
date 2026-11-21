@@ -89,7 +89,7 @@ namespace ZeroExt.Gui.Services
         {
             if (string.IsNullOrWhiteSpace(path))
             {
-                return (false, "マウント先フォルダのパスを入力してください。");
+                return (false, LocalizationService.Get("Str_FolderValEmpty"));
             }
 
             string trimmed = path.Trim();
@@ -99,31 +99,31 @@ namespace ZeroExt.Gui.Services
                 string? root = Path.GetPathRoot(full);
                 if (string.Equals(full.TrimEnd('\\'), root?.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 {
-                    return (false, "ドライブルート直下（例: C:\\）はマウント先に指定できません。");
+                    return (false, LocalizationService.Get("Str_FolderValDriveRoot"));
                 }
                 if (File.Exists(full))
                 {
-                    return (false, "指定されたパスは既存のファイルです。空のフォルダを指定してください。");
+                    return (false, LocalizationService.Get("Str_FolderValIsFile"));
                 }
                 if (Directory.Exists(full))
                 {
                     if (Directory.EnumerateFileSystemEntries(full).Any())
                     {
-                        return (false, "指定されたフォルダは空ではありません。空のフォルダを指定してください。");
+                        return (false, LocalizationService.Get("Str_FolderValNotEmpty"));
                     }
-                    return (true, "空のフォルダを確認しました。ここにマウントできます。");
+                    return (true, LocalizationService.Get("Str_FolderValOk"));
                 }
 
                 string? parent = Path.GetDirectoryName(full);
                 if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
                 {
-                    return (false, "親フォルダが存在しません。既存の NTFS ドライブ配下のパスを指定してください。");
+                    return (false, LocalizationService.Get("Str_FolderValNoParent"));
                 }
-                return (false, "指定されたフォルダが存在しません。マウント前に空のフォルダを作成してください。");
+                return (false, LocalizationService.Get("Str_FolderValNotExist"));
             }
             catch (Exception ex)
             {
-                return (false, $"無効なフォルダパスです: {ex.Message}");
+                return (false, LocalizationService.Format("Str_FolderValInvalidFmt", ex.Message));
             }
         }
 
@@ -134,7 +134,7 @@ namespace ZeroExt.Gui.Services
                 return new UpperDirCheckResult
                 {
                     Status = UpperDirCheckStatus.None,
-                    Message = "Overlay の書き込み先となる Windows (NTFS) フォルダを指定してください。",
+                    Message = LocalizationService.Get("Str_UpperValNone"),
                     CanMount = false,
                 };
             }
@@ -149,7 +149,7 @@ namespace ZeroExt.Gui.Services
                 return new UpperDirCheckResult
                 {
                     Status = UpperDirCheckStatus.InvalidPath,
-                    Message = $"無効なパスです: {ex.Message}",
+                    Message = LocalizationService.Format("Str_UpperValInvalidFmt", ex.Message),
                     CanMount = false,
                 };
             }
@@ -160,7 +160,7 @@ namespace ZeroExt.Gui.Services
                 return new UpperDirCheckResult
                 {
                     Status = UpperDirCheckStatus.InvalidPath,
-                    Message = "ドライブのルート（例: D:\\）は Upperdir に指定できません。サブフォルダを指定してください。",
+                    Message = LocalizationService.Get("Str_UpperValDriveRoot"),
                     CanMount = false,
                 };
             }
@@ -170,7 +170,7 @@ namespace ZeroExt.Gui.Services
                 return new UpperDirCheckResult
                 {
                     Status = UpperDirCheckStatus.InvalidPath,
-                    Message = "指定されたパスはファイルです。フォルダを指定してください。",
+                    Message = LocalizationService.Get("Str_UpperValIsFile"),
                     CanMount = false,
                 };
             }
@@ -182,14 +182,14 @@ namespace ZeroExt.Gui.Services
                     return new UpperDirCheckResult
                     {
                         Status = UpperDirCheckStatus.InvalidPath,
-                        Message = $"ドライブ '{root}' が見つかりません。",
+                        Message = LocalizationService.Format("Str_UpperValNoDriveFmt", root),
                         CanMount = false,
                     };
                 }
                 return new UpperDirCheckResult
                 {
                     Status = UpperDirCheckStatus.WillCreate,
-                    Message = "フォルダが存在しないため、マウント時に新規作成され Lower ID が記録されます。",
+                    Message = LocalizationService.Get("Str_UpperValWillCreate"),
                     CanMount = true,
                 };
             }
@@ -213,7 +213,7 @@ namespace ZeroExt.Gui.Services
                     return new UpperDirCheckResult
                     {
                         Status = UpperDirCheckStatus.MismatchedLower,
-                        Message = $"このフォルダは別の ext4 ボリューム用の Upperdir です（.wh.__ext4_lower_id 不一致）。別の空フォルダを指定してください。",
+                        Message = LocalizationService.Get("Str_UpperValMismatch"),
                         CanMount = false,
                     };
                 }
@@ -221,7 +221,7 @@ namespace ZeroExt.Gui.Services
                 return new UpperDirCheckResult
                 {
                     Status = UpperDirCheckStatus.MatchingExisting,
-                    Message = "同一 ext4 ボリュームに紐付いた既存の Upperdir です（前回の変更を継続できます）。",
+                    Message = LocalizationService.Get("Str_UpperValMatch"),
                     CanMount = true,
                 };
             }
@@ -233,7 +233,7 @@ namespace ZeroExt.Gui.Services
                     return new UpperDirCheckResult
                     {
                         Status = UpperDirCheckStatus.NonEmptyUnmarked,
-                        Message = "警告: フォルダが空ではなく Lower ID マーカーがありません。既存ファイルが Lower 側を上書き表示します。",
+                        Message = LocalizationService.Get("Str_UpperValNonEmptyUnmarked"),
                         CanMount = true,
                     };
                 }
@@ -246,7 +246,7 @@ namespace ZeroExt.Gui.Services
             return new UpperDirCheckResult
             {
                 Status = UpperDirCheckStatus.EmptyReady,
-                Message = "空のフォルダを確認しました。Lower ext4 は完全に保護されたまま利用できます。",
+                Message = LocalizationService.Get("Str_UpperValEmptyReady"),
                 CanMount = true,
             };
         }

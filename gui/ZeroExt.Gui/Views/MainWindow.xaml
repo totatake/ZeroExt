@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:conv="clr-namespace:ZeroExt.Gui.Converters"
         xmlns:models="clr-namespace:ZeroExt.Gui.Models"
-        Title="ZeroExt - ext2/ext3/ext4 マウントマネージャー"
+        Title="{DynamicResource Str_WindowTitle}"
         Width="1200"
         Height="780"
         MinWidth="940"
@@ -48,14 +48,14 @@
                     </Border>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="ZeroExt" FontSize="17" FontWeight="Bold" />
-                        <TextBlock Text="ext2 / ext3 / ext4 マウントマネージャー (libext2fs + WinFsp)"
+                        <TextBlock Text="{DynamicResource Str_HeaderSubtitle}"
                                    FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}" />
                     </StackPanel>
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- WinFsp Badge -->
-                    <Button Click="OnOpenWinFspGuideClick" Margin="0,0,8,0" ToolTip="WinFsp ランタイム状態とインストール手順を表示"
+                    <Button Click="OnOpenWinFspGuideClick" Margin="0,0,8,0" ToolTip="{DynamicResource Str_WinFspBadgeToolTip}"
                             Cursor="Hand" BorderThickness="0" Background="Transparent" Padding="0">
                         <Border Style="{StaticResource PillBadgeStyle}">
                             <Border.Resources>
@@ -72,11 +72,11 @@
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
-                                        <Setter Property="Text" Value="WinFsp: 利用可能" />
+                                        <Setter Property="Text" Value="{DynamicResource Str_WinFspAvailable}" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsWinFspAvailable}" Value="False">
                                                 <Setter Property="Foreground" Value="{DynamicResource WarningBrush}" />
-                                                <Setter Property="Text" Value="WinFsp: 未導入 (導入手順)" />
+                                                <Setter Property="Text" Value="{DynamicResource Str_WinFspMissing}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -90,23 +90,33 @@
                             Background="{DynamicResource SuccessBgBrush}"
                             Margin="0,0,8,0"
                             Visibility="{Binding IsElevated, Converter={StaticResource BoolToVis}}">
-                        <TextBlock Text="管理者権限" Foreground="{DynamicResource SuccessBrush}" FontSize="12" FontWeight="SemiBold" />
+                        <TextBlock Text="{DynamicResource Str_ElevatedBadge}" Foreground="{DynamicResource SuccessBrush}" FontSize="12" FontWeight="SemiBold" />
                     </Border>
-                    <Button Content="管理者権限で再起動"
+                    <Button Content="{DynamicResource Str_RestartElevatedBtn}"
                             Style="{StaticResource SecondaryButtonStyle}"
                             Margin="0,0,8,0"
                             Visibility="{Binding NonElevatedNoticeVisible, Converter={StaticResource BoolToVis}}"
                             Click="OnElevateClick"
-                            ToolTip="物理ディスク (\\.\PhysicalDriveX) を読み書きするには管理者権限が必要です" />
+                            ToolTip="{DynamicResource Str_RestartElevatedToolTip}" />
 
-                    <Button Content="再スキャン" Style="{StaticResource SecondaryButtonStyle}"
+                    <Button Content="{DynamicResource Str_RescanBtn}" Style="{StaticResource SecondaryButtonStyle}"
                             Command="{Binding RefreshDisksCommand}" Margin="0,0,8,0" />
-                    <Button Content="イメージを追加..." Style="{StaticResource SecondaryButtonStyle}"
+                    <Button Content="{DynamicResource Str_AddImageBtn}" Style="{StaticResource SecondaryButtonStyle}"
                             Click="OnAddImageClick" Margin="0,0,8,0" />
-                    <Button Content="新規作成..." Style="{StaticResource SecondaryButtonStyle}"
+                    <Button Content="{DynamicResource Str_NewImageBtn}" Style="{StaticResource SecondaryButtonStyle}"
                             Click="OnCreateImageClick" Margin="0,0,8,0" />
-                    <Button Content="残留ドライブ解除" Style="{StaticResource SecondaryButtonStyle}"
+                    <Button Content="{DynamicResource Str_ForceUnmountBtn}" Style="{StaticResource SecondaryButtonStyle}"
                             Click="OnForceUnmountClick" Margin="0,0,8,0" />
+                    <ComboBox SelectedValuePath="Tag"
+                              SelectedValue="{Binding LanguageSetting, Mode=TwoWay}"
+                              Width="92"
+                              Margin="0,0,8,0"
+                              VerticalAlignment="Center"
+                              ToolTip="{DynamicResource Str_LanguageToolTip}">
+                        <ComboBoxItem Content="{DynamicResource Str_LangAuto}" Tag="auto" />
+                        <ComboBoxItem Content="{DynamicResource Str_LangEnglish}" Tag="en" />
+                        <ComboBoxItem Content="{DynamicResource Str_LangJapanese}" Tag="ja" />
+                    </ComboBox>
                     <Button Content="{Binding ThemeToggleLabel}" Style="{StaticResource SecondaryButtonStyle}"
                             Command="{Binding ToggleThemeCommand}" />
                 </StackPanel>
@@ -121,11 +131,11 @@
                     Padding="16,8"
                     Visibility="{Binding HasCoreExe, Converter={StaticResource InvBoolToVis}}">
                 <DockPanel>
-                    <Button DockPanel.Dock="Right" Content="zeroext.exe を指定..."
+                    <Button DockPanel.Dock="Right" Content="{DynamicResource Str_CoreMissingBrowseBtn}"
                             Style="{StaticResource SecondaryButtonStyle}" Padding="10,4"
                             Click="OnBrowseCoreExeClick" />
                     <TextBlock Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center" TextWrapping="Wrap"
-                               Text="バックエンドエンジン zeroext.exe が見つかりません。build\zeroext.exe をビルドするか、右のボタンから場所を指定してください。" />
+                               Text="{DynamicResource Str_CoreMissingBanner}" />
                 </DockPanel>
             </Border>
 
@@ -135,11 +145,11 @@
                     Padding="16,8"
                     Visibility="{Binding WinFspBannerVisible, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
-                    <Button DockPanel.Dock="Right" Content="WinFsp 導入ガイドを開く"
+                    <Button DockPanel.Dock="Right" Content="{DynamicResource Str_WinFspOpenGuideBtn}"
                             Style="{StaticResource SecondaryButtonStyle}" Padding="10,4"
                             Click="OnOpenWinFspGuideClick" />
                     <TextBlock Foreground="{DynamicResource WarningBrush}" VerticalAlignment="Center" TextWrapping="Wrap"
-                               Text="WinFsp ランタイムがインストールされていないため Windows ドライブへのマウントは無効です（ファイルブラウザやイメージ作成は利用可能です）。" />
+                               Text="{DynamicResource Str_WinFspMissingBanner}" />
                 </DockPanel>
             </Border>
         </StackPanel>
@@ -168,12 +178,12 @@
                             BorderBrush="{DynamicResource SubtleBorderBrush}" BorderThickness="0,0,0,1">
                         <StackPanel>
                             <DockPanel>
-                                <TextBlock Text="ストレージ・イメージ" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" />
+                                <TextBlock Text="{DynamicResource Str_SidebarTitle}" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" />
                                 <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                           Text="スキャン中..." FontSize="11.5" Foreground="{DynamicResource AccentBrush}"
+                                           Text="{DynamicResource Str_Scanning}" FontSize="11.5" Foreground="{DynamicResource AccentBrush}"
                                            Visibility="{Binding IsScanning, Converter={StaticResource BoolToVis}}" />
                             </DockPanel>
-                            <CheckBox Content="非 ext パーティションも表示"
+                            <CheckBox Content="{DynamicResource Str_ShowNonExtCheck}"
                                       IsChecked="{Binding ShowNonExtPartitions}"
                                       Margin="0,8,0,0" FontSize="12"
                                       Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -194,13 +204,13 @@
                                             <StackPanel>
                                                 <DockPanel Margin="0,0,0,6">
                                                     <Button DockPanel.Dock="Right"
-                                                            Content="削除"
+                                                            Content="{DynamicResource Str_RemoveImageBtn}"
                                                             Style="{StaticResource SecondaryButtonStyle}"
                                                             Padding="7,2" FontSize="11"
                                                             Visibility="{Binding IsImageFile, Converter={StaticResource BoolToVis}}"
                                                             Command="{Binding DataContext.RemoveImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                             CommandParameter="{Binding}"
-                                                            ToolTip="リストからこのイメージを除外" />
+                                                            ToolTip="{DynamicResource Str_RemoveImageToolTip}" />
                                                     <StackPanel>
                                                         <StackPanel Orientation="Horizontal">
                                                             <Border CornerRadius="4" Padding="5,1" Margin="0,0,6,0"
@@ -232,18 +242,18 @@
                                                         CornerRadius="6" Padding="8,6" Margin="0,2,0,0"
                                                         Visibility="{Binding Accessible, Converter={StaticResource InvBoolToVis}}">
                                                     <DockPanel>
-                                                        <Button DockPanel.Dock="Right" Content="昇格"
+                                                        <Button DockPanel.Dock="Right" Content="{DynamicResource Str_ElevateSmallBtn}"
                                                                 Style="{StaticResource SecondaryButtonStyle}"
                                                                 Padding="8,2" FontSize="11"
                                                                 Click="OnElevateClick" />
-                                                        <TextBlock Text="管理者権限で再起動すると解析できます"
+                                                        <TextBlock Text="{DynamicResource Str_ElevateToInspect}"
                                                                    Foreground="{DynamicResource WarningBrush}"
                                                                    FontSize="11.5" TextWrapping="Wrap" VerticalAlignment="Center" />
                                                     </DockPanel>
                                                 </Border>
 
                                                 <!-- No ext partitions message -->
-                                                <TextBlock Text="ext2 / ext3 / ext4 パーティションはありません"
+                                                <TextBlock Text="{DynamicResource Str_NoExtPartitions}"
                                                            FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"
                                                            Margin="2,4,0,2"
                                                            Visibility="{Binding HasNoVisibleExtPartitions, Converter={StaticResource BoolToVis}}" />
@@ -360,7 +370,7 @@
 
                     <Border Grid.Row="2" Padding="12,8"
                             BorderBrush="{DynamicResource SubtleBorderBrush}" BorderThickness="0,1,0,0">
-                        <TextBlock Text=".img / .raw ファイルをここへドラッグ＆ドロップで追加"
+                        <TextBlock Text="{DynamicResource Str_DropImagesHint}"
                                    FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"
                                    HorizontalAlignment="Center" TextWrapping="Wrap" />
                     </Border>
@@ -382,9 +392,9 @@
                     <DockPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                                     Visibility="{Binding SelectedPartition.IsMounted, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
-                            <Button Content="エクスプローラーで開く" Style="{StaticResource SecondaryButtonStyle}"
+                            <Button Content="{DynamicResource Str_OpenInExplorerBtn}" Style="{StaticResource SecondaryButtonStyle}"
                                     Command="{Binding OpenMountedExplorerCommand}" Margin="0,0,8,0" />
-                            <Button Content="安全にアンマウント" Style="{StaticResource DangerButtonStyle}"
+                            <Button Content="{DynamicResource Str_SafeUnmountBtn}" Style="{StaticResource DangerButtonStyle}"
                                     Command="{Binding UnmountSelectedCommand}" />
                         </StackPanel>
 
@@ -401,16 +411,16 @@
                 <!-- Main Workspace Tabs -->
                 <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedTabIndex}">
                     <!-- Tab 0: Mount Settings -->
-                    <TabItem Header="マウント設定">
+                    <TabItem Header="{DynamicResource Str_TabMountSettings}">
                         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,8,4,4">
                             <StackPanel>
                                 <!-- Empty state when no partition selected -->
                                 <Border Style="{StaticResource CardBorderStyle}" Padding="28"
                                         Visibility="{Binding HasNoSelectedPartition, Converter={StaticResource BoolToVis}}">
                                     <StackPanel HorizontalAlignment="Center">
-                                        <TextBlock Text="対象のボリュームが選択されていません" FontSize="16" FontWeight="Bold"
+                                        <TextBlock Text="{DynamicResource Str_NoVolumeSelectedTitle}" FontSize="16" FontWeight="Bold"
                                                    HorizontalAlignment="Center" Margin="0,0,0,8" />
-                                        <TextBlock Text="左側のリストから ext2 / ext3 / ext4 パーティションを選択するか、「イメージを追加...」「新規作成...」から .img ファイルを開いてください。"
+                                        <TextBlock Text="{DynamicResource Str_NoVolumeSelectedDesc}"
                                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                                    TextAlignment="Center" TextWrapping="Wrap" MaxWidth="480" />
                                     </StackPanel>
@@ -442,7 +452,7 @@
                                         </Border.Style>
                                         <StackPanel>
                                             <TextBlock FontWeight="SemiBold"
-                                                       Text="{Binding SelectedPartition.Info.JournalDisplayText, StringFormat='ジャーナル状態: {0}'}" />
+                                                       Text="{Binding SelectedJournalHeaderText}" />
                                             <TextBlock Text="{Binding SelectedPartition.Info.JournalDescription}"
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                                        TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
@@ -452,7 +462,7 @@
                                     <!-- Step 1: Mount Mode Cards -->
                                     <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12">
                                         <StackPanel>
-                                            <TextBlock Text="1. マウントモードを選択" FontWeight="Bold" FontSize="14.5" Margin="0,0,0,10" />
+                                            <TextBlock Text="{DynamicResource Str_Step1SelectMode}" FontWeight="Bold" FontSize="14.5" Margin="0,0,0,10" />
                                             <UniformGrid Columns="3">
                                                 <RadioButton Style="{StaticResource ModeCardRadioStyle}"
                                                              GroupName="MountModeGroup"
@@ -462,12 +472,12 @@
                                                         <DockPanel Margin="0,0,0,4">
                                                             <Border DockPanel.Dock="Right" Background="{DynamicResource SuccessBgBrush}"
                                                                     CornerRadius="6" Padding="6,1">
-                                                                <TextBlock Text="推奨" Foreground="{DynamicResource SuccessBrush}"
+                                                                <TextBlock Text="{DynamicResource Str_ModeRecommendedBadge}" Foreground="{DynamicResource SuccessBrush}"
                                                                            FontSize="10.5" FontWeight="Bold" />
                                                             </Border>
                                                             <TextBlock Text="Read-Only" FontWeight="Bold" FontSize="14" />
                                                         </DockPanel>
-                                                        <TextBlock Text="読み取り専用で安全にアクセスします。Direct I/O が有効になり最高速で読み込めます。"
+                                                        <TextBlock Text="{DynamicResource Str_ModeRoDesc}"
                                                                    FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
                                                                    TextWrapping="Wrap" />
                                                     </StackPanel>
@@ -481,12 +491,12 @@
                                                         <DockPanel Margin="0,0,0,4">
                                                             <Border DockPanel.Dock="Right" Background="{DynamicResource InfoBgBrush}"
                                                                     CornerRadius="6" Padding="6,1">
-                                                                <TextBlock Text="非破壊RW" Foreground="{DynamicResource InfoBrush}"
+                                                                <TextBlock Text="{DynamicResource Str_ModeOverlayBadge}" Foreground="{DynamicResource InfoBrush}"
                                                                            FontSize="10.5" FontWeight="Bold" />
                                                             </Border>
                                                             <TextBlock Text="Overlay" FontWeight="Bold" FontSize="14" />
                                                         </DockPanel>
-                                                        <TextBlock Text="元の ext4 は完全に保護（RO+直読）し、変更・新規作成だけ指定の NTFS フォルダに保存します。"
+                                                        <TextBlock Text="{DynamicResource Str_ModeOverlayDesc}"
                                                                    FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
                                                                    TextWrapping="Wrap" />
                                                     </StackPanel>
@@ -500,12 +510,12 @@
                                                         <DockPanel Margin="0,0,0,4">
                                                             <Border DockPanel.Dock="Right" Background="{DynamicResource WarningBgBrush}"
                                                                     CornerRadius="6" Padding="6,1">
-                                                                <TextBlock Text="直接書込" Foreground="{DynamicResource WarningBrush}"
+                                                                <TextBlock Text="{DynamicResource Str_ModeRwBadge}" Foreground="{DynamicResource WarningBrush}"
                                                                            FontSize="10.5" FontWeight="Bold" />
                                                             </Border>
                                                             <TextBlock Text="Read-Write" FontWeight="Bold" FontSize="14" />
                                                         </DockPanel>
-                                                        <TextBlock Text="ext4 ボリュームへ直接書き込みます。Dirty 状態検出時は自動ガードが働きます。"
+                                                        <TextBlock Text="{DynamicResource Str_ModeRwDesc}"
                                                                    FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
                                                                    TextWrapping="Wrap" />
                                                     </StackPanel>
@@ -518,8 +528,8 @@
                                     <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12"
                                             Visibility="{Binding IsOverlayMode, Converter={StaticResource BoolToVis}}">
                                         <StackPanel>
-                                            <TextBlock Text="Overlay 書き込み先フォルダ (NTFS Upperdir)" FontWeight="Bold" FontSize="14" Margin="0,0,0,6" />
-                                            <TextBlock Text="ファイルの新規作成・編集・削除マーク (.wh.*) が保存される Windows 側の空フォルダを指定してください。"
+                                            <TextBlock Text="{DynamicResource Str_OverlayTitle}" FontWeight="Bold" FontSize="14" Margin="0,0,0,6" />
+                                            <TextBlock Text="{DynamicResource Str_OverlayDesc}"
                                                        FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"
                                                        TextWrapping="Wrap" Margin="0,0,0,8" />
                                             <Grid Margin="0,0,0,8">
@@ -531,10 +541,10 @@
                                                 <TextBox Grid.Column="0"
                                                          Text="{Binding OverlayUpperDir, UpdateSourceTrigger=PropertyChanged}"
                                                          Margin="0,0,8,0" />
-                                                <Button Grid.Column="1" Content="フォルダを選択..."
+                                                <Button Grid.Column="1" Content="{DynamicResource Str_SelectFolderBtn}"
                                                         Style="{StaticResource SecondaryButtonStyle}"
                                                         Margin="0,0,6,0" Click="OnBrowseUpperDirClick" />
-                                                <Button Grid.Column="2" Content="推奨パス設定"
+                                                <Button Grid.Column="2" Content="{DynamicResource Str_SuggestedPathBtn}"
                                                         Style="{StaticResource SecondaryButtonStyle}"
                                                         Command="{Binding SetAutoOverlayPathCommand}" />
                                             </Grid>
@@ -581,17 +591,17 @@
                                     <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12"
                                             Visibility="{Binding IsReadWriteMode, Converter={StaticResource BoolToVis}}">
                                         <StackPanel>
-                                            <TextBlock Text="Read-Write 安全保護ポリシー" FontWeight="Bold" FontSize="14" Margin="0,0,0,6" />
+                                            <TextBlock Text="{DynamicResource Str_RwSafetyTitle}" FontWeight="Bold" FontSize="14" Margin="0,0,0,6" />
                                             <Border Background="{DynamicResource DangerBgBrush}"
                                                     BorderBrush="{DynamicResource DangerBrush}"
                                                     BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="0,0,0,8"
                                                     Visibility="{Binding ShowDirtyRwWarning, Converter={StaticResource BoolToVis}}">
                                                 <TextBlock Foreground="{DynamicResource DangerBrush}" TextWrapping="Wrap" FontSize="12"
-                                                           Text="このボリュームは Dirty 状態（未再生ジャーナルまたはエラーフラグあり）です。安全な運用には Read-Only または Overlay モードの利用を強く推奨します。" />
+                                                           Text="{DynamicResource Str_RwDirtyWarning}" />
                                             </Border>
-                                            <CheckBox Content="Dirty 状態検出時は Read-Only に自動フォールバックする（推奨）"
+                                            <CheckBox Content="{DynamicResource Str_RwRoFallbackCheck}"
                                                       IsChecked="{Binding RoFallbackOnDirty}" Margin="0,2,0,6" />
-                                            <CheckBox Content="Dirty 状態を無視して強制 RW オープンする (--force-dirty・非推奨)"
+                                            <CheckBox Content="{DynamicResource Str_RwForceDirtyCheck}"
                                                       IsChecked="{Binding ForceDirty}" />
                                         </StackPanel>
                                     </Border>
@@ -599,14 +609,14 @@
                                     <!-- Step 2: Mount Target -->
                                     <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12">
                                         <StackPanel>
-                                            <TextBlock Text="2. マウント先を指定" FontWeight="Bold" FontSize="14.5" Margin="0,0,0,10" />
+                                            <TextBlock Text="{DynamicResource Str_Step2MountTarget}" FontWeight="Bold" FontSize="14.5" Margin="0,0,0,10" />
                                             <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                                <RadioButton Content="ドライブレターとしてマウント（推奨）"
+                                                <RadioButton Content="{DynamicResource Str_TargetDriveLetterRadio}"
                                                              GroupName="TargetKindGroup"
                                                              IsChecked="{Binding UseDriveLetterMountPoint, Mode=OneWay}"
                                                              Checked="OnSelectDriveLetterTarget"
                                                              Margin="0,0,20,0" />
-                                                <RadioButton Content="NTFS の空フォルダ配下へマウント"
+                                                <RadioButton Content="{DynamicResource Str_TargetFolderRadio}"
                                                              GroupName="TargetKindGroup"
                                                              IsChecked="{Binding UseFolderMountPoint, Mode=TwoWay}" />
                                             </StackPanel>
@@ -621,7 +631,7 @@
                                                           ItemsSource="{Binding AvailableDriveLetters}"
                                                           SelectedItem="{Binding SelectedDriveLetter}"
                                                           Margin="0,0,8,0" />
-                                                <Button Grid.Column="1" Content="空きドライブ更新"
+                                                <Button Grid.Column="1" Content="{DynamicResource Str_RefreshDrivesBtn}"
                                                         Style="{StaticResource SecondaryButtonStyle}"
                                                         Click="OnRefreshDrivesClick" />
                                             </Grid>
@@ -634,12 +644,12 @@
                                                 <TextBox Grid.Column="0"
                                                          Text="{Binding MountFolderPath, UpdateSourceTrigger=PropertyChanged}"
                                                          Margin="0,0,8,0" />
-                                                <Button Grid.Column="1" Content="空フォルダを選択..."
+                                                <Button Grid.Column="1" Content="{DynamicResource Str_SelectEmptyFolderBtn}"
                                                         Style="{StaticResource SecondaryButtonStyle}"
                                                         Click="OnBrowseMountFolderClick" />
                                             </Grid>
 
-                                            <CheckBox Content="マウント完了後にエクスプローラーで自動的に開く"
+                                            <CheckBox Content="{DynamicResource Str_AutoOpenExplorerCheck}"
                                                       IsChecked="{Binding AutoOpenExplorer}"
                                                       Margin="0,10,0,0" />
                                         </StackPanel>
@@ -647,30 +657,30 @@
 
                                     <!-- Advanced Options -->
                                     <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12" Padding="14,10">
-                                        <Expander Header="詳細設定・CLI コマンドプレビュー" IsExpanded="False">
+                                        <Expander Header="{DynamicResource Str_AdvancedExpanderHeader}" IsExpanded="False">
                                             <StackPanel Margin="0,10,0,0">
-                                                <CheckBox Content="ダイレクト・エクステント I/O (Direct I/O) を有効にする（RO / Overlay 時は既定 ON）"
+                                                <CheckBox Content="{DynamicResource Str_DirectIoCheck}"
                                                           IsChecked="{Binding EnableDirectIo}"
                                                           IsEnabled="{Binding DirectIoEditable}"
                                                           Margin="0,0,0,4" />
-                                                <TextBlock Text="※ Read-Write モードでは整合性維持のため Direct I/O は自動的に無効化されます。"
+                                                <TextBlock Text="{DynamicResource Str_RwDirectIoNote}"
                                                            FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"
                                                            Margin="20,0,0,8"
                                                            Visibility="{Binding IsReadWriteMode, Converter={StaticResource BoolToVis}}" />
 
                                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
-                                                    <TextBlock Text="LRU ブロックキャッシュ数:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                    <TextBlock Text="{DynamicResource Str_CacheBlocksLabel}" VerticalAlignment="Center" Margin="0,0,8,0" />
                                                     <TextBox Width="90" Text="{Binding CacheBlocksText, UpdateSourceTrigger=PropertyChanged}" />
-                                                    <TextBlock Text="ブロック（既定 2048 = 8 MB @ 4KB）" VerticalAlignment="Center"
+                                                    <TextBlock Text="{DynamicResource Str_CacheBlocksUnit}" VerticalAlignment="Center"
                                                                Foreground="{DynamicResource TextMutedBrush}" Margin="8,0,0,0" FontSize="12" />
                                                 </StackPanel>
 
-                                                <CheckBox Content="WinFsp デバッグログを有効にする (--debug)"
+                                                <CheckBox Content="{DynamicResource Str_DebugLogCheck}"
                                                           IsChecked="{Binding EnableDebugLog}" Margin="0,0,0,6" />
-                                                <CheckBox Content="マウント中は × ボタンでシステムトレイに最小化する"
+                                                <CheckBox Content="{DynamicResource Str_MinimizeToTrayCheck}"
                                                           IsChecked="{Binding MinimizeToTrayWhenMounted}" Margin="0,0,0,10" />
 
-                                                <TextBlock Text="Perfetto トレース出力先 (--trace・ui.perfetto.dev で可視化):" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,4" />
+                                                <TextBlock Text="{DynamicResource Str_TraceOutputLabel}" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,4" />
                                                 <Grid Margin="0,0,0,10">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
@@ -679,18 +689,18 @@
                                                     </Grid.ColumnDefinitions>
                                                     <TextBox Grid.Column="0" FontFamily="Consolas" FontSize="12"
                                                              Text="{Binding TraceOutputPath, UpdateSourceTrigger=PropertyChanged}"
-                                                             ToolTip="空欄時はゼロオーバーヘッド（無効）。指定時はアンマウント時に Chrome Trace JSON を書き出します。"
+                                                             ToolTip="{DynamicResource Str_TraceOutputToolTip}"
                                                              Margin="0,0,8,0" />
-                                                    <Button Grid.Column="1" Content="参照..."
+                                                    <Button Grid.Column="1" Content="{DynamicResource Str_CommonBrowse}"
                                                             Style="{StaticResource SecondaryButtonStyle}"
                                                             Margin="0,0,6,0"
                                                             Click="OnBrowseTraceOutputClick" />
-                                                    <Button Grid.Column="2" Content="クリア"
+                                                    <Button Grid.Column="2" Content="{DynamicResource Str_CommonClear}"
                                                             Style="{StaticResource SecondaryButtonStyle}"
                                                             Click="OnClearTraceOutputClick" />
                                                 </Grid>
 
-                                                <TextBlock Text="同等の CLI コマンド:" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,4" />
+                                                <TextBlock Text="{DynamicResource Str_CliCommandLabel}" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,4" />
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
@@ -698,7 +708,7 @@
                                                     </Grid.ColumnDefinitions>
                                                     <TextBox Grid.Column="0" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
                                                              Text="{Binding CliPreviewCommand, Mode=OneWay}" Margin="0,0,8,0" />
-                                                    <Button Grid.Column="1" Content="コピー"
+                                                    <Button Grid.Column="1" Content="{DynamicResource Str_CommonCopy}"
                                                             Style="{StaticResource SecondaryButtonStyle}"
                                                             Click="OnCopyCliCommandClick" />
                                                 </Grid>
@@ -719,7 +729,7 @@
                                                            Foreground="{DynamicResource DangerBrush}"
                                                            TextWrapping="Wrap"
                                                            Visibility="{Binding MountValidationMessage, Converter={StaticResource NotEmptyToVis}}" />
-                                                <TextBlock Text="準備完了：ボタンをクリックすると Windows ドライブとしてマウントします。"
+                                                <TextBlock Text="{DynamicResource Str_MountReadyText}"
                                                            Foreground="{DynamicResource SuccessBrush}"
                                                            Visibility="{Binding CanMount, Converter={StaticResource BoolToVis}}" />
                                             </StackPanel>
@@ -739,19 +749,19 @@
                             </Grid.RowDefinitions>
 
                             <DockPanel Grid.Row="0" Margin="0,0,0,10">
-                                <Button DockPanel.Dock="Right" Content="すべて安全にアンマウント"
+                                <Button DockPanel.Dock="Right" Content="{DynamicResource Str_UnmountAllBtn}"
                                         Style="{StaticResource DangerButtonStyle}"
                                         Command="{Binding UnmountAllCommand}" />
-                                <TextBlock Text="現在稼働中のマウント一覧（リアルタイム I/O 統計）"
+                                <TextBlock Text="{DynamicResource Str_ActiveMountsHeader}"
                                            FontWeight="Bold" FontSize="14" VerticalAlignment="Center" />
                             </DockPanel>
 
                             <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="28"
                                     Visibility="{Binding ActiveMountCount, Converter={StaticResource ZeroToVis}}">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <TextBlock Text="アクティブなマウントはありません" FontSize="16" FontWeight="Bold"
+                                    <TextBlock Text="{DynamicResource Str_NoActiveMountsTitle}" FontSize="16" FontWeight="Bold"
                                                HorizontalAlignment="Center" Margin="0,0,0,6" />
-                                    <TextBlock Text="「マウント設定」タブからドライブレターまたはフォルダを指定してマウントを開始してください。"
+                                    <TextBlock Text="{DynamicResource Str_NoActiveMountsDesc}"
                                                Foreground="{DynamicResource TextSecondaryBrush}" />
                                 </StackPanel>
                             </Border>
@@ -771,12 +781,12 @@
 
                                                     <DockPanel Grid.Row="0">
                                                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                                                            <Button Content="エクスプローラーで開く"
+                                                            <Button Content="{DynamicResource Str_OpenInExplorerBtn}"
                                                                     Style="{StaticResource SecondaryButtonStyle}"
                                                                     Command="{Binding DataContext.OpenMountedExplorerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                     CommandParameter="{Binding}"
                                                                     Margin="0,0,8,0" />
-                                                            <Button Content="安全にアンマウント"
+                                                            <Button Content="{DynamicResource Str_SafeUnmountBtn}"
                                                                     Command="{Binding DataContext.UnmountItemCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                     CommandParameter="{Binding}">
                                                                 <Button.Style>
@@ -784,7 +794,7 @@
                                                                         <Style.Triggers>
                                                                             <DataTrigger Binding="{Binding IsUnmounting}" Value="True">
                                                                                 <Setter Property="IsEnabled" Value="False" />
-                                                                                <Setter Property="Content" Value="アンマウント中..." />
+                                                                                <Setter Property="Content" Value="{DynamicResource Str_UnmountingBtn}" />
                                                                             </DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
@@ -803,7 +813,7 @@
                                                                 </Border>
                                                                 <Border Style="{StaticResource PillBadgeStyle}" Background="{DynamicResource WarningBgBrush}" Margin="6,0,0,0"
                                                                         Visibility="{Binding FellBackToRo, Converter={StaticResource BoolToVis}}">
-                                                                    <TextBlock Text="Dirty安全保護 RO" Foreground="{DynamicResource WarningBrush}" FontSize="11" FontWeight="Bold" />
+                                                                    <TextBlock Text="{DynamicResource Str_DirtyRoBadge}" Foreground="{DynamicResource WarningBrush}" FontSize="11" FontWeight="Bold" />
                                                                 </Border>
                                                                 <Border Style="{StaticResource PillBadgeStyle}" Background="{DynamicResource SuccessBgBrush}" Margin="6,0,0,0"
                                                                         Visibility="{Binding IsTracing, Converter={StaticResource BoolToVis}}"
@@ -819,7 +829,7 @@
                                                     <!-- Overlay upper path -->
                                                     <DockPanel Grid.Row="1" Margin="0,8,0,0"
                                                                Visibility="{Binding IsOverlay, Converter={StaticResource BoolToVis}}">
-                                                        <Button DockPanel.Dock="Right" Content="Upper フォルダを開く"
+                                                        <Button DockPanel.Dock="Right" Content="{DynamicResource Str_OpenUpperBtn}"
                                                                 Style="{StaticResource SecondaryButtonStyle}" Padding="8,3" FontSize="11.5"
                                                                 Command="{Binding DataContext.OpenUpperDirCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                 CommandParameter="{Binding OverlayUpperDir}" />
@@ -833,19 +843,19 @@
                                                             CornerRadius="7" Padding="12,8" Margin="0,10,0,0">
                                                         <UniformGrid Columns="4">
                                                             <StackPanel>
-                                                                <TextBlock Text="読取速度" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                                                <TextBlock Text="{DynamicResource Str_StatReadRate}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
                                                                 <TextBlock Text="{Binding ReadRateFormatted}" FontWeight="Bold" FontSize="13.5" />
                                                             </StackPanel>
                                                             <StackPanel>
-                                                                <TextBlock Text="累計読取" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                                                <TextBlock Text="{DynamicResource Str_StatTotalRead}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
                                                                 <TextBlock Text="{Binding ReadBytesFormatted}" FontWeight="SemiBold" FontSize="13.5" />
                                                             </StackPanel>
                                                             <StackPanel>
-                                                                <TextBlock Text="書込速度" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                                                <TextBlock Text="{DynamicResource Str_StatWriteRate}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
                                                                 <TextBlock Text="{Binding WriteRateFormatted}" FontWeight="Bold" FontSize="13.5" />
                                                             </StackPanel>
                                                             <StackPanel>
-                                                                <TextBlock Text="状態 / PID" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                                                <TextBlock Text="{DynamicResource Str_StatStatusPid}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
                                                                 <TextBlock FontSize="12.5" FontWeight="SemiBold">
                                                                     <Run Text="{Binding StatusText, Mode=OneWay}" />
                                                                     <Run Text=" (PID " Foreground="{DynamicResource TextMutedBrush}" />
@@ -865,7 +875,7 @@
                     </TabItem>
 
                     <!-- Tab 2: Offline File Browser -->
-                    <TabItem Header="ファイルブラウザ">
+                    <TabItem Header="{DynamicResource Str_TabFileBrowser}">
                         <Grid Margin="0,8,0,0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -877,12 +887,12 @@
                                 <DockPanel>
                                     <Border DockPanel.Dock="Right" Style="{StaticResource PillBadgeStyle}"
                                             Background="{DynamicResource InfoBgBrush}" Margin="8,0,0,0">
-                                        <TextBlock Text="WinFsp不要・RO閲覧" Foreground="{DynamicResource InfoBrush}" FontSize="11" FontWeight="SemiBold" />
+                                        <TextBlock Text="{DynamicResource Str_BrowseNoWinFspBadge}" Foreground="{DynamicResource InfoBrush}" FontSize="11" FontWeight="SemiBold" />
                                     </Border>
-                                    <Button DockPanel.Dock="Left" Content="⬆ 上の階層"
+                                    <Button DockPanel.Dock="Left" Content="{DynamicResource Str_BrowseUpBtn}"
                                             Style="{StaticResource SecondaryButtonStyle}"
                                             Command="{Binding NavigateUpBrowseCommand}" Margin="0,0,8,0" />
-                                    <Button DockPanel.Dock="Right" Content="更新"
+                                    <Button DockPanel.Dock="Right" Content="{DynamicResource Str_CommonRefresh}"
                                             Style="{StaticResource SecondaryButtonStyle}"
                                             Command="{Binding RefreshBrowseCommand}" />
                                     <TextBox IsReadOnly="True" Text="{Binding CurrentBrowsePath, Mode=OneWay}"
@@ -902,19 +912,19 @@
                                       SelectedItem="{Binding SelectedBrowseEntry}"
                                       MouseDoubleClick="OnBrowseEntryDoubleClick">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="種別" Binding="{Binding TypeLabel}" Width="110" />
-                                    <DataGridTextColumn Header="名前（フォルダはダブルクリックで開く）" Binding="{Binding Name}" Width="*" />
-                                    <DataGridTextColumn Header="サイズ" Binding="{Binding SizeFormatted}" Width="110" />
-                                    <DataGridTextColumn Header="Mode" Binding="{Binding ModeOctal}" Width="80" />
-                                    <DataGridTextColumn Header="Inode" Binding="{Binding Inode}" Width="85" />
-                                    <DataGridTextColumn Header="更新日時" Binding="{Binding ModifiedFormatted}" Width="145" />
+                                    <DataGridTextColumn Header="{DynamicResource Str_ColType}" Binding="{Binding TypeLabel}" Width="110" />
+                                    <DataGridTextColumn Header="{DynamicResource Str_ColName}" Binding="{Binding Name}" Width="*" />
+                                    <DataGridTextColumn Header="{DynamicResource Str_ColSize}" Binding="{Binding SizeFormatted}" Width="110" />
+                                    <DataGridTextColumn Header="{DynamicResource Str_ColMode}" Binding="{Binding ModeOctal}" Width="80" />
+                                    <DataGridTextColumn Header="{DynamicResource Str_ColInode}" Binding="{Binding Inode}" Width="85" />
+                                    <DataGridTextColumn Header="{DynamicResource Str_ColModified}" Binding="{Binding ModifiedFormatted}" Width="145" />
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Grid>
                     </TabItem>
 
                     <!-- Tab 3: Details & Logs -->
-                    <TabItem Header="詳細 &amp; ログ">
+                    <TabItem Header="{DynamicResource Str_TabDetailsLogs}">
                         <Grid Margin="0,8,0,0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -926,7 +936,7 @@
                             <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,10"
                                     Visibility="{Binding HasSelectedPartition, Converter={StaticResource BoolToVis}}">
                                 <StackPanel>
-                                    <TextBlock Text="選択ボリュームの詳細メタデータ" FontWeight="Bold" Margin="0,0,0,8" />
+                                    <TextBlock Text="{DynamicResource Str_VolMetadataTitle}" FontWeight="Bold" Margin="0,0,0,8" />
                                     <UniformGrid Columns="3">
                                         <TextBlock Margin="0,2" FontSize="12"><Run Text="UUID: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.Uuid, Mode=OneWay}" /></TextBlock>
                                         <TextBlock Margin="0,2" FontSize="12"><Run Text="Offset: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.OffsetBytes, Mode=OneWay}" /></TextBlock>
@@ -941,10 +951,10 @@
                             <!-- Core Engine Path -->
                             <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,0,0,10">
                                 <DockPanel>
-                                    <Button DockPanel.Dock="Right" Content="パスを変更..."
+                                    <Button DockPanel.Dock="Right" Content="{DynamicResource Str_ChangePathBtn}"
                                             Style="{StaticResource SecondaryButtonStyle}"
                                             Click="OnBrowseCoreExeClick" Margin="8,0,0,0" />
-                                    <TextBlock DockPanel.Dock="Left" Text="バックエンド zeroext.exe:" VerticalAlignment="Center"
+                                    <TextBlock DockPanel.Dock="Left" Text="{DynamicResource Str_BackendExeLabel}" VerticalAlignment="Center"
                                                FontWeight="SemiBold" Margin="0,0,10,0" />
                                     <TextBox IsReadOnly="True" Text="{Binding CoreExeDisplay, Mode=OneWay}" FontFamily="Consolas" FontSize="12" />
                                 </DockPanel>
@@ -959,12 +969,12 @@
                                     </Grid.RowDefinitions>
                                     <DockPanel Grid.Row="0" Margin="0,0,0,8">
                                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                            <Button Content="ログをコピー" Style="{StaticResource SecondaryButtonStyle}"
+                                            <Button Content="{DynamicResource Str_CopyLogsBtn}" Style="{StaticResource SecondaryButtonStyle}"
                                                     Padding="10,4" Margin="0,0,6,0" Click="OnCopyLogsClick" />
-                                            <Button Content="クリア" Style="{StaticResource SecondaryButtonStyle}"
+                                            <Button Content="{DynamicResource Str_CommonClear}" Style="{StaticResource SecondaryButtonStyle}"
                                                     Padding="10,4" Command="{Binding ClearLogsCommand}" />
                                         </StackPanel>
-                                        <TextBlock Text="実行ログ" FontWeight="Bold" VerticalAlignment="Center" />
+                                        <TextBlock Text="{DynamicResource Str_ExecLogsTitle}" FontWeight="Bold" VerticalAlignment="Center" />
                                     </DockPanel>
                                     <ListBox Grid.Row="1" ItemsSource="{Binding LogEntries}"
                                              Background="{DynamicResource InputBackgroundBrush}"
@@ -987,7 +997,7 @@
                 Padding="16,6">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Right"
-                           Text="{Binding ActiveMountCount, StringFormat='アクティブマウント: {0} 件'}"
+                           Text="{Binding ActiveMountCountText}"
                            Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" />
                 <TextBlock Text="{Binding StatusMessage}"
                            Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"

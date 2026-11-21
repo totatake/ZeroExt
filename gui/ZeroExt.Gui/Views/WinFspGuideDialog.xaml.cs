@@ -23,13 +23,13 @@ namespace ZeroExt.Gui.Views
             {
                 StatusPill.SetResourceReference(Border.BackgroundProperty, "SuccessBgBrush");
                 StatusPillText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
-                StatusPillText.Text = "インストール済み (利用可能)";
+                StatusPillText.Text = LocalizationService.Get("Str_WinFspInstalledBadge");
             }
             else
             {
                 StatusPill.SetResourceReference(Border.BackgroundProperty, "WarningBgBrush");
                 StatusPillText.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
-                StatusPillText.Text = "未検出 (要インストール)";
+                StatusPillText.Text = LocalizationService.Get("Str_WinFspNotFoundBadge");
             }
         }
 
@@ -38,7 +38,7 @@ namespace ZeroExt.Gui.Views
             if (sender is Button btn && btn.Tag is string cmd)
             {
                 Clipboard.SetText(cmd);
-                CopyNoticeText.Text = $"コピーしました: {cmd}";
+                CopyNoticeText.Text = LocalizationService.Format("Str_WinFspCopiedFmt", cmd);
             }
         }
 
@@ -55,10 +55,12 @@ namespace ZeroExt.Gui.Views
         private async void OnRecheckClick(object sender, RoutedEventArgs e)
         {
             if (_recheckAsync == null) return;
-            CopyNoticeText.Text = "再検出中...";
+            CopyNoticeText.Text = LocalizationService.Get("Str_WinFspRechecking");
             bool available = await _recheckAsync();
             UpdateStatus(available);
-            CopyNoticeText.Text = available ? "WinFsp を検出しました！" : "まだ検出できませんでした。";
+            CopyNoticeText.Text = available
+                ? LocalizationService.Get("Str_WinFspDetected")
+                : LocalizationService.Get("Str_WinFspStillMissing");
         }
     }
 }

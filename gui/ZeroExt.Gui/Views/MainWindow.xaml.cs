@@ -38,7 +38,7 @@ namespace ZeroExt.Gui.Views
             {
                 string full = string.IsNullOrWhiteSpace(detail)
                     ? message
-                    : $"{message}\n\n--- 詳細 ---\n{detail}";
+                    : $"{message}\n\n--- {LocalizationService.Get("Str_DetailHeader")} ---\n{detail}";
                 MessageBox.Show(this, full, title, MessageBoxButton.OK, MessageBoxImage.Warning);
             };
 
@@ -46,8 +46,8 @@ namespace ZeroExt.Gui.Views
             {
                 MessageBoxResult r = MessageBox.Show(
                     this,
-                    $"'{mount.MountPoint}' のアンマウントがタイムアウトしました（エクスプローラーや他アプリがファイルを開いている可能性があります）。\n\n強制終了してドライブ定義をクリーンアップしますか？",
-                    "アンマウント待機タイムアウト",
+                    LocalizationService.Format("Str_ForceKillMsgFmt", mount.MountPoint),
+                    LocalizationService.Get("Str_ForceKillTitle"),
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning);
                 return r == MessageBoxResult.Yes;
@@ -124,8 +124,8 @@ namespace ZeroExt.Gui.Views
         {
             var dlg = new OpenFileDialog
             {
-                Title = "ext2 / ext3 / ext4 ディスクイメージを開く",
-                Filter = "ディスクイメージ (*.img;*.raw;*.ext4;*.bin)|*.img;*.raw;*.ext4;*.bin|すべてのファイル (*.*)|*.*",
+                Title = LocalizationService.Get("Str_OpenImgDialogTitle"),
+                Filter = LocalizationService.Get("Str_OpenImgDialogFilter"),
                 Multiselect = true,
             };
             if (dlg.ShowDialog(this) == true)
@@ -141,8 +141,12 @@ namespace ZeroExt.Gui.Views
         {
             if (!_vm.HasCoreExe)
             {
-                MessageBox.Show(this, "zeroext.exe が見つからないためイメージを作成できません。", "エラー",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(
+                    this,
+                    LocalizationService.Get("Str_ErrCoreMissingCreate"),
+                    LocalizationService.Get("Str_ErrorTitle"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
                 return;
             }
             var dlg = new CreateImageDialog(_vm.CoreClient) { Owner = this };
@@ -156,8 +160,12 @@ namespace ZeroExt.Gui.Views
         {
             if (!_vm.HasCoreExe)
             {
-                MessageBox.Show(this, "zeroext.exe が見つからないため実行できません。", "エラー",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(
+                    this,
+                    LocalizationService.Get("Str_ErrCoreMissingExec"),
+                    LocalizationService.Get("Str_ErrorTitle"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
                 return;
             }
             var dlg = new ForceUnmountDialog(_vm.CoreClient) { Owner = this };
@@ -186,8 +194,8 @@ namespace ZeroExt.Gui.Views
             {
                 MessageBoxResult res = MessageBox.Show(
                     this,
-                    $"現在 {_vm.ActiveMountCount} 件のマウントが稼働中です。管理者権限で再起動する前にすべてのマウントを安全に解除しますか？",
-                    "管理者権限で再起動",
+                    LocalizationService.Format("Str_ElevateActiveMsgFmt", _vm.ActiveMountCount),
+                    LocalizationService.Get("Str_ElevateActiveTitle"),
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question);
                 if (res != MessageBoxResult.Yes) return;
@@ -215,7 +223,7 @@ namespace ZeroExt.Gui.Views
         {
             var dlg = new OpenFolderDialog
             {
-                Title = "マウント先となる空の NTFS フォルダを選択",
+                Title = LocalizationService.Get("Str_BrowseMountFolderTitle"),
             };
             if (!string.IsNullOrWhiteSpace(_vm.MountFolderPath) && Directory.Exists(_vm.MountFolderPath))
             {
@@ -231,7 +239,7 @@ namespace ZeroExt.Gui.Views
         {
             var dlg = new OpenFolderDialog
             {
-                Title = "Overlay の書き込み先となる NTFS フォルダを選択",
+                Title = LocalizationService.Get("Str_BrowseUpperDirTitle"),
             };
             if (!string.IsNullOrWhiteSpace(_vm.OverlayUpperDir) && Directory.Exists(_vm.OverlayUpperDir))
             {
@@ -247,8 +255,8 @@ namespace ZeroExt.Gui.Views
         {
             var dlg = new OpenFileDialog
             {
-                Title = "zeroext.exe を選択",
-                Filter = "ZeroExt 実行ファイル (zeroext.exe)|zeroext.exe|実行ファイル (*.exe)|*.exe",
+                Title = LocalizationService.Get("Str_BrowseCoreTitle"),
+                Filter = LocalizationService.Get("Str_BrowseCoreFilter"),
             };
             if (dlg.ShowDialog(this) == true)
             {
@@ -260,15 +268,15 @@ namespace ZeroExt.Gui.Views
         private void OnCopyCliCommandClick(object sender, RoutedEventArgs e)
         {
             Clipboard.SetText(_vm.CliPreviewCommand);
-            _vm.StatusMessage = "CLI コマンドをクリップボードにコピーしました";
+            _vm.StatusMessage = LocalizationService.Get("Str_StatusCliCopied");
         }
 
         private void OnBrowseTraceOutputClick(object sender, RoutedEventArgs e)
         {
             var dlg = new SaveFileDialog
             {
-                Title = "Perfetto トレース出力先を指定",
-                Filter = "Perfetto / Chrome Trace JSON (*.json)|*.json|すべてのファイル (*.*)|*.*",
+                Title = LocalizationService.Get("Str_BrowseTraceTitle"),
+                Filter = LocalizationService.Get("Str_BrowseTraceFilter"),
                 DefaultExt = ".json",
                 FileName = string.IsNullOrWhiteSpace(_vm.TraceOutputPath)
                     ? "zeroext_trace.json"
@@ -289,7 +297,7 @@ namespace ZeroExt.Gui.Views
         {
             if (_vm.LogEntries.Count == 0) return;
             Clipboard.SetText(string.Join(Environment.NewLine, _vm.LogEntries));
-            _vm.StatusMessage = "ログをクリップボードにコピーしました";
+            _vm.StatusMessage = LocalizationService.Get("Str_StatusLogsCopied");
         }
 
         private async void OnWindowClosing(object? sender, CancelEventArgs e)
@@ -308,8 +316,8 @@ namespace ZeroExt.Gui.Views
 
                 MessageBoxResult res = MessageBox.Show(
                     this,
-                    $"現在 {_vm.ActiveMountCount} 件のマウントが稼働中です。\n\n「はい」: すべて安全にアンマウントして終了\n「いいえ」: システムトレイに最小化してマウントを継続\n「キャンセル」: ウィンドウに戻る",
-                    "マウント継続中の終了確認",
+                    LocalizationService.Format("Str_CloseActiveMsgFmt", _vm.ActiveMountCount),
+                    LocalizationService.Get("Str_CloseActiveTitle"),
                     MessageBoxButton.YesNoCancel,
                     MessageBoxImage.Question);
 
@@ -328,7 +336,7 @@ namespace ZeroExt.Gui.Views
 
                 // Yes: unmount all cleanly before closing
                 e.Cancel = true;
-                _vm.StatusMessage = "すべてのマウントを安全に解除しています...";
+                _vm.StatusMessage = LocalizationService.Get("Str_StatusUnmountingAll");
                 await _vm.MountManager.UnmountAllAsync();
                 _allowClose = true;
                 Close();

@@ -39,7 +39,7 @@ namespace ZeroExt.Gui.Services
             if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
             {
                 throw new InvalidOperationException(
-                    $"物理ディスクのスキャンに失敗しました (exit={res.ExitCode}): {res.StdErr}".Trim());
+                    LocalizationService.Format("Str_CoreScanFailFmt", res.ExitCode, res.StdErr).Trim());
             }
             return ParseScanResponse(res.StdOut);
         }
@@ -54,7 +54,7 @@ namespace ZeroExt.Gui.Services
             if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
             {
                 throw new InvalidOperationException(
-                    $"ソースの検査に失敗しました '{sourcePath}' (exit={res.ExitCode}): {res.StdErr}".Trim());
+                    LocalizationService.Format("Str_CoreInspectFailFmt", sourcePath, res.ExitCode, res.StdErr).Trim());
             }
             return ParseScanResponse(res.StdOut);
         }
@@ -70,7 +70,7 @@ namespace ZeroExt.Gui.Services
             if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
             {
                 throw new InvalidOperationException(
-                    $"ディレクトリ一覧の取得に失敗しました '{ext4Path}' (exit={res.ExitCode}): {res.StdErr}".Trim());
+                    LocalizationService.Format("Str_CoreLsFailFmt", ext4Path, res.ExitCode, res.StdErr).Trim());
             }
             return ParseLsResponse(res.StdOut);
         }
@@ -87,7 +87,7 @@ namespace ZeroExt.Gui.Services
             {
                 string detail = string.IsNullOrWhiteSpace(res.StdErr) ? res.StdOut : res.StdErr;
                 throw new InvalidOperationException(
-                    $"ext4 イメージの作成に失敗しました (exit={res.ExitCode}): {detail}".Trim());
+                    LocalizationService.Format("Str_CoreMkfsFailFmt", res.ExitCode, detail).Trim());
             }
         }
 
@@ -104,7 +104,7 @@ namespace ZeroExt.Gui.Services
             string? exe = _coreExeProvider();
             if (string.IsNullOrWhiteSpace(exe))
             {
-                throw new InvalidOperationException("zeroext.exe が見つかりません。");
+                throw new InvalidOperationException(LocalizationService.Get("Str_ValNoCoreExe"));
             }
 
             var psi = new ProcessStartInfo
@@ -125,7 +125,7 @@ namespace ZeroExt.Gui.Services
             using var proc = new Process { StartInfo = psi };
             if (!proc.Start())
             {
-                throw new InvalidOperationException($"プロセス起動に失敗しました: {exe}");
+                throw new InvalidOperationException(LocalizationService.Format("Str_CoreStartFailFmt", exe));
             }
 
             Task<string> outTask = proc.StandardOutput.ReadToEndAsync(ct);

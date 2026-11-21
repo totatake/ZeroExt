@@ -31,7 +31,7 @@ namespace ZeroExt.Gui.Views
             if (!DriveLetterService.IsDriveLetter(drive) ||
                 string.Equals(drive, "C:", StringComparison.OrdinalIgnoreCase))
             {
-                ResultText.Text = "C: 以外の有効なドライブレター（例: M:）を指定してください。";
+                ResultText.Text = LocalizationService.Get("Str_ForceUnmountErrInvalid");
                 ResultBanner.Visibility = Visibility.Visible;
                 return;
             }
@@ -39,18 +39,18 @@ namespace ZeroExt.Gui.Views
             try
             {
                 UnmountBtn.IsEnabled = false;
-                UnmountBtn.Content = "解除中...";
+                UnmountBtn.Content = LocalizationService.Get("Str_ForceUnmountBusy");
                 CoreCommandResult res = await _coreClient.ForceUnmountAsync(drive);
                 if (res.ExitCode == 0)
                 {
                     ResultText.Text = string.IsNullOrWhiteSpace(res.StdOut)
-                        ? $"{drive} のドライブ定義を解除しました。"
+                        ? LocalizationService.Format("Str_ForceUnmountSuccessFmt", drive)
                         : res.StdOut.Trim();
                 }
                 else
                 {
                     ResultText.Text = string.IsNullOrWhiteSpace(res.StdErr)
-                        ? $"{drive} に対するマウントが見つかりませんでした (exit={res.ExitCode})。"
+                        ? LocalizationService.Format("Str_ForceUnmountNotFoundFmt", drive, res.ExitCode)
                         : res.StdErr.Trim();
                 }
                 ResultBanner.Visibility = Visibility.Visible;
@@ -63,7 +63,7 @@ namespace ZeroExt.Gui.Views
             finally
             {
                 UnmountBtn.IsEnabled = true;
-                UnmountBtn.Content = "ドライブを解除";
+                UnmountBtn.Content = LocalizationService.Get("Str_ForceUnmountDialogBtn");
             }
         }
     }

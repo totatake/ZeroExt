@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text.Json.Serialization;
+using ZeroExt.Gui.Services;
 
 namespace ZeroExt.Gui.Models
 {
@@ -48,7 +49,7 @@ namespace ZeroExt.Gui.Models
         public string DisplayTitle =>
             IsImageFile
                 ? Path.GetFileName(DevicePath)
-                : $"ディスク {DriveIndex}";
+                : LocalizationService.Format("Str_DiskTitleFmt", DriveIndex);
 
         [JsonIgnore]
         public string SubtitleText =>
@@ -56,7 +57,7 @@ namespace ZeroExt.Gui.Models
                 ? DevicePath
                 : Accessible
                     ? $"{DevicePath}  |  {Style}  |  {ByteFormatter.Format(TotalSizeBytes)}"
-                    : $"{DevicePath}  |  管理者権限が必要です";
+                    : LocalizationService.Format("Str_DiskNeedsElevation", DevicePath);
     }
 
     public sealed class PartitionInfo
@@ -176,7 +177,9 @@ namespace ZeroExt.Gui.Models
                 {
                     return PartitionName;
                 }
-                return PartitionNumber == 0 ? "Raw イメージ" : $"パーティション {PartitionNumber}";
+                return PartitionNumber == 0
+                    ? LocalizationService.Get("Str_RawImage")
+                    : LocalizationService.Format("Str_PartitionNumFmt", PartitionNumber);
             }
         }
 
@@ -184,20 +187,20 @@ namespace ZeroExt.Gui.Models
         public string JournalDisplayText => JournalState switch
         {
             "CLEAN" => "CLEAN",
-            "NONE" => "ジャーナルなし",
-            "NEEDS_RECOVERY" => "要リカバリ (Dirty)",
-            "HAS_ERRORS" => "エラー検出",
+            "NONE" => LocalizationService.Get("Str_JournalNone"),
+            "NEEDS_RECOVERY" => LocalizationService.Get("Str_JournalNeedsRecovery"),
+            "HAS_ERRORS" => LocalizationService.Get("Str_JournalHasErrors"),
             _ => string.IsNullOrEmpty(JournalState) ? "-" : JournalState,
         };
 
         [JsonIgnore]
         public string JournalDescription => JournalState switch
         {
-            "CLEAN" => "ジャーナルは正常に終了しています。Read-Only / Overlay / Read-Write いずれでも安全にマウントできます。",
-            "NONE" => "ジャーナル無効（ext2 等）。マウント自体は可能です。",
-            "NEEDS_RECOVERY" => "未再生の JBD2 ジャーナルが残っています（Linux の休止状態や強制終了など）。Read-Only または非破壊 Overlay でのマウントを推奨します。",
-            "HAS_ERRORS" => "ファイルシステムエラーフラグ（EXT2_ERROR_FS）が記録されています。読み取り専用（RO）または Overlay で安全に参照することを推奨します。",
-            _ => "ジャーナル状態を検査できませんでした。",
+            "CLEAN" => LocalizationService.Get("Str_JournalDescClean"),
+            "NONE" => LocalizationService.Get("Str_JournalDescNone"),
+            "NEEDS_RECOVERY" => LocalizationService.Get("Str_JournalDescNeedsRecovery"),
+            "HAS_ERRORS" => LocalizationService.Get("Str_JournalDescHasErrors"),
+            _ => LocalizationService.Get("Str_JournalDescUnknown"),
         };
     }
 
@@ -243,7 +246,9 @@ namespace ZeroExt.Gui.Models
         public ulong LastWriteFileTime { get; set; }
 
         [JsonIgnore]
-        public string TypeLabel => IsDir ? "フォルダ" : (IsSymlink ? "シンボリックリンク" : "ファイル");
+        public string TypeLabel => IsDir
+            ? LocalizationService.Get("Str_TypeDir")
+            : (IsSymlink ? LocalizationService.Get("Str_TypeSymlink") : LocalizationService.Get("Str_TypeFile"));
 
         [JsonIgnore]
         public string SizeFormatted => IsDir ? "-" : ByteFormatter.Format(Size);

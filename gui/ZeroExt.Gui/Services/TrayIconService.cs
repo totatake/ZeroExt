@@ -44,13 +44,14 @@ namespace ZeroExt.Gui.Services
             _notifyIcon = new NotifyIcon
             {
                 Icon = _icon,
-                Text = "ZeroExt - Linux ext2/3/4 マウントマネージャー",
+                Text = LocalizationService.Get("Str_TrayDefaultText"),
                 ContextMenuStrip = _menu,
                 Visible = true,
             };
             _notifyIcon.DoubleClick += (_, _) => _showWindowAction();
 
             _mountManager.ActiveMounts.CollectionChanged += OnActiveMountsChanged;
+            LocalizationService.LanguageChanged += OnLanguageChanged;
             RebuildMenu();
         }
 
@@ -59,9 +60,14 @@ namespace ZeroExt.Gui.Services
             if (_disposed) return;
             _notifyIcon.ShowBalloonTip(
                 2500,
-                "ZeroExt はバックグラウンドで動作中",
-                $"{activeCount} 件のマウントを保持しています。トレイアイコンからウィンドウを再表示またはアンマウントできます。",
+                LocalizationService.Get("Str_TrayBalloonTitle"),
+                LocalizationService.Format("Str_TrayBalloonBodyFmt", activeCount),
                 ToolTipIcon.Info);
+        }
+
+        private void OnLanguageChanged(object? sender, EventArgs e)
+        {
+            RebuildMenu();
         }
 
         private void OnActiveMountsChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -84,10 +90,12 @@ namespace ZeroExt.Gui.Services
             var mounts = new List<ActiveMountInfo>(_mountManager.ActiveMounts);
             int count = mounts.Count;
             _notifyIcon.Text = count > 0
-                ? $"ZeroExt ({count} 件マウント中)"
-                : "ZeroExt - 待機中";
+                ? LocalizationService.Format("Str_TrayActiveTextFmt", count)
+                : LocalizationService.Get("Str_TrayIdleText");
 
-            var header = new ToolStripMenuItem(count > 0 ? $"ZeroExt ({count} 件アクティブ)" : "ZeroExt (マウントなし)")
+            var header = new ToolStripMenuItem(count > 0
+                ? LocalizationService.Format("Str_TrayHeaderActiveFmt", count)
+                : LocalizationService.Get("Str_TrayHeaderIdle"))
             {
                 Enabled = false,
             };
@@ -101,10 +109,10 @@ namespace ZeroExt.Gui.Services
                     var item = new ToolStripMenuItem($"{mount.DisplayTitle} [{mount.ModeDisplay}]");
                     ActiveMountInfo captured = mount;
 
-                    var openItem = new ToolStripMenuItem("エクスプローラーで開く");
+                    var openItem = new ToolStripMenuItem(LocalizationService.Get("Str_TrayOpenExplorer"));
                     openItem.Click += (_, _) => _openMountAction(captured);
 
-                    var unmountItem = new ToolStripMenuItem("安全にアンマウント");
+                    var unmountItem = new ToolStripMenuItem(LocalizationService.Get("Str_TraySafeUnmount"));
                     unmountItem.Click += (_, _) => _unmountAction(captured);
 
                     item.DropDownItems.Add(openItem);
@@ -114,12 +122,14 @@ namespace ZeroExt.Gui.Services
                 _menu.Items.Add(new ToolStripSeparator());
             }
 
-            var showItem = new ToolStripMenuItem("メインウィンドウを表示");
+            var showItem = new ToolStripMenuItem(LocalizationService.Get("Str_TrayShowWindow"));
             showItem.Font = _boldMenuFont;
             showItem.Click += (_, _) => _showWindowAction();
             _menu.Items.Add(showItem);
 
-            var exitItem = new ToolStripMenuItem(count > 0 ? "すべてアンマウントして終了" : "終了");
+            var exitItem = new ToolStripMenuItem(count > 0
+                ? LocalizationService.Get("Str_TrayUnmountAllExit")
+                : LocalizationService.Get("Str_TrayExit"));
             exitItem.Click += (_, _) => _exitApplicationAction();
             _menu.Items.Add(exitItem);
         }
@@ -178,6 +188,7 @@ namespace ZeroExt.Gui.Services
             if (_disposed) return;
             _disposed = true;
             _mountManager.ActiveMounts.CollectionChanged -= OnActiveMountsChanged;
+            LocalizationService.LanguageChanged -= OnLanguageChanged;
             _notifyIcon.Visible = false;
             _notifyIcon.ContextMenuStrip = null;
             _notifyIcon.Dispose();

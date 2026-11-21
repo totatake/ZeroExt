@@ -73,9 +73,9 @@ namespace ZeroExt.Gui.Services
             {
                 throw new MountFailedException(new TranslatedMountError
                 {
-                    Title = "zeroext.exe が見つかりません",
-                    Message = "マウントエンジンである zeroext.exe を検出できませんでした。",
-                    Suggestion = "build\\zeroext.exe をビルドするか、詳細タブからパスを確認してください。",
+                    Title = LocalizationService.Get("Str_SessCoreMissingTitle"),
+                    Message = LocalizationService.Get("Str_SessCoreMissingMsg"),
+                    Suggestion = LocalizationService.Get("Str_SessCoreMissingSug"),
                 });
             }
 
@@ -111,9 +111,9 @@ namespace ZeroExt.Gui.Services
                 proc.Dispose();
                 throw new MountFailedException(new TranslatedMountError
                 {
-                    Title = "プロセス起動エラー",
-                    Message = $"zeroext.exe の起動に失敗しました: {exe}",
-                    Suggestion = "実行ファイルへのアクセス権限を確認してください。",
+                    Title = LocalizationService.Get("Str_SessStartFailTitle"),
+                    Message = LocalizationService.Format("Str_SessStartFailMsgFmt", exe),
+                    Suggestion = LocalizationService.Get("Str_SessStartFailSug"),
                 });
             }
 
@@ -187,7 +187,9 @@ namespace ZeroExt.Gui.Services
                                 ProcessId = proc.Id,
                                 StartedAt = DateTime.Now,
                                 TraceOutputPath = req.TraceOutputPath.Trim(),
-                                StatusText = (ev.FellBackToRo ?? false) ? "RO フォールバック中" : "マウント中",
+                                StatusText = (ev.FellBackToRo ?? false)
+                                    ? LocalizationService.Get("Str_MountStatusFallbackRo")
+                                    : LocalizationService.Get("Str_MountStatusActive"),
                             };
 
                             session = new MountSession
@@ -239,7 +241,7 @@ namespace ZeroExt.Gui.Services
                             _marshalToUi(() =>
                             {
                                 targetInfo.IsUnmounting = true;
-                                targetInfo.StatusText = "アンマウント中...";
+                                targetInfo.StatusText = LocalizationService.Get("Str_MountStatusUnmounting");
                             });
                             _logSink?.Invoke($"[{targetInfo.MountPoint}] アンマウント開始...");
                         }
@@ -335,9 +337,9 @@ namespace ZeroExt.Gui.Services
                 catch { }
                 throw new MountFailedException(new TranslatedMountError
                 {
-                    Title = "マウント待機がタイムアウトしました",
-                    Message = "zeroext.exe からのマウント完了応答が 15 秒以内に返りませんでした。",
-                    Suggestion = "「詳細 & ログ」タブで出力を確認し、必要に応じて「ツール → 残留ドライブ解除」をお試しください。",
+                    Title = LocalizationService.Get("Str_SessTimeoutTitle"),
+                    Message = LocalizationService.Get("Str_SessTimeoutMsg"),
+                    Suggestion = LocalizationService.Get("Str_SessTimeoutSug"),
                 });
             }
         }
@@ -360,7 +362,7 @@ namespace ZeroExt.Gui.Services
             _marshalToUi(() =>
             {
                 mount.IsUnmounting = true;
-                mount.StatusText = "アンマウント中...";
+                mount.StatusText = LocalizationService.Get("Str_MountStatusUnmounting");
             });
 
             try
