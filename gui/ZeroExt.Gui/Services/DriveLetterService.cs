@@ -14,6 +14,23 @@ namespace ZeroExt.Gui.Services
         [DllImport("kernel32.dll")]
         private static extern uint GetLogicalDrives();
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint QueryDosDeviceW(string lpDeviceName, [Out] char[] lpTargetPath, uint ucchMax);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint GetDriveTypeW(string lpRootPathName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool GetVolumeInformationW(
+            string lpRootPathName,
+            [Out] char[]? lpVolumeNameBuffer,
+            uint nVolumeNameSize,
+            out uint lpVolumeSerialNumber,
+            out uint lpMaximumComponentLength,
+            out uint lpFileSystemFlags,
+            [Out] char[] lpFileSystemNameBuffer,
+            uint nFileSystemNameSize);
+
         public static List<string> GetAvailableDriveLetters(IEnumerable<string>? additionalUsed = null)
         {
             var used = new HashSet<char>();
@@ -250,5 +267,103 @@ namespace ZeroExt.Gui.Services
                 CanMount = true,
             };
         }
+
+        public static bool IsSafeUnmountTarget(string? dosTarget, bool volumeAlive, string? fsName)
+        {
+            if (string.IsNullOrWhiteSpace(dosTarget)) return false;
+            if (!dosTarget.StartsWith(@"\Device\Volume{", StringComparison.OrdinalIgnoreCase) &&
+                !dosTarget.StartsWith(@"\Device\WinFsp.", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            if (volumeAlive)
+            {
+                return string.Equals(fsName, "ext4", StringComparison.OrdinalIgnoreCase);
+            }
+            return true;
+        }
+
+        public static DriveUnmountInspection InspectDriveForUnmount(string? driveLetter)
+        {
+            string normalized = ZeroExtArgBuilder.NormalizeMountPointArg(driveLetter ?? string.Empty).ToUpperInvariant();
+            if (!IsDriveLetter(normalized))
+            {
+                return new DriveUnmountInspection { DriveLetter = normalized };
+            }
+
+            string devName = normalized.Substring(0, 2);
+            string root = devName + "\\";
+            var targetBuf = new char[512];
+            uint rc = QueryDosDeviceW(devName, targetBuf, (uint)targetBuf.Length);
+            string dosTarget;
+            if (rc != 0)
+            {
+                int nulIdx = Array.IndexOf(targetBuf, '\0');
+                dosTarget = nulIdx >= 0 ? new string(targetBuf, 0, nulIdx) : new string(targetBuf);
+            }
+            else if (GetDriveTypeW(root) != 1 /* DRIVE_NO_ROOT_DIR */)
+            {
+                dosTarget = "<unknown>";
+            }
+            else
+            {
+                return new DriveUnmountInspection { DriveLetter = devName };
+            }
+
+            var fsBuf = new char[64];
+            bool volumeAlive = false;
+            string fsName = string.Empty;
+            if (GetVolumeInformationW(root, null, 0, out _, out _, out _, fsBuf, (uint)fsBuf.Length))
+            {
+                volumeAlive = true;
+                int fsNul = Array.IndexOf(fsBuf, '\0');
+                fsName = fsNul >= 0 ? new string(fsBuf, 0, fsNul) : new string(fsBuf);
+            }
+            else
+            {
+                int err = Marshal.GetLastWin32Error();
+                if (err == 5 /* ERROR_ACCESS_DENIED */ || err == 32 /* ERROR_SHARING_VIOLATION */)
+                {
+                    volumeAlive = true;
+                }
+            }
+
+            bool safe = IsSafeUnmountTarget(dosTarget, volumeAlive, fsName);
+            return new DriveUnmountInspection
+            {
+                DriveLetter = devName,
+                HasTarget = true,
+                DosTarget = dosTarget,
+                VolumeAlive = volumeAlive,
+                FileSystemName = fsName,
+                IsSafeToUnmount = safe,
+                IsStale = safe && !volumeAlive,
+            };
+        }
+
+        public static List<DriveUnmountInspection> FindSafeUnmountCandidates()
+        {
+            var list = new List<DriveUnmountInspection>();
+            for (char c = 'D'; c <= 'Z'; c++)
+            {
+                DriveUnmountInspection info = InspectDriveForUnmount($"{c}:");
+                if (info.HasTarget && info.IsSafeToUnmount)
+                {
+                    list.Add(info);
+                }
+            }
+            return list;
+        }
+    }
+
+    public sealed class DriveUnmountInspection
+    {
+        public string DriveLetter { get; init; } = string.Empty;
+        public bool HasTarget { get; init; }
+        public string DosTarget { get; init; } = string.Empty;
+        public bool VolumeAlive { get; init; }
+        public string FileSystemName { get; init; } = string.Empty;
+        public bool IsSafeToUnmount { get; init; }
+        public bool IsStale { get; init; }
     }
 }

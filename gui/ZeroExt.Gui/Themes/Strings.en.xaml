@@ -254,6 +254,11 @@
     <sys:String x:Key="Str_ForceUnmountErrInvalid">Please specify a valid drive letter other than C: (e.g. M:).</sys:String>
     <sys:String x:Key="Str_ForceUnmountSuccessFmt">Removed drive definition for {0}.</sys:String>
     <sys:String x:Key="Str_ForceUnmountNotFoundFmt">No active mount definition found for {0} (exit={1}).</sys:String>
+    <sys:String x:Key="Str_ForceUnmountNoCandidates">No stale ZeroExt/WinFsp drive letters were detected (normal drives are protected).</sys:String>
+    <sys:String x:Key="Str_ForceUnmountErrProtectedFmt">{0} is not a ZeroExt/WinFsp drive and cannot be removed (target: {1} / {2}).</sys:String>
+    <sys:String x:Key="Str_ForceUnmountTargetStaleFmt">Target: {0} (stale drive / device: {1})</sys:String>
+    <sys:String x:Key="Str_ForceUnmountTargetExt4Fmt">Target: {0} (ext4 volume / device: {1})</sys:String>
+    <sys:String x:Key="Str_ForceUnmountCandidateNotice">For safety, non-ZeroExt/WinFsp drives are protected and cannot be removed.</sys:String>
 
     <!-- WinFspGuideDialog -->
     <sys:String x:Key="Str_WinFspGuideTitle">WinFsp Runtime Setup Guide</sys:String>

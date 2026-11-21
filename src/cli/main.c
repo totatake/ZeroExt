@@ -1071,8 +1071,13 @@ static int cmd_unmount(int argc, char **argv) {
     if (ext4_utf8_to_wide(argv[2], wdrive, _countof(wdrive)) != 0) return 1;
     if (wdrive[0] && wdrive[1] == 0) { wdrive[1] = L':'; wdrive[2] = 0; }
     if (wdrive[2] == L'\\') wdrive[2] = 0;
-    if (winfsp_driver_force_unmount(wdrive) != 0) {
-        fprintf(stderr, "No mount found for %s (run from the same elevation level that mounted it).\n", argv[2]);
+    int rc = winfsp_driver_force_unmount(wdrive);
+    if (rc != 0) {
+        if (rc == -EACCES || rc == -EPERM) {
+            fprintf(stderr, "Aborted: %s does not appear to be a ZeroExt/WinFsp stale drive.\n", argv[2]);
+        } else {
+            fprintf(stderr, "No mount found for %s (run from the same elevation level that mounted it).\n", argv[2]);
+        }
         return 1;
     }
     return 0;

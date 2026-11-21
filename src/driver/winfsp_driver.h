@@ -22,8 +22,15 @@ int winfsp_driver_start(ext4_vfs_ctx_t *ctx, const wchar_t *mountpoint,
                         uint32_t debug_log, winfsp_mount_handle_t **out_handle);
 void winfsp_driver_stop(winfsp_mount_handle_t *handle);
 
+/* Classify whether a drive target is safe for force-unmount (WinFsp/ext4 or dead WinFsp/Volume link).
+ * Returns 1 if safe to remove, 0 if it belongs to another filesystem or device. */
+int winfsp_driver_is_safe_unmount_target(const wchar_t *dos_target,
+                                         int volume_alive,
+                                         const wchar_t *fs_name);
+
 /* Remove a stale drive letter left behind by an abnormally terminated mount process
- * (Mount Manager mount point + DOS device in current and desktop-user sessions). */
+ * (Mount Manager mount point + DOS device in current and desktop-user sessions).
+ * Refuses with -EACCES if the drive belongs to a non-ZeroExt/WinFsp volume. */
 int winfsp_driver_force_unmount(const wchar_t *drive);
 
 /* Runtime capability helpers */

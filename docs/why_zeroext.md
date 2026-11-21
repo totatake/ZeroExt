@@ -1,8 +1,8 @@
 # ZeroExt 技術解説・既存手法比較・実践ユースケースガイド
 
-> **一言でいうと**: `ZeroExt` は、Windows 上から Linux の ext2 / ext3 / ext4 パーティション・イメージを **BSOD リスクゼロのユーザー空間ドライバ** でありながら **Windows Native NTFS 並み（Warm 読取 10.5 GB/s / 260K IOPS・Cold 実 SSD 読取 1.55 GB/s）** で直接共有できるファイルシステムドライバです。
+> **一言でいうと**: `ZeroExt` は、Windows 上から Linux の ext2 / ext3 / ext4 パーティション・イメージを **BSOD リスクゼロのユーザー空間ドライバ** でありながら **Windows Native NTFS 並み（Warm 読取 10.5 GB/s / 253K IOPS・Cold 実 SSD 読取 1.56 GB/s）** で直接共有できるファイルシステムドライバです。
 
-- 本書の前提となるベンチマーク実測値・検証環境は [性能評価報告書](performance_evaluation.md)（計測リビジョン `f173d76`）および [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md) に基づきます。
+- 本書の前提となるベンチマーク実測値・検証環境は [性能評価報告書](performance_evaluation.md)（計測リビジョン `78cd744` / `e2fsprogs 1.47.4` 適用後）および [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md) に基づきます。
 - コンポーネント構成・ADR（設計判断記録）は [アーキテクチャ設計書](architecture.md) を参照してください。
 
 ---
@@ -13,8 +13,8 @@ Windows から Linux (ext4) 上の巨大なデータ（例：AI モデル、学�
 
 | 方式 / ツール | ドライブ直接マウント | Warm 読取性能<br><sub>(Seq 1MB / Rnd 4KB)</sub> | Cold 実 SSD 直読<br><sub>(Seq 1MB)</sub> | 現代 ext4 対応<br><sub>(`metadata_csum` / 64bit)</sub> | BSOD リスク / 署名要件 | 非破壊書込<br><sub>(`Overlay`)</sub> |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt`（本ツール）** | **◎ 標準ドライブ (`M:`)** | **`10,524` / `1,017 MB/s`**<br><sub>(`Native NTFS` の `1.01x〜1.04x`)</sub> | **`1,551 MB/s`**<br><sub>(`WSL2 9P` の `9.26x`)</sub> | **◎ 本家 `e2fsprogs` (`libext2fs`)** | **ゼロ**（ユーザー空間 / WinFsp） | **◎ (`--overlay`)** |
-| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost\...`) | `198` / `17.6 MB/s`<br><sub>(`ZeroExt` 比 `1/53〜1/69`)</sub> | `168 MB/s` | ◎（Linux カーネル） | 低（VM 常駐・メモリ占有大） | × |
+| **`ZeroExt`（本ツール）** | **◎ 標準ドライブ (`M:`)** | **`10,543` / `991 MB/s`**<br><sub>(`Native NTFS` の `1.00x〜1.08x`)</sub> | **`1,564 MB/s`**<br><sub>(`WSL2 9P` の `9.73x`)</sub> | **◎ 本家 `e2fsprogs` (`libext2fs`)** | **ゼロ**（ユーザー空間 / WinFsp） | **◎ (`--overlay`)** |
+| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost\...`) | `196` / `17.9 MB/s`<br><sub>(`ZeroExt` 比 `1/54〜1/72`)</sub> | `161 MB/s` | ◎（Linux カーネル） | 低（VM 常駐・メモリ占有大） | × |
 | **旧来の非公式カーネル FSD**<br><sub>(`Ext2Fsd` 等)</sub> | ◎ | 高速（カーネル空間） | 高速 | △〜×（最新 ext4 機能非対応の系統が多い） | **高**（カーネル不具合即 BSOD / 署名問題） | × |
 | **商用ドライバ**<br><sub>(`Paragon Linux File Systems` 等)</sub> | ◎ | 高速（カーネル空間） | 高速 | ◎（有償・プロプライエタリ） | 中（サードパーティ `.sys` 常駐） | × |
 | **読取専用ビューア / 複製** | ×（エクスポート前提） | ―（NTFS へ複製要） | ― | ○ | ゼロ | × |

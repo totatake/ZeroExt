@@ -987,11 +987,130 @@ static BOOL remove_any_dosdev(const wchar_t *drive, const wchar_t *target, int r
     return DefineDosDeviceW(DDD_REMOVE_DEFINITION, drive, NULL);
 }
 
+int winfsp_driver_is_safe_unmount_target(const wchar_t *dos_target,
+                                         int volume_alive,
+                                         const wchar_t *fs_name) {
+    if (!dos_target || !dos_target[0]) return 0;
+    if (_wcsnicmp(dos_target, L"\\Device\\Volume{", 15) != 0 &&
+        _wcsnicmp(dos_target, L"\\Device\\WinFsp.", 15) != 0) {
+        return 0;
+    }
+    if (volume_alive) {
+        return (fs_name && _wcsicmp(fs_name, L"ext4") == 0) ? 1 : 0;
+    }
+    return 1;
+}
+
+typedef struct unmount_probe_state {
+    const wchar_t *drive;
+    const wchar_t *root;
+    wchar_t        target[512];
+    wchar_t        fs_name[64];
+    int            has_target;
+    int            volume_alive;
+} unmount_probe_state_t;
+
+static void probe_drive_in_current_session(unmount_probe_state_t *st) {
+    DWORD rc;
+    st->has_target = 0;
+    st->volume_alive = 0;
+    st->target[0] = 0;
+    st->fs_name[0] = 0;
+
+    rc = QueryDosDeviceW(st->drive, st->target, (DWORD)_countof(st->target));
+    if (rc != 0) {
+        st->has_target = 1;
+    } else if (GetDriveTypeW(st->root) != DRIVE_NO_ROOT_DIR) {
+        /* Drive root exists even if QueryDosDeviceW failed (e.g. restricted session) */
+        st->has_target = 1;
+        wcscpy_s(st->target, _countof(st->target), L"<unknown>");
+    } else {
+        return;
+    }
+
+    if (GetVolumeInformationW(st->root, NULL, 0, NULL, NULL, NULL,
+                              st->fs_name, (DWORD)_countof(st->fs_name))) {
+        st->volume_alive = 1;
+    } else {
+        DWORD err = GetLastError();
+        if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION) {
+            /* Treat inaccessible live volumes conservatively as alive/non-ext4 */
+            st->volume_alive = 1;
+            st->fs_name[0] = 0;
+        }
+    }
+}
+
+static void probe_drive_as_desktop_user(unmount_probe_state_t *st) {
+    HWND shell = GetShellWindow();
+    DWORD pid = 0;
+    HANDLE proc = NULL, tok = NULL, imp = NULL;
+
+    st->has_target = 0;
+    st->volume_alive = 0;
+    st->target[0] = 0;
+    st->fs_name[0] = 0;
+
+    if (!shell) return;
+    GetWindowThreadProcessId(shell, &pid);
+    if (!pid) return;
+    proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!proc) return;
+    if (OpenProcessToken(proc, TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE, &tok)) {
+        if (DuplicateTokenEx(tok, TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_DUPLICATE, NULL,
+                             SecurityImpersonation, TokenImpersonation, &imp)) {
+            if (ImpersonateLoggedOnUser(imp)) {
+                probe_drive_in_current_session(st);
+                RevertToSelf();
+            }
+            CloseHandle(imp);
+        }
+        CloseHandle(tok);
+    }
+    CloseHandle(proc);
+}
+
 int winfsp_driver_force_unmount(const wchar_t *drive) {
     WCHAR root[4];
+    unmount_probe_state_t cur_probe;
+    unmount_probe_state_t desk_probe;
+    int elevated;
     int removed = 0;
     if (!is_drive_letter(drive)) return -EINVAL;
+    if (drive[0] == L'C' || drive[0] == L'c') {
+        fprintf(stderr, "Refusing to unmount system drive %ls.\n", drive);
+        return -EACCES;
+    }
     root[0] = drive[0]; root[1] = L':'; root[2] = L'\\'; root[3] = 0;
+
+    cur_probe.drive = drive;
+    cur_probe.root = root;
+    probe_drive_in_current_session(&cur_probe);
+
+    memset(&desk_probe, 0, sizeof(desk_probe));
+    elevated = process_is_elevated();
+    if (elevated) {
+        desk_probe.drive = drive;
+        desk_probe.root = root;
+        probe_drive_as_desktop_user(&desk_probe);
+    }
+
+    if (!cur_probe.has_target && !desk_probe.has_target) {
+        return -ENOENT;
+    }
+
+    if (cur_probe.has_target &&
+        !winfsp_driver_is_safe_unmount_target(cur_probe.target, cur_probe.volume_alive, cur_probe.fs_name)) {
+        fprintf(stderr, "Refusing to unmount %ls: target '%ls' (%ls) is not a ZeroExt/WinFsp volume.\n",
+                drive, cur_probe.target, cur_probe.fs_name[0] ? cur_probe.fs_name : L"unknown");
+        return -EACCES;
+    }
+    if (desk_probe.has_target &&
+        !winfsp_driver_is_safe_unmount_target(desk_probe.target, desk_probe.volume_alive, desk_probe.fs_name)) {
+        fprintf(stderr, "Refusing to unmount %ls: target '%ls' (%ls) in desktop session is not a ZeroExt/WinFsp volume.\n",
+                drive, desk_probe.target, desk_probe.fs_name[0] ? desk_probe.fs_name : L"unknown");
+        return -EACCES;
+    }
 
     /* 1. Mount Manager (global "\\.\X:" mounts) */
     if (DeleteVolumeMountPointW(root)) {
@@ -1004,7 +1123,7 @@ int winfsp_driver_force_unmount(const wchar_t *drive) {
         removed = 1;
     }
     /* 3. DOS device in the non-elevated desktop user's session */
-    if (process_is_elevated() && run_as_desktop_user(remove_any_dosdev, drive, NULL, 1)) {
+    if (elevated && run_as_desktop_user(remove_any_dosdev, drive, NULL, 1)) {
         printf("Removed DOS device %ls from desktop user session\n", drive);
         removed = 1;
     }

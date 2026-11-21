@@ -374,10 +374,37 @@ static int test_winfsp_get_dir_info_by_name_and_large_readdir(void) {
     return 0;
 }
 
+static int test_winfsp_safe_unmount_target(void) {
+    /* Non-WinFsp / physical / subst / network targets must always be rejected */
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(NULL, 0, NULL));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\HarddiskVolume2", 1, L"NTFS"));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\HarddiskVolume2", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\CdRom0", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\??\\C:\\mounted_dir", 1, L"NTFS"));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\LanmanRedirector\\;Z:0\\srv\\share", 1, L"NTFS"));
+
+    /* Live WinFsp/Volume target with another filesystem must be rejected */
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\Volume{11111111-2222-3333-4444-555555555555}", 1, L"NTFS"));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\Volume{11111111-2222-3333-4444-555555555555}", 1, L"exFAT"));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\WinFsp.Disk\\rclone", 1, L"FUSE"));
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_is_safe_unmount_target(L"\\Device\\Volume{11111111-2222-3333-4444-555555555555}", 1, NULL));
+
+    /* Live ext4 WinFsp volume or dead WinFsp/Volume link is safe */
+    TEST_ASSERT_EQ_INT(1, winfsp_driver_is_safe_unmount_target(L"\\Device\\Volume{11111111-2222-3333-4444-555555555555}", 1, L"ext4"));
+    TEST_ASSERT_EQ_INT(1, winfsp_driver_is_safe_unmount_target(L"\\Device\\Volume{11111111-2222-3333-4444-555555555555}", 0, NULL));
+    TEST_ASSERT_EQ_INT(1, winfsp_driver_is_safe_unmount_target(L"\\Device\\WinFsp.Disk\\ext4", 0, NULL));
+
+    /* Live system drive C: must be refused with -EACCES without touching it */
+    TEST_ASSERT_EQ_INT(-EACCES, winfsp_driver_force_unmount(L"C:"));
+    return 0;
+}
+
 int run_suite_winfsp_callbacks(void) {
     int suite_failures = 0;
     RUN_TEST(test_winfsp_interface_e2e);
     RUN_TEST(test_winfsp_volume_params_ro_cache_timeout);
     RUN_TEST(test_winfsp_get_dir_info_by_name_and_large_readdir);
+    RUN_TEST(test_winfsp_safe_unmount_target);
     return suite_failures;
 }

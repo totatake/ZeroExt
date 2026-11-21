@@ -254,6 +254,11 @@
     <sys:String x:Key="Str_ForceUnmountErrInvalid">C: 以外の有効なドライブレター（例: M:）を指定してください。</sys:String>
     <sys:String x:Key="Str_ForceUnmountSuccessFmt">{0} のドライブ定義を解除しました。</sys:String>
     <sys:String x:Key="Str_ForceUnmountNotFoundFmt">{0} に対するマウントが見つかりませんでした (exit={1})。</sys:String>
+    <sys:String x:Key="Str_ForceUnmountNoCandidates">現在、解除可能な ZeroExt 残留ドライブは検出されませんでした（通常のドライブは保護されています）。</sys:String>
+    <sys:String x:Key="Str_ForceUnmountErrProtectedFmt">{0} は ZeroExt のドライブではないため解除できません（対象: {1} / {2}）。</sys:String>
+    <sys:String x:Key="Str_ForceUnmountTargetStaleFmt">解除対象: {0}（残留ドライブ / リンク先: {1}）</sys:String>
+    <sys:String x:Key="Str_ForceUnmountTargetExt4Fmt">解除対象: {0}（ext4 ボリューム / リンク先: {1}）</sys:String>
+    <sys:String x:Key="Str_ForceUnmountCandidateNotice">安全のため、ZeroExt/WinFsp 以外の通常ドライブは解除できないよう保護されています。</sys:String>
 
     <!-- WinFspGuideDialog -->
     <sys:String x:Key="Str_WinFspGuideTitle">WinFsp ランタイム セットアップガイド</sys:String>

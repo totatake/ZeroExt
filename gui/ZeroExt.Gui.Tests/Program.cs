@@ -28,6 +28,7 @@ namespace ZeroExt.Gui.Tests
             Run("JsonParsing_LsAndMountEvents", Test_JsonParsing_LsAndMountEvents);
             Run("ArgBuilder_MountVariantsAndPreview", Test_ArgBuilder_MountVariantsAndPreview);
             Run("DriveLetterAndOverlayValidation", Test_DriveLetterAndOverlayValidation);
+            Run("DriveLetter_SafeUnmountTarget", Test_DriveLetterService_SafeUnmountTarget);
             Run("Localization_CompletenessAndSwitching", Test_Localization_CompletenessAndSwitching);
             Run("MountErrorTranslator", Test_MountErrorTranslator);
             Run("SettingsService_RoundTrip", Test_SettingsService_RoundTrip);
@@ -609,6 +610,28 @@ namespace ZeroExt.Gui.Tests
             {
                 try { Directory.Delete(tmpDir, recursive: true); } catch { }
             }
+        }
+
+        private static void Test_DriveLetterService_SafeUnmountTarget()
+        {
+            Assert(!DriveLetterService.IsSafeUnmountTarget(null, false, null), "null target rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget("", false, null), "empty target rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\Device\HarddiskVolume2", true, "NTFS"), "physical NTFS rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\Device\HarddiskVolume2", false, null), "dead HarddiskVolume rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\Device\CdRom0", false, null), "CdRom rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\??\C:\mounted", true, "NTFS"), "subst rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\Device\LanmanRedirector\;Z:0\srv\share", true, "NTFS"), "network drive rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\Device\Volume{11111111-2222-3333-4444-555555555555}", true, "NTFS"), "live non-ext4 Volume rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\Device\WinFsp.Disk\rclone", true, "FUSE"), "live non-ext4 WinFsp rejected");
+            Assert(!DriveLetterService.IsSafeUnmountTarget(@"\Device\Volume{11111111-2222-3333-4444-555555555555}", true, null), "live unknown fs rejected");
+
+            Assert(DriveLetterService.IsSafeUnmountTarget(@"\Device\Volume{11111111-2222-3333-4444-555555555555}", true, "ext4"), "live ext4 Volume allowed");
+            Assert(DriveLetterService.IsSafeUnmountTarget(@"\Device\Volume{11111111-2222-3333-4444-555555555555}", false, null), "dead Volume link allowed");
+            Assert(DriveLetterService.IsSafeUnmountTarget(@"\Device\WinFsp.Disk\ext4", false, null), "dead WinFsp link allowed");
+
+            DriveUnmountInspection cDrive = DriveLetterService.InspectDriveForUnmount("C:");
+            Assert(cDrive.HasTarget, "C: has target");
+            Assert(!cDrive.IsSafeToUnmount, "C: must never be marked safe to unmount");
         }
     }
 }

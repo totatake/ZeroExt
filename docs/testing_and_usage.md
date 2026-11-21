@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1 -Clean
 - **アクティブマウントタブ & システムトレイ**:
   - 稼働中のマウントごとの読取／書込スループット（MB/s）および累計転送量をリアルタイム表示し、「エクスプローラーで開く」や安全なアンマウントを実行できます。
   - マウント中にウィンドウを閉じた場合はシステムトレイへ最小化してマウントを維持できます（トレイメニューから再表示・開く・一括アンマウント終了が可能）。
-  - 異常終了などで残留したドライブレターがある場合は **「残留ドライブ解除」** からクリーンアップできます。
+  - 異常終了などで残留したドライブレターがある場合は **「残留ドライブ解除」** からクリーンアップできます（`QueryDosDeviceW` / `GetVolumeInformationW` により ZeroExt/WinFsp 残留ドライブまたは `ext4` マウントのみを自動検出し、`C:` や通常の NTFS/exFAT ドライブ等は誤って解除されないよう保護されています）。
 - **ファイルブラウザタブ（WinFsp 不要）**:
   - WinFsp が未導入の環境でも、`zeroext ls --json` を通じて ext2 / ext3 / ext4 内のディレクトリ・ファイル一覧を非破壊で閲覧できます。
 - **ライト／ダークテーマ切替**: 右上のテーマボタンから即座に切り替え可能（設定およびボリュームごとのマウントプリセットは `%LOCALAPPDATA%\ZeroExt\gui_settings.json` に保存されます）。
@@ -141,7 +141,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 アンマウントは実行中のコンソールで `Ctrl+C` を押下します（`ext2fs_flush` と I/O キャッシュフラッシュを実行したうえで安全に停止・解除します）。
 
-プロセスが強制終了や異常終了してドライブレターだけが残ってしまった場合は、マウント時と同じ権限（物理ディスクの場合は管理者権限）で以下を実行してドライブ定義を解除できます：
+プロセスが強制終了や異常終了してドライブレターだけが残ってしまった場合は、マウント時と同じ権限（物理ディスクの場合は管理者権限）で以下を実行してドライブ定義を解除できます（安全のため `QueryDosDeviceW` と `GetVolumeInformationW` により対象ドライブを検査し、`C:` や通常の NTFS/exFAT ドライブ等、ZeroExt/WinFsp 以外のボリュームは解除を拒否します）：
 
 ```powershell
 .\build\zeroext.exe unmount M:
@@ -154,7 +154,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 ## 3. `e2fsprogs` アップストリーム更新手順
 
-本プロジェクトでは `third_party/e2fsprogs/` に Windows 固有パッチを一切含めない Zero-Patch 分離構成を採用しています（`compat/msvc_compat.h` への `/FI` 強制インクルードと `compat/include/` に隔離）。
+本プロジェクトでは `compat/` および `scripts/generate_e2fsprogs_headers.py` へ互換レイヤーを分離した上で、実上流の `e2fsprogs`（現在同梱版: `1.47.4`）を組み込んでいます（MSVC C11 コンパイル互換のための最小限パッチのみ `scripts/update_e2fsprogs.ps1` で自動適用）。
 
 新しい `e2fsprogs` バージョンを展開したディレクトリ `<path>` を指定して以下を実行すると、ソース同期・ヘッダ自動生成・ビルド・`ctest` 検証までを一括実行できます：
 
