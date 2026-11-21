@@ -19,15 +19,16 @@ ZeroExt\
 │   ├── performance_evaluation.md         # `--direct-io` 性能評価報告書
 │   └── future_roadmap.md                 # 今後の構想（GUI / Perfettoトレース）
 ├── scripts/
-│   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> generated headers
+│   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> ext2_err.h/c, ext2_types.h, crc32c_table.h
 │   ├── update_e2fsprogs.ps1              # e2fsprogs 更新＆ビルド検証自動化スクリプト
 │   ├── build_and_test.ps1                # MSVC + Ninja + CTest 実行スクリプト
 │   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ZeroExt/WSL2)
 ├── compat/
-│   ├── msvc_compat.h                     # /FI 強制インクルード用互換シム
+│   ├── msvc_compat.h                     # ext2fs PRIVATE /FI 強制インクルード用互換シム
+│   ├── msvc_public_compat.h              # ext2fs INTERFACE /FI 用最小公開シム (mode_t, __attribute__)
 │   └── include/                          # POSIX/Autotools 代替ヘッダ
 ├── third_party/
-│   ├── e2fsprogs/                        # 上流 lib/et, lib/ext2fs（無改変分離）
+│   ├── e2fsprogs/                        # 上流 e2fsprogs 1.47.4 (lib/et, lib/e2p/e2p.h, lib/ext2fs)
 │   └── winfsp/include/winfsp/winfsp.h    # WinFsp ABI 定義 & 動的ローダー
 ├── src/
 │   ├── common/                           # ext4_errno.h / .c
@@ -43,10 +44,10 @@ ZeroExt\
 
 ### CMake ターゲット構成
 1. **`generate_e2fsprogs_headers`（カスタムターゲット＋configure 時生成）**:
-   - Python 3 実行ファイルを `%LOCALAPPDATA%\Python\bin\python.exe` 優先で検出し、`scripts/generate_e2fsprogs_headers.py` を実行して `${CMAKE_BINARY_DIR}/generated/ext2fs/ext2_err.h`, `${CMAKE_BINARY_DIR}/generated/ext2_err.c`, `${CMAKE_BINARY_DIR}/generated/ext2fs/ext2_types.h` を生成する。
+   - Python 3 実行ファイルを `%LOCALAPPDATA%\Python\bin\python.exe` 優先で検出し、`scripts/generate_e2fsprogs_headers.py` を実行して `${CMAKE_BINARY_DIR}/generated/ext2fs/ext2_err.h`, `${CMAKE_BINARY_DIR}/generated/ext2_err.c`, `${CMAKE_BINARY_DIR}/generated/ext2fs/ext2_types.h`, `${CMAKE_BINARY_DIR}/generated/ext2fs/crc32c_table.h` を生成する。
 2. **`ext2fs`（静的ライブラリ）**:
-   - ソース: `third_party/e2fsprogs/lib/et/com_err.c`, 生成された `ext2_err.c`, `third_party/e2fsprogs/lib/ext2fs/*.c`（OS 依存の `unix_io.c` 等は除外）
-   - コンパイルオプション (MSVC): `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_compat.h` `/W3`
+   - ソース: `third_party/e2fsprogs/lib/et/*.c`（`com_err.c`, `error_message.c`, `et_name.c`, `init_et.c`, `com_right.c`）, 生成された `ext2_err.c`, `third_party/e2fsprogs/lib/ext2fs/*.c`（OS 依存の `unix_io.c` 等は除外した 59 ファイル）
+   - コンパイルオプション (MSVC): `PRIVATE` `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_compat.h` `/W3`、`INTERFACE` `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_public_compat.h`
    - デバッグ形式 (`CMP0141`): `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT = "Embedded"`（`/Z7` により `mspdbsrv.exe` 非依存でビルド）
 3. **`zeroext_core`（静的ライブラリ）**:
    - ソース: `src/common/*.c`, `src/io/*.c`, `src/disk/*.c`, `src/extent/*.c`, `src/overlay/*.c`, `src/vfs/*.c`, `src/driver/*.c`
@@ -65,19 +66,20 @@ ZeroExt\
 
 ## 2. `e2fsprogs` 互換レイヤー詳細 (`compat/` & `scripts/`)
 
-### 2.1 `compat/msvc_compat.h`
-`CMakeLists.txt` の `ext2fs` ターゲットにのみ `/FI` で強制インクルードする。
-- `_CRT_SECURE_NO_WARNINGS`, `_CRT_NONSTDC_NO_DEPRECATE`, `WIN32_LEAN_AND_MEAN`, `NOMINMAX` を定義。
-- `_MSC_VER` 環境向けに `__attribute__(x)` 無効化、`__inline__` → `__inline`、`SSIZE_T` による `ssize_t` 定義、`strcasecmp` → `_stricmp` / `strncasecmp` → `_strnicmp`、および上流コード由来の変換/パディング警告抑制 `#pragma warning(disable: ...)` を記述。
+### 2.1 `compat/msvc_compat.h` / `compat/msvc_public_compat.h`
+`CMakeLists.txt` の `ext2fs` ターゲットに `PRIVATE` `/FI` で `compat/msvc_compat.h` を強制インクルードし、利用ターゲットには警告抑制を含まない `compat/msvc_public_compat.h`（`mode_t` および `__attribute__(x)` のみ）を `INTERFACE` `/FI` で提供する。
+- `_CRT_SECURE_NO_WARNINGS`, `_CRT_NONSTDC_NO_DEPRECATE`, `WIN32_LEAN_AND_MEAN`, `NOMINMAX`, `<sys/time.h>` を取り込み。
+- `_MSC_VER` 環境向けに `__attribute__(x)` 無効化、`__inline__` → `__inline`、`SSIZE_T` による `ssize_t` 定義、`mode_t` / `S_ISBLK` / `__GNUC_PREREQ` 補完、`strcasecmp` → `_stricmp` / `strncasecmp` → `_strnicmp`、および上流コード由来の変換/パディング警告抑制 `#pragma warning(disable: ...)` を記述。
+- 上流側の C11 構文制約に対する最小調整（`scripts/update_e2fsprogs.ps1` で再現適用）: `ext2fs.h` の `EXT2_QSORT_TYPE`（`int __cdecl` → `int`）、`alloc.c` / `punch.c` / `fallocate.c` の GNU 名前付き可変長マクロ `dbg_printf(f, a...)` → C99 `dbg_printf(f, ...)`。
 
 ### 2.2 `compat/include/`
-- `config.h`: `PACKAGE "e2fsprogs"`, `VERSION "1.47.2"`, `HAVE_STDINT_H 1`, `HAVE_INTTYPES_H 1`, `HAVE_STDLIB_H 1`, `HAVE_STRING_H 1`, `HAVE_ERRNO_H 1`, `HAVE_SYS_TYPES_H 1`, `SIZEOF_LONG 4`, `SIZEOF_LONG_LONG 8`, `SIZEOF_OFF_T 8`, `HAVE_EXT2_IOCTLS 0` 等を定義。
-- `unistd.h`, `strings.h`, `utime.h`, `sys/time.h`, `sys/ioctl.h`, `sys/resource.h`: POSIX ヘッダの最小互換スタブを提供。
+- `config.h`: `PACKAGE "e2fsprogs"`, `VERSION "1.47.4"`, `HAVE_STDINT_H 1`, `HAVE_INTTYPES_H 1`, `HAVE_STDLIB_H 1`, `HAVE_STRING_H 1`, `HAVE_ERRNO_H 1`, `HAVE_SYS_TYPES_H 1`, `HAVE_SYS_TIME_H 1`, `HAVE_STRNLEN 1`, `SIZEOF_LONG 4`, `SIZEOF_LONG_LONG 8`, `SIZEOF_OFF_T 8`, `SIZEOF_TIME_T 8` 等を定義。
+- `unistd.h`, `strings.h`, `utime.h`, `dirent.h`, `arpa/inet.h`, `sys/time.h`, `sys/ioctl.h`, `sys/resource.h`: POSIX ヘッダおよび `mkjournal.c` / `lib/e2p/e2p.h` 向けの最小互換スタブを提供。
 
 ### 2.3 `scripts/generate_e2fsprogs_headers.py`
-- `third_party/e2fsprogs/lib/ext2fs/ext2_err.et.in` から `error_table` 名と 1 行または複数行形式の `ec <SYMBOL>, "<MSG>"` を抽出。
+- `third_party/e2fsprogs/version.h` から `E2FSPROGS_VERSION` を読み取り、`third_party/e2fsprogs/lib/ext2fs/ext2_err.et.in` の `@E2FSPROGS_VERSION@` 置換後に `error_table` 名と 1 行または複数行形式の `ec <SYMBOL>, "<MSG>"` を抽出。
 - `com_err` 標準エンコーディング（`ext2` テーブルの場合 `EXT2_ET_BASE = 2133571328L`）でエラー定数ヘッダ `ext2fs/ext2_err.h` およびエラーテーブル定義 `ext2_err.c` を生成。
-- `ext2_types.h.in` から `@SIZEOF_*@` 置換済みの `ext2fs/ext2_types.h` を生成。
+- `ext2_types.h.in` から `@SIZEOF_*@` / `@PUBLIC_CONFIG_HEADER@` 置換済みの `ext2fs/ext2_types.h`、および `gen_crc32ctable.c` と同一アルゴリズムの slice-by-8 テーブル `ext2fs/crc32c_table.h` を生成。
 
 ---
 
@@ -162,6 +164,7 @@ errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
 typedef struct ext4_vfs_ctx {
     ext2_filsys               fs;
     SRWLOCK                   rwlock;
+    CRITICAL_SECTION          fs_lock;
     int                       read_only;
     int                       lower_read_only;
     int                       dirty_detected;
@@ -177,12 +180,12 @@ typedef struct ext4_vfs_ctx {
     struct ext4_overlay_ctx  *overlay;
 } ext4_vfs_ctx_t;
 ```
-- **ロック階層順序**: 常に **`mut_cs` (Overlay) → `ctx->rwlock`（外側） → `win32_io` の `cache_lock`（内側）**、および独立リーフの **`extent_cache->lock` / `overlay->map_lock`** とし、循環・逆順取得を禁止する。`ext4_extent_pread` 自体は `ref_count` 取得後にロックを一切保持せず `win32_io_pread_direct` を呼ぶ。
+- **ロック階層順序**: 常に **`mut_cs` (Overlay) → `ctx->rwlock`（外側） → `ctx->fs_lock`（Shared 読み取り時の上流 `fs->icache` 保護） → `win32_io` の `cache_lock`（内側）**、および独立リーフの **`extent_cache->lock` / `overlay->map_lock`** とし、循環・逆順取得を禁止する。`ext4_extent_pread` 自体は `ref_count` 取得後にロックを一切保持せず `win32_io_pread_direct` を呼ぶ。
 
 ### 5.2 各操作モジュール責務一覧
 | モジュール | 公開関数 | 取得ロック | 主な処理内容 |
 | :--- | :--- | :--- | :--- |
-| `op_init.c` | `ext4_vfs_mount`, `ext4_vfs_unmount`, `ext4_vfs_mkfs` | 初期化 / 排他破棄 | パーティション解決 → `ext4_probe_partition` → Dirty 安全分岐 → `ext2fs_open2` + `ext2fs_read_bitmaps`。`mkfs` は `EXT4_FEATURE_INCOMPAT_EXTENTS` / `64BIT` / `METADATA_CSUM` / 256B iノード / `lost+found` 付きのクリーン ext4 イメージを生成。 |
+| `op_init.c` | `ext4_vfs_mount`, `ext4_vfs_unmount`, `ext4_vfs_mkfs` | 初期化 / 排他破棄 | パーティション解決 → `ext4_probe_partition` → Dirty 安全分岐 → `ext2fs_open2` + `ext2fs_read_bitmaps`。`mkfs` は `EXT3_FEATURE_INCOMPAT_EXTENTS` / `64BIT` / `METADATA_CSUM` / 256B iノード / `lost+found` 付きのクリーン ext4 イメージを生成。 |
 | `op_getattr.c` | `ext4_vfs_stat`, `ext4_vfs_stat_ino`, `ext4_vfs_set_times` | Shared / Exclusive | パス正規化・大小文字フォールバック解決、64bit サイズ、100ns `FILETIME` 相互変換、`FILE_ATTRIBUTE_*`（ドットファイル `HIDDEN`、RO 時 `READONLY`）算出。 |
 | `op_readdir.c` | `ext4_vfs_readdir` | Shared | `ext2fs_dir_iterate2` で各エントリ名と `ext4_stat_t` をコールバック返却。 |
 | `op_open.c` | `ext4_vfs_open`, `ext4_vfs_close_handle` | Shared | `ext4_file_handle_t` 確保・種別・RO 書き込み権限確認。 |
@@ -205,7 +208,7 @@ typedef struct ext4_vfs_ctx {
 - **有効条件**: `enable_direct_io != 0` かつ `lower_read_only != 0`（既定の RO マウントおよび `--overlay` では `--no-direct-io` 未指定時に自動有効、`--rw` 時併用は自動無効化または明示 `--direct-io` 時 `-EINVAL`）。
 - **抽出対象 (`ext4_extent_extract`)**:
   - `EXT4_INLINE_DATA_FL` / 60B 未満 Fast Symlink: `EXT4_STORAGE_INLINE` としてバイト列を保持し、メモリから即返却。
-  - `EXT4_EXTENTS_FL`: `ext2fs_extent_open2` + `EXT2_EXTENT_ROOT` → `while (!(e_flags & LEAF)) EXT2_EXTENT_DOWN` → `EXT2_EXTENT_NEXT_LEAF` で全リーフノードを走査し、連続物理エクステントを統合（`is_uninit` も正確に維持）。
+  - `EXT4_EXTENTS_FL`: `ext2fs_extent_open2` + `EXT2_EXTENT_ROOT` → `EXT2_EXTENT_NEXT_LEAF` で全リーフノードを走査し、連続物理エクステントを統合（`is_uninit` も正確に維持）。
   - 従来型間接ブロック: `ext2fs_block_iterate3(..., BLOCK_FLAG_READ_ONLY, ...)` で物理ブロックを結合。
 - **参照・読み取り (`ext4_extent_resolve`, `ext4_extent_pread`)**:
   - 論理オフセットで昇順ソートされた `runs[]` を `O(log N)` 二分探索。スパースホールや `is_uninit` 領域は I/O 発行せず `memset(0)`、実ブロック領域は `win32_io_pread_direct` へ渡す。
@@ -230,10 +233,10 @@ typedef struct ext4_vfs_ctx {
 | :--- | :--- | :--- |
 | エントリ不在 | `EXT2_ET_FILE_NOT_FOUND` / `-ENOENT` | `STATUS_OBJECT_NAME_NOT_FOUND` (`0xC0000034`) |
 | 非ディレクトリ | `EXT2_ET_NO_DIRECTORY` / `-ENOTDIR` | `STATUS_NOT_A_DIRECTORY` (`0xC0000103`) |
-| ディレクトリに対しファイル操作 | `EXT2_ET_IS_A_DIR` / `-EISDIR` | `STATUS_FILE_IS_A_DIRECTORY` (`0xC00000BA`) |
+| ディレクトリに対しファイル操作 | `EISDIR` / `-EISDIR` | `STATUS_FILE_IS_A_DIRECTORY` (`0xC00000BA`) |
 | 既存衝突 | `EXT2_ET_FILE_EXISTS` / `EXT2_ET_DIR_EXISTS` / `-EEXIST` | `STATUS_OBJECT_NAME_COLLISION` (`0xC0000035`) |
-| 非空ディレクトリ削除 | `EXT2_ET_DIR_NOT_EMPTY` / `-ENOTEMPTY` | `STATUS_DIRECTORY_NOT_EMPTY` (`0xC0000101`) |
-| RO 書き込み / Dirty 保護 | `EXT2_ET_RO_FILSYS` / `EXT2_ET_JOURNAL_UNSUPP_INCOMPAT` / `-EROFS` | `STATUS_MEDIA_WRITE_PROTECTED` (`0xC00000A2`) |
+| 非空ディレクトリ削除 | `-ENOTEMPTY` | `STATUS_DIRECTORY_NOT_EMPTY` (`0xC0000101`) |
+| RO 書き込み / Dirty 保護 | `EXT2_ET_RO_FILSYS` / `-EROFS` | `STATUS_MEDIA_WRITE_PROTECTED` (`0xC00000A2`) |
 | 空き容量/iノード不足 | `EXT2_ET_BLOCK_ALLOC_FAIL` / `EXT2_ET_INODE_ALLOC_FAIL` / `-ENOSPC` | `STATUS_DISK_FULL` (`0xC000007F`) |
 | 不正引数 | `EXT2_ET_INVALID_ARGUMENT` / `-EINVAL` | `STATUS_INVALID_PARAMETER` (`0xC000000D`) |
 | EOF 到達 | Read `got == 0` | `STATUS_END_OF_FILE` (`0xC0000011`) |

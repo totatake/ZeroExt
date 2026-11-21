@@ -76,7 +76,9 @@ int ext4_vfs_lower_readdir_from(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, const c
     {
         ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
             &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        EnterCriticalSection(&ctx->fs_lock);
         ret = ext2fs_dir_iterate2(ctx->fs, dir_ino, 0, NULL, vfs_readdir_cb_internal, &bridge);
+        LeaveCriticalSection(&ctx->fs_lock);
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
 

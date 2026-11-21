@@ -97,12 +97,8 @@ static int extract_from_extent_tree(ext2_filsys fs, ext2_ino_t ino,
         return ext4_errcode_to_errno(retval);
     }
 
-    /* Descend to the first leaf before calling EXT2_EXTENT_NEXT_LEAF so depth >= 1
-     * trees do not skip child branch 0. */
-    while (retval == 0 && !(ext.e_flags & EXT2_EXTENT_FLAGS_LEAF)) {
-        retval = ext2fs_extent_get(handle, EXT2_EXTENT_DOWN, &ext);
-    }
-
+    /* When EXT2_EXTENT_ROOT lands on an interior node (depth >= 1), EXT2_EXTENT_NEXT_LEAF
+     * descends into child branch 0 automatically while advancing path->visit_num. */
     while (retval == 0) {
         if ((ext.e_flags & EXT2_EXTENT_FLAGS_LEAF) && ext.e_len > 0) {
             uint64_t l_off = (uint64_t)ext.e_lblk * (uint64_t)map->block_size;
@@ -185,21 +181,30 @@ static int ext4_extent_extract_impl(ext2_filsys fs, ext2_ino_t ino, ext4_extent_
     map->ref_count = 1;
 
     if (ino_st.i_flags & EXT4_INLINE_DATA_FL) {
-        size_t sz = (size_t)map->file_size;
         map->kind = EXT4_STORAGE_INLINE;
-        if (sz > 0) {
-            map->inline_data = (uint8_t *)malloc(sz);
+        if (map->file_size > 0) {
+            size_t alloc_sz = 0;
+            size_t got_sz = 0;
+            retval = ext2fs_inline_data_size(fs, ino, &alloc_sz);
+            if (retval != 0) {
+                ext4_extent_map_release(map);
+                return ext4_errcode_to_errno(retval);
+            }
+            if (alloc_sz < EXT4_MIN_INLINE_DATA_SIZE) {
+                alloc_sz = EXT4_MIN_INLINE_DATA_SIZE;
+            }
+            map->inline_data = (uint8_t *)malloc(alloc_sz);
             if (!map->inline_data) {
                 ext4_extent_map_release(map);
                 return -ENOMEM;
             }
             retval = ext2fs_inline_data_get(fs, ino, (struct ext2_inode *)&ino_st,
-                                            map->inline_data, &sz);
+                                            map->inline_data, &got_sz);
             if (retval != 0) {
                 ext4_extent_map_release(map);
                 return ext4_errcode_to_errno(retval);
             }
-            map->inline_size = sz;
+            map->inline_size = ((uint64_t)got_sz > map->file_size) ? (size_t)map->file_size : got_sz;
         }
     } else if (LINUX_S_ISLNK(ino_st.i_mode) && ext2fs_is_fast_symlink((struct ext2_inode *)&ino_st)) {
         size_t sz = (size_t)map->file_size;

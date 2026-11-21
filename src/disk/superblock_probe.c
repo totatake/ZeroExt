@@ -28,11 +28,12 @@ static void format_uuid(const uint8_t u[16], char out[37]) {
 }
 
 int ext4_probe_superblock_buffer(const uint8_t *sb_1024, ext4_probe_result_t *out) {
-    const struct ext2_super_block *sb;
+    struct ext2_super_block sb_val;
+    struct ext2_super_block *sb = &sb_val;
     if (!sb_1024 || !out) return -1;
     memset(out, 0, sizeof(*out));
+    memcpy(&sb_val, sb_1024, sizeof(sb_val));
 
-    sb = (const struct ext2_super_block *)sb_1024;
     if (sb->s_magic != EXT2_SUPER_MAGIC) {
         return -1;
     }
@@ -51,8 +52,8 @@ int ext4_probe_superblock_buffer(const uint8_t *sb_1024, ext4_probe_result_t *ou
     out->journal_inum = sb->s_journal_inum;
     out->state_flags = sb->s_state;
 
-    if ((sb->s_feature_incompat & (EXT4_FEATURE_INCOMPAT_EXTENTS | EXT4_FEATURE_INCOMPAT_64BIT | EXT4_FEATURE_INCOMPAT_FLEX_BG)) != 0 ||
-        (sb->s_feature_ro_compat & ~(EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER | EXT2_FEATURE_RO_COMPAT_LARGE_FILE | EXT2_FEATURE_RO_COMPAT_BTREE_DIR)) != 0) {
+    if ((sb->s_feature_incompat & (EXT3_FEATURE_INCOMPAT_EXTENTS | EXT4_FEATURE_INCOMPAT_64BIT | EXT4_FEATURE_INCOMPAT_FLEX_BG)) != 0 ||
+        (sb->s_feature_ro_compat & ~(EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER | EXT2_FEATURE_RO_COMPAT_LARGE_FILE | 0x0004U /* legacy BTREE_DIR */)) != 0) {
         out->fs_kind = EXT4_FS_EXT4;
     } else if (sb->s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL) {
         out->fs_kind = EXT4_FS_EXT3;

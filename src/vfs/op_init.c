@@ -537,6 +537,7 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     if (!ctx) return -ENOMEM;
 
     InitializeSRWLock(&ctx->rwlock);
+    InitializeCriticalSection(&ctx->fs_lock);
     ctx->read_only = read_only;
     ctx->lower_read_only = lower_ro;
     ctx->dirty_detected = dirty;
@@ -573,6 +574,7 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     win32_io_set_next_config(&io_cfg);
     retval = ext2fs_open2(cfg->source_path, NULL, flags, 0, 0, win32_io_manager, &ctx->fs);
     if (retval) {
+        DeleteCriticalSection(&ctx->fs_lock);
         free(ctx);
         return ext4_errcode_to_errno(retval);
     }
@@ -580,6 +582,7 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     retval = ext2fs_read_bitmaps(ctx->fs);
     if (retval) {
         ext2fs_free(ctx->fs);
+        DeleteCriticalSection(&ctx->fs_lock);
         free(ctx);
         return ext4_errcode_to_errno(retval);
     }
@@ -594,6 +597,7 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
             ext4_dentry_cache_destroy(ctx->dentry_cache);
             ext4_extent_cache_destroy(ctx->extent_cache);
             ext2fs_close_free(&ctx->fs);
+            DeleteCriticalSection(&ctx->fs_lock);
             free(ctx);
             return orc;
         }
@@ -625,6 +629,7 @@ int ext4_vfs_unmount(ext4_vfs_ctx_t *ctx) {
         retval = ext2fs_close_free(&ctx->fs);
     }
     ReleaseSRWLockExclusive(&ctx->rwlock);
+    DeleteCriticalSection(&ctx->fs_lock);
     free(ctx);
     return ext4_errcode_to_errno(retval);
 }
@@ -641,6 +646,10 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
     unsigned int log_bsize;
     blk64_t blocks_count;
     ext2_ino_t r;
+    dgrp_t g;
+    uint8_t fs_uuid[16] = {0};
+    uint32_t hash_seed[4] = {0};
+    char vol_label[16];
 
     if (!path_utf8 || size_bytes < (1024ULL * 1024ULL)) {
         return -EINVAL;
@@ -666,11 +675,13 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
     CloseHandle(h);
 
     memset(&param, 0, sizeof(param));
+    param.s_rev_level = EXT2_DYNAMIC_REV;
     param.s_log_block_size = log_bsize;
     param.s_inode_size = 256;
+    param.s_desc_size = EXT2_MIN_DESC_SIZE_64BIT;
     param.s_feature_compat = EXT2_FEATURE_COMPAT_DIR_INDEX | EXT2_FEATURE_COMPAT_EXT_ATTR;
     param.s_feature_incompat = EXT2_FEATURE_INCOMPAT_FILETYPE |
-                               EXT4_FEATURE_INCOMPAT_EXTENTS |
+                               EXT3_FEATURE_INCOMPAT_EXTENTS |
                                EXT4_FEATURE_INCOMPAT_64BIT;
     param.s_feature_ro_compat = EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER |
                                 EXT2_FEATURE_RO_COMPAT_LARGE_FILE |
@@ -684,7 +695,7 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
         LARGE_INTEGER qpc;
         ULONGLONG ticks = GetTickCount64();
         LONG64 seq = InterlockedIncrement64(&s_uuid_seq);
-        uint64_t a, b;
+        uint64_t a, b, c, d;
         QueryPerformanceCounter(&qpc);
         a = (uint64_t)qpc.QuadPart ^ ((uint64_t)GetCurrentProcessId() << 32) ^ (uint64_t)seq;
         b = (uint64_t)ticks ^ ((uint64_t)seq * 0x9E3779B97F4A7C15ULL);
@@ -694,21 +705,33 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
         b = (b ^ (b >> 30)) * 0xBF58476D1CE4E5B9ULL;
         b = (b ^ (b >> 27)) * 0x94D049BB133111EBULL;
         b ^= (b >> 31);
-        memcpy(param.s_uuid, &a, 8);
-        memcpy(param.s_uuid + 8, &b, 8);
-        param.s_uuid[6] = (param.s_uuid[6] & 0x0F) | 0x40; /* UUID v4 */
-        param.s_uuid[8] = (param.s_uuid[8] & 0x3F) | 0x80; /* RFC 4122 variant */
+        c = a ^ 0xA5A5A5A55A5A5A5AULL;
+        d = b ^ 0x5A5A5A5AA5A5A5A5ULL;
+        {
+            uint64_t uuid_words[2];
+            uint64_t seed_words[2];
+
+            uuid_words[0] = a;
+            uuid_words[1] = b;
+            memcpy(fs_uuid, uuid_words, sizeof(fs_uuid));
+            fs_uuid[6] = (uint8_t)((fs_uuid[6] & 0x0F) | 0x40); /* UUID v4 */
+            fs_uuid[8] = (uint8_t)((fs_uuid[8] & 0x3F) | 0x80); /* RFC 4122 variant */
+            seed_words[0] = c;
+            seed_words[1] = d;
+            memcpy(hash_seed, seed_words, sizeof(hash_seed));
+        }
     }
 
+    memset(vol_label, 0, sizeof(vol_label));
     if (label && *label) {
         size_t llen = strlen(label);
-        if (llen > 16) {
-            llen = 16;
+        if (llen > sizeof(vol_label)) {
+            llen = sizeof(vol_label);
             while (llen > 0 && (((unsigned char)label[llen]) & 0xC0) == 0x80) {
                 llen--;
             }
         }
-        memcpy(param.s_volume_name, label, llen);
+        memcpy(vol_label, label, llen);
     }
 
     memset(&io_cfg, 0, sizeof(io_cfg));
@@ -720,6 +743,13 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
     if (retval) {
         return ext4_errcode_to_errno(retval);
     }
+
+    memcpy(fs->super->s_uuid, fs_uuid, sizeof(fs->super->s_uuid));
+    memcpy(fs->super->s_volume_name, vol_label, sizeof(fs->super->s_volume_name));
+    fs->super->s_def_hash_version = EXT2_HASH_HALF_MD4;
+    memcpy(fs->super->s_hash_seed, hash_seed, sizeof(fs->super->s_hash_seed));
+    fs->super->s_checksum_type = EXT2_CRC32C_CHKSUM;
+    ext2fs_init_csum_seed(fs);
 
     retval = ext2fs_allocate_tables(fs);
     if (retval) {
@@ -746,6 +776,11 @@ int ext4_vfs_mkfs(const char *path_utf8, uint64_t size_bytes, const char *label)
         ext2fs_free(fs);
         return ext4_errcode_to_errno(retval);
     }
+
+    for (g = 0; g < fs->group_desc_count; g++) {
+        ext2fs_group_desc_csum_set(fs, g);
+    }
+    ext2fs_mark_super_dirty(fs);
 
     retval = ext2fs_close_free(&fs);
     return ext4_errcode_to_errno(retval);

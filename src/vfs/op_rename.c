@@ -8,6 +8,17 @@
 
 extern int ext4_vfs_unlink_locked(ext4_vfs_ctx_t *ctx, ext2_ino_t parent_ino, const char *name);
 
+static int mode_to_ext2_ft(uint16_t mode) {
+    if (LINUX_S_ISREG(mode)) return EXT2_FT_REG_FILE;
+    if (LINUX_S_ISDIR(mode)) return EXT2_FT_DIR;
+    if (LINUX_S_ISLNK(mode)) return EXT2_FT_SYMLINK;
+    if (LINUX_S_ISCHR(mode)) return EXT2_FT_CHRDEV;
+    if (LINUX_S_ISBLK(mode)) return EXT2_FT_BLKDEV;
+    if (LINUX_S_ISFIFO(mode)) return EXT2_FT_FIFO;
+    if (LINUX_S_ISSOCK(mode)) return EXT2_FT_SOCK;
+    return EXT2_FT_UNKNOWN;
+}
+
 struct update_dotdot_ctx {
     ext2_ino_t new_parent_ino;
     int        done;
@@ -184,7 +195,13 @@ int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_p
                 goto out;
             }
             ext4_dentry_cache_invalidate(ctx);
-            retval = ext2fs_link(ctx->fs, new_parent_ino, new_name, src_ctx.ino, ext2fs_file_type(src_st.i_mode));
+            retval = ext2fs_link(ctx->fs, new_parent_ino, new_name, src_ctx.ino, mode_to_ext2_ft(src_st.i_mode));
+            if (retval == EXT2_ET_DIR_NO_SPACE) {
+                retval = ext2fs_expand_dir(ctx->fs, new_parent_ino);
+                if (retval == 0) {
+                    retval = ext2fs_link(ctx->fs, new_parent_ino, new_name, src_ctx.ino, mode_to_ext2_ft(src_st.i_mode));
+                }
+            }
             if (retval == 0) {
                 ext4_dentry_cache_invalidate(ctx);
             }
@@ -215,7 +232,13 @@ int ext4_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_p
         }
     }
 
-    retval = ext2fs_link(ctx->fs, new_parent_ino, new_name, src_ctx.ino, ext2fs_file_type(src_st.i_mode));
+    retval = ext2fs_link(ctx->fs, new_parent_ino, new_name, src_ctx.ino, mode_to_ext2_ft(src_st.i_mode));
+    if (retval == EXT2_ET_DIR_NO_SPACE) {
+        retval = ext2fs_expand_dir(ctx->fs, new_parent_ino);
+        if (retval == 0) {
+            retval = ext2fs_link(ctx->fs, new_parent_ino, new_name, src_ctx.ino, mode_to_ext2_ft(src_st.i_mode));
+        }
+    }
     if (retval) {
         rc = ext4_errcode_to_errno(retval);
         goto out;

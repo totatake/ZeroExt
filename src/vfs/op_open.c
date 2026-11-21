@@ -45,6 +45,7 @@ int ext4_vfs_open_stat(ext4_vfs_ctx_t *ctx, const char *path, int writable,
     {
         ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
             &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        EnterCriticalSection(&ctx->fs_lock);
         rc = ext4_vfs_lookup_locked_ex(ctx, norm, &ino, actual_leaf, sizeof(actual_leaf));
         if (rc == 0) {
             if (out_st) {
@@ -58,6 +59,7 @@ int ext4_vfs_open_stat(ext4_vfs_ctx_t *ctx, const char *path, int writable,
                 ext4_fill_stat_from_inode(ctx, ino, &ino_st, actual_leaf, out_st);
             }
         }
+        LeaveCriticalSection(&ctx->fs_lock);
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
 

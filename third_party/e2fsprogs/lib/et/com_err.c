@@ -1,115 +1,105 @@
+/*
+ * Copyright 1987, 1988 by MIT Student Information Processing Board.
+ *
+ * Permission to use, copy, modify, and distribute this software and
+ * its documentation for any purpose is hereby granted, provided that
+ * the names of M.I.T. and the M.I.T. S.I.P.B. not be used in
+ * advertising or publicity pertaining to distribution of the software
+ * without specific, written prior permission.  M.I.T. and the
+ * M.I.T. S.I.P.B. make no representations about the suitability of
+ * this software for any purpose.  It is provided "as is" without
+ * express or implied warranty.
+ */
+
 #include "config.h"
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdarg.h>
+#ifdef HAVE_TERMIOS_H
+#include <termios.h>
+#endif
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 #include "com_err.h"
 #include "error_table.h"
+#include "internal.h"
 
-static struct et_list *et_head = NULL;
-static void (*com_err_hook)(const char *, long, const char *, va_list) = NULL;
+static void
+default_com_err_proc (const char *whoami, errcode_t code, const
+		      char *fmt, va_list args)
+	COM_ERR_ATTR((format(printf, 3, 0)));
 
-static void default_com_err_proc(const char *whoami, long code, const char *fmt, va_list args) {
+static void
+default_com_err_proc (const char *whoami, errcode_t code, const
+		      char *fmt, va_list args)
+{
+    int do_cr = 1, fd = fileno(stderr);
+
     if (whoami) {
-        fputs(whoami, stderr);
-        fputs(": ", stderr);
+	fputs(whoami, stderr);
+	fputs(": ", stderr);
     }
     if (code) {
-        fputs(error_message(code), stderr);
-        fputs(" ", stderr);
+	fputs(error_message(code), stderr);
+	fputs(" ", stderr);
     }
     if (fmt) {
-        vfprintf(stderr, fmt, args);
+        vfprintf (stderr, fmt, args);
     }
+    if (!isatty(fd))
+	do_cr = 0;
+#ifdef HAVE_TERMIOS_H
+    else {
+	struct termios t;
+
+	if ((tcgetattr(fd, &t)) == 0 &&
+	    (t.c_oflag & OPOST) && (t.c_oflag & ONLCR))
+	do_cr = 0;
+    }
+#endif
+    if (do_cr)
+	fputc('\r', stderr);
     fputc('\n', stderr);
     fflush(stderr);
 }
 
-void (*set_com_err_hook(void (*new_proc)(const char *, long, const char *, va_list)))(const char *, long, const char *, va_list) {
-    void (*old_proc)(const char *, long, const char *, va_list) = com_err_hook ? com_err_hook : default_com_err_proc;
-    com_err_hook = new_proc;
-    return old_proc;
+typedef void (*errf) (const char *, errcode_t, const char *, va_list)
+        COM_ERR_ATTR((format(printf, 3, 0)));
+
+errf com_err_hook = default_com_err_proc;
+
+void com_err_va (const char *whoami, errcode_t code, const char *fmt,
+		 va_list args)
+{
+    (*com_err_hook) (whoami, code, fmt, args);
 }
 
-void (*reset_com_err_hook(void))(const char *, long, const char *, va_list) {
-    void (*old_proc)(const char *, long, const char *, va_list) = com_err_hook ? com_err_hook : default_com_err_proc;
-    com_err_hook = NULL;
-    return old_proc;
+void com_err (const char *whoami,
+	      errcode_t code,
+	      const char *fmt, ...)
+{
+    va_list pvar;
+
+    if (!com_err_hook)
+	com_err_hook = default_com_err_proc;
+    va_start(pvar, fmt);
+    com_err_va (whoami, code, fmt, pvar);
+    va_end(pvar);
 }
 
-void com_err_va(const char *whoami, long code, const char *fmt, va_list args) {
-    void (*proc)(const char *, long, const char *, va_list) = com_err_hook ? com_err_hook : default_com_err_proc;
-    proc(whoami, code, fmt, args);
+errf set_com_err_hook(errf new_proc)
+{
+    errf x = com_err_hook;
+
+    if (new_proc)
+	com_err_hook = new_proc;
+    else
+	com_err_hook = default_com_err_proc;
+
+    return x;
 }
 
-void com_err(const char *whoami, long code, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    com_err_va(whoami, code, fmt, args);
-    va_end(args);
-}
-
-void add_to_error_table(struct et_list *new_table) {
-    struct et_list *cur;
-    if (!new_table || !new_table->table) {
-        return;
-    }
-    for (cur = et_head; cur != NULL; cur = cur->next) {
-        if (cur == new_table || cur->table == new_table->table) {
-            return;
-        }
-    }
-    new_table->next = et_head;
-    et_head = new_table;
-}
-
-errcode_t add_error_table(const struct error_table *et) {
-    struct et_list *el;
-    if (!et) {
-        return -1;
-    }
-    el = (struct et_list *)malloc(sizeof(struct et_list));
-    if (!el) {
-        return -1;
-    }
-    el->table = et;
-    el->next = NULL;
-    add_to_error_table(el);
-    return 0;
-}
-
-errcode_t remove_error_table(const struct error_table *et) {
-    struct et_list **pp = &et_head;
-    while (*pp) {
-        if ((*pp)->table == et) {
-            struct et_list *victim = *pp;
-            *pp = victim->next;
-            free(victim);
-            return 0;
-        }
-        pp = &((*pp)->next);
-    }
-    return -1;
-}
-
-const char *error_message(long code) {
-    static char unknown_buf[64];
-    struct et_list *cur;
-
-    if (code >= 0 && code < 256) {
-        const char *sys_msg = strerror((int)code);
-        if (sys_msg) {
-            return sys_msg;
-        }
-    }
-
-    for (cur = et_head; cur != NULL; cur = cur->next) {
-        const struct error_table *t = cur->table;
-        if (t && code >= t->base && code < t->base + t->n_msgs) {
-            return t->msgs[code - t->base];
-        }
-    }
-
-    snprintf(unknown_buf, sizeof(unknown_buf), "Unknown ext2 error code %ld", code);
-    return unknown_buf;
+errf reset_com_err_hook(void) {
+    errf x = com_err_hook;
+    com_err_hook = default_com_err_proc;
+    return x;
 }

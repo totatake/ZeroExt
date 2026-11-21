@@ -1,119 +1,108 @@
+/*
+ * freefs.c --- free an ext2 filesystem
+ *
+ * Copyright (C) 1993, 1994, 1995, 1996 Theodore Ts'o.
+ *
+ * %Begin-Header%
+ * This file may be redistributed under the terms of the GNU Library
+ * General Public License, version 2.
+ * %End-Header%
+ */
+
 #include "config.h"
-#include <stdlib.h>
-#include <string.h>
-#include "ext2fs/ext2fs.h"
+#include <stdio.h>
+#if HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 
-errcode_t ext2fs_get_mem(unsigned long size, void *ptr) {
-    void **pp = (void **)ptr;
-    void *p;
-    if (!pp) {
-        return EXT2_ET_INVALID_ARGUMENT;
-    }
-    p = malloc(size ? size : 1);
-    if (!p) {
-        return EXT2_ET_NO_MEMORY;
-    }
-    *pp = p;
-    return 0;
+#include "ext2_fs.h"
+#include "ext2fsP.h"
+#include "hashmap.h"
+
+void ext2fs_free(ext2_filsys fs)
+{
+	if (!fs || (fs->magic != EXT2_ET_MAGIC_EXT2FS_FILSYS))
+		return;
+	if (fs->image_io != fs->io) {
+		if (fs->image_io)
+			io_channel_close(fs->image_io);
+	}
+	if (fs->io) {
+		io_channel_close(fs->io);
+	}
+	if (fs->device_name)
+		ext2fs_free_mem(&fs->device_name);
+	if (fs->super)
+		ext2fs_free_mem(&fs->super);
+	if (fs->orig_super)
+		ext2fs_free_mem(&fs->orig_super);
+	if (fs->group_desc)
+		ext2fs_free_mem(&fs->group_desc);
+	if (fs->block_map)
+		ext2fs_free_block_bitmap(fs->block_map);
+	if (fs->inode_map)
+		ext2fs_free_inode_bitmap(fs->inode_map);
+	if (fs->image_header)
+		ext2fs_free_mem(&fs->image_header);
+
+	if (fs->badblocks)
+		ext2fs_badblocks_list_free(fs->badblocks);
+	fs->badblocks = 0;
+
+	if (fs->dblist)
+		ext2fs_free_dblist(fs->dblist);
+
+	if (fs->icache)
+		ext2fs_free_inode_cache(fs->icache);
+
+	if (fs->mmp_buf)
+		ext2fs_free_mem(&fs->mmp_buf);
+	if (fs->mmp_cmp)
+		ext2fs_free_mem(&fs->mmp_cmp);
+
+	if (fs->block_sha_map)
+		ext2fs_hashmap_free(fs->block_sha_map);
+
+	fs->magic = 0;
+
+	ext2fs_zero_blocks2(NULL, 0, 0, NULL, NULL);
+	ext2fs_free_mem(&fs);
 }
 
-errcode_t ext2fs_get_memzero(unsigned long size, void *ptr) {
-    void **pp = (void **)ptr;
-    void *p;
-    if (!pp) {
-        return EXT2_ET_INVALID_ARGUMENT;
-    }
-    p = calloc(1, size ? size : 1);
-    if (!p) {
-        return EXT2_ET_NO_MEMORY;
-    }
-    *pp = p;
-    return 0;
+/*
+ * This procedure frees a badblocks list.
+ */
+void ext2fs_u32_list_free(ext2_u32_list bb)
+{
+	if (bb->magic != EXT2_ET_MAGIC_BADBLOCKS_LIST)
+		return;
+
+	if (bb->list)
+		ext2fs_free_mem(&bb->list);
+	bb->list = 0;
+	ext2fs_free_mem(&bb);
 }
 
-errcode_t ext2fs_free_mem(void *ptr) {
-    void **pp = (void **)ptr;
-    if (pp && *pp) {
-        free(*pp);
-        *pp = NULL;
-    }
-    return 0;
+void ext2fs_badblocks_list_free(ext2_badblocks_list bb)
+{
+	ext2fs_u32_list_free((ext2_u32_list) bb);
 }
 
-errcode_t ext2fs_resize_mem(unsigned long old_size, unsigned long size, void *ptr) {
-    void **pp = (void **)ptr;
-    void *p;
-    (void)old_size;
-    if (!pp) {
-        return EXT2_ET_INVALID_ARGUMENT;
-    }
-    p = realloc(*pp, size ? size : 1);
-    if (!p) {
-        return EXT2_ET_NO_MEMORY;
-    }
-    *pp = p;
-    return 0;
+
+/*
+ * Free a directory block list
+ */
+void ext2fs_free_dblist(ext2_dblist dblist)
+{
+	if (!dblist || (dblist->magic != EXT2_ET_MAGIC_DBLIST))
+		return;
+
+	if (dblist->list)
+		ext2fs_free_mem(&dblist->list);
+	dblist->list = 0;
+	if (dblist->fs && dblist->fs->dblist == dblist)
+		dblist->fs->dblist = 0;
+	dblist->magic = 0;
+	ext2fs_free_mem(&dblist);
 }
 
-void ext2fs_mark_super_dirty(ext2_filsys fs) {
-    if (fs) {
-        fs->flags |= EXT2_FLAG_DIRTY | EXT2_FLAG_CHANGED;
-    }
-}
-
-void ext2fs_mark_changed(ext2_filsys fs) {
-    if (fs) {
-        fs->flags |= EXT2_FLAG_CHANGED;
-    }
-}
-
-void ext2fs_mark_ib_dirty(ext2_filsys fs) {
-    if (fs) {
-        fs->flags |= EXT2_FLAG_IB_DIRTY | EXT2_FLAG_CHANGED;
-    }
-}
-
-void ext2fs_mark_bb_dirty(ext2_filsys fs) {
-    if (fs) {
-        fs->flags |= EXT2_FLAG_BB_DIRTY | EXT2_FLAG_CHANGED;
-    }
-}
-
-int ext2fs_test_valid(ext2_filsys fs) {
-    return (fs && (fs->flags & EXT2_FLAG_VALID)) ? 1 : 0;
-}
-
-void ext2fs_mark_valid(ext2_filsys fs) {
-    if (fs) {
-        fs->flags |= EXT2_FLAG_VALID;
-    }
-}
-
-void ext2fs_unmark_valid(ext2_filsys fs) {
-    if (fs) {
-        fs->flags &= ~EXT2_FLAG_VALID;
-    }
-}
-
-void ext2fs_free(ext2_filsys fs) {
-    if (!fs || fs->magic != EXT2_ET_MAGIC_EXT2FS_FILSYS) {
-        return;
-    }
-    if (fs->io) {
-        io_channel_close(fs->io);
-        fs->io = NULL;
-    }
-    ext2fs_free_mem(&fs->device_name);
-    ext2fs_free_mem(&fs->super);
-    ext2fs_free_mem(&fs->group_desc);
-    if (fs->block_map) {
-        ext2fs_free_block_bitmap(fs->block_map);
-        fs->block_map = NULL;
-    }
-    if (fs->inode_map) {
-        ext2fs_free_inode_bitmap(fs->inode_map);
-        fs->inode_map = NULL;
-    }
-    fs->magic = 0;
-    free(fs);
-}

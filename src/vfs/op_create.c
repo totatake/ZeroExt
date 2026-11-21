@@ -76,15 +76,17 @@ int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t 
     ino_st.i_mode = (uint16_t)(LINUX_S_IFREG | (mode & 07777));
     ino_st.i_links_count = 1;
     ino_st.i_generation = 1;
-    ino_st.i_extra_isize = 32;
+    ino_st.i_extra_isize = (EXT2_INODE_SIZE(ctx->fs->super) > EXT2_GOOD_OLD_INODE_SIZE)
+        ? (uint16_t)(sizeof(struct ext2_inode_large) - EXT2_GOOD_OLD_INODE_SIZE)
+        : 0;
     ext4_inode_touch_times(&ino_st, 1, 1, 1);
     ino_st.i_crtime = ino_st.i_ctime;
     ino_st.i_crtime_extra = ino_st.i_ctime_extra;
 
-    if (EXT2_HAS_INCOMPAT_FEATURE(ctx->fs->super, EXT4_FEATURE_INCOMPAT_EXTENTS)) {
-        struct ext4_extent_header *eh = (struct ext4_extent_header *)ino_st.i_block;
+    if (EXT2_HAS_INCOMPAT_FEATURE(ctx->fs->super, EXT3_FEATURE_INCOMPAT_EXTENTS)) {
+        struct ext3_extent_header *eh = (struct ext3_extent_header *)ino_st.i_block;
         ino_st.i_flags |= EXT4_EXTENTS_FL;
-        eh->eh_magic = EXT4_EXT_MAGIC;
+        eh->eh_magic = EXT3_EXT_MAGIC;
         eh->eh_entries = 0;
         eh->eh_max = 4;
         eh->eh_depth = 0;
@@ -99,6 +101,12 @@ int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t 
     ext2fs_inode_alloc_stats2(ctx->fs, new_ino, 1, 0);
 
     retval = ext2fs_link(ctx->fs, parent_ino, name, new_ino, EXT2_FT_REG_FILE);
+    if (retval == EXT2_ET_DIR_NO_SPACE) {
+        retval = ext2fs_expand_dir(ctx->fs, parent_ino);
+        if (retval == 0) {
+            retval = ext2fs_link(ctx->fs, parent_ino, name, new_ino, EXT2_FT_REG_FILE);
+        }
+    }
     if (retval) {
         ext2fs_inode_alloc_stats2(ctx->fs, new_ino, -1, 0);
         rc = ext4_errcode_to_errno(retval);

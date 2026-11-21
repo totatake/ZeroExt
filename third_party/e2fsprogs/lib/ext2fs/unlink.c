@@ -1,70 +1,100 @@
-#include "config.h"
-#include <string.h>
-#include "ext2fs/ext2fs.h"
+/*
+ * unlink.c --- delete links in a ext2fs directory
+ *
+ * Copyright (C) 1993, 1994, 1997 Theodore Ts'o.
+ *
+ * %Begin-Header%
+ * This file may be redistributed under the terms of the GNU Library
+ * General Public License, version 2.
+ * %End-Header%
+ */
 
-struct unlink_ctx {
-    const char *name;
-    int namelen;
-    ext2_ino_t inode;
-    struct ext2_dir_entry *prev;
-    int prev_offset;
-    int done;
+#include "config.h"
+#include <stdio.h>
+#include <string.h>
+#if HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#include "ext2_fs.h"
+#include "ext2fs.h"
+
+struct link_struct  {
+	const char	*name;
+	int		namelen;
+	ext2_ino_t	inode;
+	int		flags;
+	struct ext2_dir_entry *prev;
+	int		done;
 };
 
-static int unlink_cb(ext2_ino_t dir, int entry, struct ext2_dir_entry *dirent,
-                     int offset, int blocksize, char *buf, void *priv_data) {
-    struct unlink_ctx *ctx = (struct unlink_ctx *)priv_data;
-    struct ext2_dir_entry_2 *de = (struct ext2_dir_entry_2 *)dirent;
-    (void)dir;
-    (void)entry;
-    (void)blocksize;
-    (void)buf;
+#ifdef __TURBOC__
+ #pragma argsused
+#endif
+static int unlink_proc(struct ext2_dir_entry *dirent,
+		     int	offset,
+		     int	blocksize EXT2FS_ATTR((unused)),
+		     char	*buf EXT2FS_ATTR((unused)),
+		     void	*priv_data)
+{
+	struct link_struct *ls = (struct link_struct *) priv_data;
+	struct ext2_dir_entry *prev;
 
-    if (offset == 0) {
-        ctx->prev = NULL;
-    }
+	prev = ls->prev;
+	ls->prev = dirent;
 
-    if (de->inode != 0 &&
-        (!ctx->name || ((int)de->name_len == ctx->namelen && memcmp(de->name, ctx->name, (size_t)ctx->namelen) == 0)) &&
-        (!ctx->inode || de->inode == ctx->inode)) {
-        if (ctx->prev && ctx->prev->inode != 0) {
-            ctx->prev->rec_len += de->rec_len;
-        } else {
-            de->inode = 0;
-        }
-        ctx->done = 1;
-        return DIRENT_CHANGED | DIRENT_ABORT;
-    }
+	if (ls->name) {
+		if (ext2fs_dirent_name_len(dirent) != ls->namelen)
+			return 0;
+		if (strncmp(ls->name, dirent->name, ext2fs_dirent_name_len(dirent)))
+			return 0;
+	}
+	if (!(ls->flags & EXT2FS_UNLINK_FORCE) && ls->inode) {
+		if (dirent->inode != ls->inode)
+			return 0;
+	} else {
+		if (!dirent->inode)
+			return 0;
+	}
 
-    ctx->prev = dirent;
-    ctx->prev_offset = offset;
-    return 0;
+	if (offset)
+		prev->rec_len += dirent->rec_len;
+	else
+		dirent->inode = 0;
+	ls->done++;
+	return DIRENT_ABORT|DIRENT_CHANGED;
 }
 
-errcode_t ext2fs_unlink(ext2_filsys fs, ext2_ino_t dir, const char *name, ext2_ino_t ino, int flags) {
-    struct unlink_ctx ctx;
-    struct ext2_inode dir_inode;
-    errcode_t retval;
-    (void)flags;
+#ifdef __TURBOC__
+ #pragma argsused
+#endif
+errcode_t ext2fs_unlink(ext2_filsys fs, ext2_ino_t dir,
+			const char *name, ext2_ino_t ino,
+			int flags)
+{
+	errcode_t	retval;
+	struct link_struct ls;
 
-    if (!fs) return EXT2_ET_INVALID_ARGUMENT;
-    if (!(fs->flags & EXT2_FLAG_RW)) return EXT2_ET_RO_FILSYS;
+	EXT2_CHECK_MAGIC(fs, EXT2_ET_MAGIC_EXT2FS_FILSYS);
 
-    retval = ext2fs_read_inode(fs, dir, &dir_inode);
-    if (retval) return retval;
-    if (!LINUX_S_ISDIR(dir_inode.i_mode)) return EXT2_ET_NO_DIRECTORY;
+	if (!name && !ino)
+		return EXT2_ET_INVALID_ARGUMENT;
 
-    if (dir_inode.i_flags & EXT2_INDEX_FL) {
-        dir_inode.i_flags &= ~EXT2_INDEX_FL;
-        ext2fs_write_inode(fs, dir, &dir_inode);
-    }
+	if (!(fs->flags & EXT2_FLAG_RW))
+		return EXT2_ET_RO_FILSYS;
 
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.name = name;
-    ctx.namelen = name ? (int)strlen(name) : 0;
-    ctx.inode = ino;
+	ls.name = name;
+	ls.namelen = name ? strlen(name) : 0;
+	ls.inode = ino;
+	ls.flags = flags;
+	ls.done = 0;
+	ls.prev = 0;
 
-    retval = (errcode_t)ext2fs_dir_iterate2(fs, dir, DIRENT_FLAG_INCLUDE_EMPTY, NULL, unlink_cb, &ctx);
-    if (retval) return retval;
-    return ctx.done ? 0 : EXT2_ET_FILE_NOT_FOUND;
+	retval = ext2fs_dir_iterate(fs, dir, DIRENT_FLAG_INCLUDE_EMPTY,
+				    0, unlink_proc, &ls);
+	if (retval)
+		return retval;
+
+	return (ls.done) ? 0 : EXT2_ET_DIR_NO_SPACE;
 }
+

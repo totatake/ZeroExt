@@ -81,6 +81,12 @@ int ext4_vfs_mkdir(ext4_vfs_ctx_t *ctx, const char *path, uint16_t mode, ext2_in
     }
 
     retval = ext2fs_mkdir(ctx->fs, parent_ino, new_ino, name);
+    if (retval == EXT2_ET_DIR_NO_SPACE) {
+        retval = ext2fs_expand_dir(ctx->fs, parent_ino);
+        if (retval == 0) {
+            retval = ext2fs_mkdir(ctx->fs, parent_ino, new_ino, name);
+        }
+    }
     if (retval) {
         rc = ext4_errcode_to_errno(retval);
         goto out;
@@ -118,18 +124,22 @@ int ext4_vfs_can_delete(ext4_vfs_ctx_t *ctx, ext2_ino_t ino) {
     if (ino == EXT2_ROOT_INO) return -EACCES;
 
     lg = ztrace_srw_acquire_shared(&ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+    EnterCriticalSection(&ctx->fs_lock);
     retval = ext2fs_read_inode(ctx->fs, ino, &ino_st);
     if (retval != 0) {
+        LeaveCriticalSection(&ctx->fs_lock);
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
         return ext4_errcode_to_errno(retval);
     }
     if (!LINUX_S_ISDIR(ino_st.i_mode)) {
+        LeaveCriticalSection(&ctx->fs_lock);
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
         return 0;
     }
 
     check.non_empty = 0;
     retval = (errcode_t)ext2fs_dir_iterate2(ctx->fs, ino, 0, NULL, empty_check_cb, &check);
+    LeaveCriticalSection(&ctx->fs_lock);
     ztrace_srw_release_shared(&ctx->rwlock, &lg);
 
     if (retval != 0) return ext4_errcode_to_errno(retval);

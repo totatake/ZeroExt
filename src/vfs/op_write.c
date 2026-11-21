@@ -35,7 +35,7 @@ int ext4_vfs_write_stat(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, ui
     retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&full_ino, sizeof(full_ino));
     if (retval == 0) {
         if (LINUX_S_ISDIR(full_ino.i_mode)) {
-            retval = EXT2_ET_IS_A_DIR;
+            retval = EISDIR;
         } else if (length > 0 || write_to_eof) {
             retval = ext2fs_file_open2(ctx->fs, ino, (struct ext2_inode *)&full_ino, EXT2_FILE_WRITE, &file);
             if (retval == 0) {
@@ -48,18 +48,19 @@ int ext4_vfs_write_stat(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, ui
                     retval = ext2fs_file_write(file, buf, length, &written);
                 }
                 if (retval == 0) {
-                    struct ext2_inode *updated = ext2fs_file_get_inode(file);
-                    ext2fs_file_get_size(file, &fsize);
-                    if (updated) {
-                        memcpy(&full_ino, updated, sizeof(struct ext2_inode));
-                    }
-                    ext2fs_file_close(file);
+                    retval = ext2fs_file_close(file);
                     file = NULL;
-
-                    ext4_inode_touch_times(&full_ino, 0, 1, 1);
-                    retval = ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)&full_ino, sizeof(full_ino));
-                    if (retval == 0 && out_st) {
-                        ext4_fill_stat_from_inode(ctx, ino, &full_ino, leaf_name, out_st);
+                    if (retval == 0) {
+                        memset(&full_ino, 0, sizeof(full_ino));
+                        retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&full_ino, sizeof(full_ino));
+                    }
+                    if (retval == 0) {
+                        fsize = EXT2_I_SIZE(&full_ino);
+                        ext4_inode_touch_times(&full_ino, 0, 1, 1);
+                        retval = ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)&full_ino, sizeof(full_ino));
+                        if (retval == 0 && out_st) {
+                            ext4_fill_stat_from_inode(ctx, ino, &full_ino, leaf_name, out_st);
+                        }
                     }
                 }
                 if (file) {

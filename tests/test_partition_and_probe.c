@@ -239,8 +239,8 @@ static int test_dirty_journal_and_jbd2_probe(void) {
 
     {
         struct ext2_inode_large j_ino;
-        struct ext4_extent_header *eh;
-        struct ext4_extent *ex;
+        struct ext3_extent_header *eh;
+        struct ext3_extent *ex;
         memset(&j_ino, 0, sizeof(j_ino));
         j_ino.i_mode = LINUX_S_IFREG | 0600;
         j_ino.i_links_count = 1;
@@ -248,15 +248,15 @@ static int test_dirty_journal_and_jbd2_probe(void) {
         j_ino.i_extra_isize = 32;
         j_ino.i_flags = EXT4_EXTENTS_FL;
         ext2fs_iblk_add_blocks(fs, (struct ext2_inode *)&j_ino, 1);
-        eh = (struct ext4_extent_header *)j_ino.i_block;
-        eh->eh_magic = EXT4_EXT_MAGIC;
+        eh = (struct ext3_extent_header *)j_ino.i_block;
+        eh->eh_magic = EXT3_EXT_MAGIC;
         eh->eh_entries = 1;
         eh->eh_max = 4;
         eh->eh_depth = 0;
-        ex = (struct ext4_extent *)((char *)j_ino.i_block + sizeof(*eh));
+        ex = (struct ext3_extent *)((char *)j_ino.i_block + sizeof(*eh));
         ex->ee_block = 0;
         ex->ee_len = 1;
-        ex->ee_start_lo = (__u32)jblk;
+        ex->ee_start = (__u32)jblk;
         TEST_ASSERT_EQ_INT(0, ext2fs_write_inode_full(fs, EXT2_JOURNAL_INO, (struct ext2_inode *)&j_ino, sizeof(j_ino)));
     }
 

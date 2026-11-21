@@ -792,7 +792,7 @@ static errcode_t win32_open(const char *name, int flags, io_channel *channel) {
     io->refcount = 1;
     io->flags = flags;
     io->private_data = priv;
-    io->align = (int)priv->sector_size;
+    io->align = 0;
 
     *channel = io;
     return 0;

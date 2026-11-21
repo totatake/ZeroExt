@@ -21,7 +21,7 @@ int ext4_vfs_truncate(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint64_t new_size) {
     if (retval == 0) {
         struct ext2_inode *inode = ext2fs_file_get_inode(file);
         if (LINUX_S_ISDIR(inode->i_mode)) {
-            retval = EXT2_ET_IS_A_DIR;
+            retval = EISDIR;
         } else {
             retval = ext2fs_file_set_size2(file, new_size);
         }

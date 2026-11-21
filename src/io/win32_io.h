@@ -2,7 +2,12 @@
 #define ZEROEXT_WIN32_IO_H
 
 #include <stdint.h>
+#include <et/com_err.h>
 #include <ext2fs/ext2_io.h>
+
+#ifndef io_channel_open
+#define io_channel_open(m, n, f, c) ((m)->open((n), (f), (c)))
+#endif
 
 #ifdef __cplusplus
 extern "C" {

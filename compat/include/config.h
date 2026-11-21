@@ -3,8 +3,8 @@
 
 #define PACKAGE "e2fsprogs"
 #define PACKAGE_NAME "e2fsprogs"
-#define PACKAGE_VERSION "1.47.2"
-#define VERSION "1.47.2"
+#define PACKAGE_VERSION "1.47.4"
+#define VERSION "1.47.4"
 
 #define HAVE_STDINT_H 1
 #define HAVE_INTTYPES_H 1
@@ -14,18 +14,20 @@
 #define HAVE_ERRNO_H 1
 #define HAVE_SYS_TYPES_H 1
 #define HAVE_SYS_STAT_H 1
+#define HAVE_SYS_TIME_H 1
 #define HAVE_FCNTL_H 1
 #define HAVE_UNISTD_H 1
 #define HAVE_LIMITS_H 1
 
 #define HAVE_STRCASECMP 1
 #define HAVE_STRDUP 1
+#define HAVE_STRNLEN 1
 #define HAVE_MEMSET 1
 #define HAVE_MEMCPY 1
 
-#define HAVE_EXT2_IOCTLS 0
-#define ENABLE_BMAP_STATS 0
-#define ENABLE_NLS 0
+/* #undef HAVE_EXT2_IOCTLS */
+/* #undef ENABLE_BMAP_STATS */
+/* #undef ENABLE_NLS */
 
 #define SIZEOF_SHORT 2
 #define SIZEOF_INT 4

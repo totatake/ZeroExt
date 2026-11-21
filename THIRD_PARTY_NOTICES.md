@@ -2,11 +2,15 @@
 
 ZeroExt incorporates or interoperates with the following third-party software components.
 
-## 1. e2fsprogs (`libext2fs` / `libet`)
+## 1. e2fsprogs 1.47.4 (`libext2fs` / `libet` / `libe2p` header)
 
 - **Location**: `third_party/e2fsprogs/`
-- **License**: GNU General Public License, version 2 (GPLv2)
+- **Version**: `1.47.4` (`version.h`: `E2FSPROGS_VERSION "1.47.4"`)
+- **License**: GNU General Public License, version 2 (GPLv2) / GNU Library General Public License, version 2 (LGPLv2)
 - **Usage**: Statically linked into `zeroext_core` (`zeroext.exe`) for ext2/ext3/ext4 metadata parsing, extent tree inspection, and filesystem operations.
+- **MSVC C11 Compatibility Adjustments** (reproducibly applied by `scripts/update_e2fsprogs.ps1`):
+  - `lib/ext2fs/ext2fs.h`: changed `EXT2_QSORT_TYPE` from `int __cdecl` to `int` (`int __cdecl (*sortfunc)` triggers MSVC syntax error `C2059`).
+  - `lib/ext2fs/alloc.c`, `lib/ext2fs/punch.c`, `lib/ext2fs/fallocate.c`: converted GNU named variadic macro `dbg_printf(f, a...)` / `## a` to standard C99 `dbg_printf(f, ...)` / `__VA_ARGS__`.
 - **Note**: Because ZeroExt links with `libext2fs`, ZeroExt itself is distributed under the terms of the GNU General Public License, version 2 (see [LICENSE](LICENSE)).
 
 ## 2. WinFsp (Windows File System Proxy)

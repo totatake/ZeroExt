@@ -1,48 +1,70 @@
-#include "config.h"
-#include <string.h>
-#include "ext2fs/ext2fs.h"
+/*
+ * lookup.c --- ext2fs directory lookup operations
+ *
+ * Copyright (C) 1993, 1994, 1994, 1995 Theodore Ts'o.
+ *
+ * %Begin-Header%
+ * This file may be redistributed under the terms of the GNU Library
+ * General Public License, version 2.
+ * %End-Header%
+ */
 
-struct lookup_ctx {
-    const char *name;
-    int namelen;
-    ext2_ino_t *inode;
-    int found;
+#include "config.h"
+#include <stdio.h>
+#include <string.h>
+#if HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#include "ext2_fs.h"
+#include "ext2fs.h"
+
+struct lookup_struct  {
+	const char	*name;
+	int		len;
+	ext2_ino_t	*inode;
+	int		found;
 };
 
-static int lookup_cb(ext2_ino_t dir, int entry, struct ext2_dir_entry *dirent,
-                     int offset, int blocksize, char *buf, void *priv_data) {
-    struct lookup_ctx *ctx = (struct lookup_ctx *)priv_data;
-    struct ext2_dir_entry_2 *de = (struct ext2_dir_entry_2 *)dirent;
-    (void)dir;
-    (void)entry;
-    (void)offset;
-    (void)blocksize;
-    (void)buf;
+#ifdef __TURBOC__
+ #pragma argsused
+#endif
+static int lookup_proc(struct ext2_dir_entry *dirent,
+		       int	offset EXT2FS_ATTR((unused)),
+		       int	blocksize EXT2FS_ATTR((unused)),
+		       char	*buf EXT2FS_ATTR((unused)),
+		       void	*priv_data)
+{
+	struct lookup_struct *ls = (struct lookup_struct *) priv_data;
 
-    if (de->inode == 0) {
-        return 0;
-    }
-    if ((int)de->name_len == ctx->namelen && memcmp(de->name, ctx->name, (size_t)ctx->namelen) == 0) {
-        *ctx->inode = de->inode;
-        ctx->found = 1;
-        return DIRENT_ABORT;
-    }
-    return 0;
+	if (ls->len != ext2fs_dirent_name_len(dirent))
+		return 0;
+	if (strncmp(ls->name, dirent->name, ext2fs_dirent_name_len(dirent)))
+		return 0;
+	*ls->inode = dirent->inode;
+	ls->found++;
+	return DIRENT_ABORT;
 }
 
-errcode_t ext2fs_lookup(ext2_filsys fs, ext2_ino_t dir, const char *name, int namelen, char *buf, ext2_ino_t *inode) {
-    struct lookup_ctx ctx;
-    int ret;
 
-    if (!fs || !name || !inode) return EXT2_ET_INVALID_ARGUMENT;
-    if (namelen < 0) namelen = (int)strlen(name);
+errcode_t ext2fs_lookup(ext2_filsys fs, ext2_ino_t dir, const char *name,
+			int namelen, char *buf, ext2_ino_t *inode)
+{
+	errcode_t	retval;
+	struct lookup_struct ls;
 
-    ctx.name = name;
-    ctx.namelen = namelen;
-    ctx.inode = inode;
-    ctx.found = 0;
+	EXT2_CHECK_MAGIC(fs, EXT2_ET_MAGIC_EXT2FS_FILSYS);
 
-    ret = ext2fs_dir_iterate2(fs, dir, 0, buf, lookup_cb, &ctx);
-    if (ret) return (errcode_t)ret;
-    return ctx.found ? 0 : EXT2_ET_FILE_NOT_FOUND;
+	ls.name = name;
+	ls.len = namelen;
+	ls.inode = inode;
+	ls.found = 0;
+
+	retval = ext2fs_dir_iterate(fs, dir, 0, buf, lookup_proc, &ls);
+	if (retval)
+		return retval;
+
+	return (ls.found) ? 0 : EXT2_ET_FILE_NOT_FOUND;
 }
+
+

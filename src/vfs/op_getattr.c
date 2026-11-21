@@ -118,11 +118,13 @@ int ext4_vfs_lower_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *lea
     if (!ctx || !out_st || ino == 0) return -EINVAL;
 
     lg = ztrace_srw_acquire_shared(&ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+    EnterCriticalSection(&ctx->fs_lock);
     memset(&ino_st, 0, sizeof(ino_st));
     retval = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&ino_st, sizeof(ino_st));
     if (retval == 0) {
         ext4_fill_stat_from_inode(ctx, ino, &ino_st, leaf_name, out_st);
     }
+    LeaveCriticalSection(&ctx->fs_lock);
     ztrace_srw_release_shared(&ctx->rwlock, &lg);
     return ext4_errcode_to_errno(retval);
 }
@@ -152,6 +154,7 @@ int ext4_vfs_lower_stat_with_name(ext4_vfs_ctx_t *ctx, const char *path, ext4_st
     {
         ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
             &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        EnterCriticalSection(&ctx->fs_lock);
         rc = ext4_vfs_lookup_locked_ex(ctx, norm, &ino, actual_leaf, sizeof(actual_leaf));
         if (rc == 0) {
             memset(&ino_st, 0, sizeof(ino_st));
@@ -165,6 +168,7 @@ int ext4_vfs_lower_stat_with_name(ext4_vfs_ctx_t *ctx, const char *path, ext4_st
                 rc = ext4_errcode_to_errno(retval);
             }
         }
+        LeaveCriticalSection(&ctx->fs_lock);
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
     return rc;

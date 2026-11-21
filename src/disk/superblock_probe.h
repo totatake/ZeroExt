@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 
+#ifndef JBD2_MAGIC_NUMBER
+#define JBD2_MAGIC_NUMBER  0xc03b3998U
+#define JBD2_SUPERBLOCK_V1 3
+#define JBD2_SUPERBLOCK_V2 4
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

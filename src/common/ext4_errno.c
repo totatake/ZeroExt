@@ -44,18 +44,12 @@ int ext4_errcode_to_errno(errcode_t err) {
         return -ENOENT;
     case EXT2_ET_NO_DIRECTORY:
         return -ENOTDIR;
-    case EXT2_ET_IS_A_DIR:
-        return -EISDIR;
     case EXT2_ET_FILE_EXISTS:
     case EXT2_ET_DIR_EXISTS:
         return -EEXIST;
-    case EXT2_ET_DIR_NOT_EMPTY:
-        return -ENOTEMPTY;
     case EXT2_ET_RO_FILSYS:
     case EXT2_ET_FILE_RO:
-    case EXT2_ET_JOURNAL_UNSUPP_INCOMPAT:
         return -EROFS;
-    case EXT2_ET_NO_FREE_SPACE:
     case EXT2_ET_INODE_ALLOC_FAIL:
     case EXT2_ET_BLOCK_ALLOC_FAIL:
     case EXT2_ET_DIR_NO_SPACE:
@@ -63,7 +57,6 @@ int ext4_errcode_to_errno(errcode_t err) {
     case EXT2_ET_INLINE_DATA_NO_SPACE:
         return -ENOSPC;
     case EXT2_ET_FILE_TOO_BIG:
-    case EXT2_ET_TOOBIG:
         return -EFBIG;
     case EXT2_ET_NO_MEMORY:
         return -ENOMEM;

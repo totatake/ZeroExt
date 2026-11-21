@@ -33,6 +33,12 @@ int ext4_vfs_symlink(ext4_vfs_ctx_t *ctx, const char *link_path, const char *tar
                 rc = -EEXIST;
             } else {
                 retval = ext2fs_symlink(ctx->fs, parent_ino, 0, name, target_path);
+                if (retval == EXT2_ET_DIR_NO_SPACE) {
+                    retval = ext2fs_expand_dir(ctx->fs, parent_ino);
+                    if (retval == 0) {
+                        retval = ext2fs_symlink(ctx->fs, parent_ino, 0, name, target_path);
+                    }
+                }
                 if (retval == 0) {
                     ext4_dentry_cache_invalidate(ctx);
                 }
@@ -58,6 +64,7 @@ int ext4_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_targ
     {
         ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
             &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+        EnterCriticalSection(&ctx->fs_lock);
         rc = ext4_vfs_lookup_locked(ctx, norm, &ino);
         if (rc == 0) {
             retval = ext2fs_read_inode(ctx->fs, ino, &ino_st);
@@ -90,6 +97,7 @@ int ext4_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_targ
                 }
             }
         }
+        LeaveCriticalSection(&ctx->fs_lock);
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
     return rc;

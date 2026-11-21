@@ -41,6 +41,7 @@ typedef struct ext4_mount_config {
 typedef struct ext4_vfs_ctx {
     ext2_filsys               fs;
     SRWLOCK                   rwlock;
+    CRITICAL_SECTION          fs_lock;
     int                       read_only;
     int                       lower_read_only;
     int                       dirty_detected;

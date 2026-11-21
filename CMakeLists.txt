@@ -34,17 +34,20 @@ set(E2FSPROGS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/e2fsprogs")
 set(E2FSPROGS_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(E2FSPROGS_ET_IN "${E2FSPROGS_ROOT}/lib/ext2fs/ext2_err.et.in")
 set(E2FSPROGS_TYPES_IN "${E2FSPROGS_ROOT}/lib/ext2fs/ext2_types.h.in")
+set(E2FSPROGS_VERSION_H "${E2FSPROGS_ROOT}/version.h")
 set(E2FSPROGS_GEN_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_e2fsprogs_headers.py")
 
 set(E2FSPROGS_GEN_ERR_H "${E2FSPROGS_GEN_DIR}/ext2fs/ext2_err.h")
 set(E2FSPROGS_GEN_ERR_C "${E2FSPROGS_GEN_DIR}/ext2_err.c")
 set(E2FSPROGS_GEN_TYPES_H "${E2FSPROGS_GEN_DIR}/ext2fs/ext2_types.h")
+set(E2FSPROGS_GEN_CRC_H "${E2FSPROGS_GEN_DIR}/ext2fs/crc32c_table.h")
 
 # Generate once at configure time so initial header scanning sees all generated headers
 execute_process(
     COMMAND "${ZEROEXT_PYTHON}" "${E2FSPROGS_GEN_SCRIPT}"
             --et-file "${E2FSPROGS_ET_IN}"
             --types-file "${E2FSPROGS_TYPES_IN}"
+            --version-file "${E2FSPROGS_VERSION_H}"
             --out-dir "${E2FSPROGS_GEN_DIR}"
     RESULT_VARIABLE _GEN_RES
 )
@@ -53,58 +56,88 @@ if(NOT _GEN_RES EQUAL 0)
 endif()
 
 add_custom_command(
-    OUTPUT "${E2FSPROGS_GEN_ERR_H}" "${E2FSPROGS_GEN_ERR_C}" "${E2FSPROGS_GEN_TYPES_H}"
+    OUTPUT "${E2FSPROGS_GEN_ERR_H}" "${E2FSPROGS_GEN_ERR_C}" "${E2FSPROGS_GEN_TYPES_H}" "${E2FSPROGS_GEN_CRC_H}"
     COMMAND "${ZEROEXT_PYTHON}" "${E2FSPROGS_GEN_SCRIPT}"
             --et-file "${E2FSPROGS_ET_IN}"
             --types-file "${E2FSPROGS_TYPES_IN}"
+            --version-file "${E2FSPROGS_VERSION_H}"
             --out-dir "${E2FSPROGS_GEN_DIR}"
-    DEPENDS "${E2FSPROGS_GEN_SCRIPT}" "${E2FSPROGS_ET_IN}" "${E2FSPROGS_TYPES_IN}"
-    COMMENT "Generating ext2_err.h, ext2_err.c, and ext2_types.h from upstream e2fsprogs templates"
+    DEPENDS "${E2FSPROGS_GEN_SCRIPT}" "${E2FSPROGS_ET_IN}" "${E2FSPROGS_TYPES_IN}" "${E2FSPROGS_VERSION_H}"
+    COMMENT "Generating ext2_err.h, ext2_err.c, ext2_types.h, and crc32c_table.h from upstream e2fsprogs templates"
     VERBATIM
 )
 
 add_custom_target(generate_e2fsprogs_headers
-    DEPENDS "${E2FSPROGS_GEN_ERR_H}" "${E2FSPROGS_GEN_ERR_C}" "${E2FSPROGS_GEN_TYPES_H}"
+    DEPENDS "${E2FSPROGS_GEN_ERR_H}" "${E2FSPROGS_GEN_ERR_C}" "${E2FSPROGS_GEN_TYPES_H}" "${E2FSPROGS_GEN_CRC_H}"
 )
 
-# Static library: upstream e2fsprogs (lib/et + lib/ext2fs without OS-dependent unix_io.c etc.)
+# Static library: upstream e2fsprogs 1.47.4 (lib/et + platform-independent lib/ext2fs)
 add_library(ext2fs STATIC
     "${E2FSPROGS_GEN_ERR_C}"
     "${E2FSPROGS_ROOT}/lib/et/com_err.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/io_manager.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/openfs.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/closefs.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/freefs.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/initialize.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/blknum.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/bitmaps.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/rw_bitmaps.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/bitops.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/gen_bitmap64.c"
+    "${E2FSPROGS_ROOT}/lib/et/error_message.c"
+    "${E2FSPROGS_ROOT}/lib/et/et_name.c"
+    "${E2FSPROGS_ROOT}/lib/et/init_et.c"
+    "${E2FSPROGS_ROOT}/lib/et/com_right.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/alloc.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/alloc_sb.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/alloc_stats.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/alloc_tables.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/inode.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/extent.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/bmap.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/badblocks.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/bitmaps.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/bitops.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/blkmap64_ba.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/blkmap64_rb.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/blknum.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/block.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/ind_block.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/fileio.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/inline.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/inline_data.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/dirblock.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/dir_iterate.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/lookup.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/namei.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/mkdir.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/newdir.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/link.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/unlink.c"
-    "${E2FSPROGS_ROOT}/lib/ext2fs/symlink.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/bmap.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/check_desc.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/closefs.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/crc16.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/crc32c.c"
     "${E2FSPROGS_ROOT}/lib/ext2fs/csum.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/dir_iterate.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/dirblock.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/dirhash.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/expanddir.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/ext_attr.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/extent.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/fallocate.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/fileio.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/freefs.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/gen_bitmap.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/gen_bitmap64.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/get_num_dirs.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/getenv.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/hashmap.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/i_block.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/ind_block.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/initialize.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/inline.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/inline_data.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/inode.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/io_manager.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/ismounted.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/link.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/lookup.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/mkdir.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/mkjournal.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/mmp.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/namei.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/native.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/newdir.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/nls_utf8.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/openfs.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/punch.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/rbtree.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/read_bb.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/rw_bitmaps.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/sha512.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/swapfs.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/symlink.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/unlink.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/valid_blk.c"
+    "${E2FSPROGS_ROOT}/lib/ext2fs/version.c"
 )
 add_dependencies(ext2fs generate_e2fsprogs_headers)
 target_include_directories(ext2fs
@@ -112,12 +145,17 @@ target_include_directories(ext2fs
         "${E2FSPROGS_GEN_DIR}"
         "${E2FSPROGS_ROOT}/lib"
     PRIVATE
+        "${E2FSPROGS_GEN_DIR}/ext2fs"
+        "${E2FSPROGS_ROOT}/lib/ext2fs"
         "${CMAKE_CURRENT_SOURCE_DIR}/compat/include"
 )
 if(MSVC)
     target_compile_options(ext2fs PRIVATE
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_compat.h"
         /W3
+    )
+    target_compile_options(ext2fs INTERFACE
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_public_compat.h"
     )
 endif()
 
