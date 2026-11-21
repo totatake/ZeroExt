@@ -167,10 +167,10 @@
 
 ### 3.2 小ブロック（4 KB）ランダム読込における挙動とトレードオフ
 
-1. **ユーザー空間 8 MB LRU キャッシュヒットによる逆転（8 スレッドランダム 4 KB で 0.63x〜0.79x）**:
+1. **ユーザー空間 8 MB LRU キャッシュヒットによる逆転（8 スレッドランダム 4 KB で 0.63x〜0.79x）とカーネル側 `ReadFile` 直列化**:
    - `/model.gguf`（64 MB）および `/frag.bin`（32 MB）は、デフォルトの 8 MB ユーザー空間 LRU キャッシュ（`2048` ブロック × 4 KB）に作業集合のそれぞれ約 12.5%〜25% が収まる。
    - 標準経路（`enable_direct_io=0`）はキャッシュヒット時に Windows の `ReadFile` システムコールを発行せずユーザー空間メモリコピーのみで完了できるため、特に 8 スレッド並列ランダム 4 KB では `1000.4 MB/s`（`/model.gguf`）・`812.1 MB/s`（`/frag.bin`）に達する。
-   - 一方 `--direct-io` 経路（`enable_direct_io=1`）は LRU キャッシュを完全にバイパスして毎回 `ReadFile` システムコールを発行するため、小容量・並列ランダム読込ではシステムコール発行や OS ファイルシステム内の競合が支配的になり、`0.63x`（`/model.gguf`）・`0.79x`（`/frag.bin`）と標準経路を下回る場合がある。
+   - 一方 `--direct-io` 経路（`enable_direct_io=1`）は LRU キャッシュをバイパスして毎回 `ReadFile` を発行するためシステムコール負荷が増えることに加え、**Perfetto トレース解析により `src/io/win32_io.c` が `FILE_FLAG_OVERLAPPED` なしで同期 `HANDLE` を開いているため Windows カーネル `FileObject->Lock` が全スレッドの `ReadFile` を直列化し（`8T Rnd 4KB` の `ReadFile` 平均が `1T` の `3.65 µs` → `49.11 µs` へ 13.5 倍悪化）、Lock Convoy を引き起こしていることが真因として特定された**（詳細は [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md) を参照）。
 2. **WinFsp 実マウント時の 4 KB ランダム性能**:
    - WinFsp 経由の `UNBUF RND (4KB)` は 1 回あたり約 23〜27 us/op を要し、カーネル〜ユーザー空間間のディスパッチ費用がボトルネックとなるため、`--direct-io` ON/OFF の差は **1.16x**（`168.7` vs `145.9 MB/s`）にとどまる。
    - また、単一スレッドの 4 KB ランダム（`1T Rnd 4KB`）では `--direct-io` 側が `ext2fs_file_open/read` 経路の関数コール・ブロック境界計算オーバーヘッドを省けるため **1.44x**（`994.3` vs `689.9 MB/s`）と優位になるが、8 スレッド時はシステムコール並列発行の影響で標準経路との逆転または拮抗が生じる。
@@ -199,7 +199,7 @@
   - 注意: `--rw` モードでは整合性維持のため Direct I/O は自動的に無効化され、`--direct-io` 明示併用時はエラー終了する。
 
 > [!NOTE]
-> WinFsp コールバック、`ctx->rwlock` / `cache_lock` のロック競合、`ReadFile` 待機、および Overlay Copy-up の詳細なタイムライン計測については、今後の構想として **Perfetto トレース出力機能** の追加を計画している（[今後の構想・ロードマップ](future_roadmap.md#2-性能解析用-perfetto-トレース出力機能の追加) 参照）。
+> WinFsp コールバック、`ctx->rwlock` / `cache_lock` のロック競合、`ReadFile` 待機、および Overlay Copy-up の詳細なタイムライン計測については **Perfetto トレース出力機能**（`--trace`）が実装済みである。`zeroext_bench.exe --trace` およびライブマウントの実測トレース解析から得られた原因特定と改善計画は [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md)（機能構想は [今後の構想・ロードマップ](future_roadmap.md#2-性能解析用-perfetto-トレース出力機能の追加実装済み)）を参照。
 
 ---
 

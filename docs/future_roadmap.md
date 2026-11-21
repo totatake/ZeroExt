@@ -37,7 +37,7 @@
 ## 2. 性能解析用 Perfetto トレース出力機能の追加（実装済み）
 
 > [!NOTE]
-> 本項目は `src/trace/perfetto_trace.h` / `src/trace/perfetto_trace.c` として実装されました。`zeroext mount --trace <path>`、`zeroext_bench.exe --trace <path>`、および `ZeroExtGui.exe` の詳細設定から有効化でき、生成された Chrome Trace Event JSON を [Perfetto UI](https://ui.perfetto.dev/) でそのまま可視化できます。詳細は [テスト報告書・利用ガイド](testing_and_usage.md) を参照してください。
+> 本項目は `src/trace/perfetto_trace.h` / `src/trace/perfetto_trace.c` として実装されました。`zeroext mount --trace <path>`、`zeroext_bench.exe --trace <path>`、および `ZeroExtGui.exe` の詳細設定から有効化でき、生成された Chrome Trace Event JSON を [Perfetto UI](https://ui.perfetto.dev/) でそのまま可視化できます。詳細は [テスト報告書・利用ガイド](testing_and_usage.md)、実測トレースに基づくボトルネック解析・改善計画は [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md) を参照してください。
 
 ### 2.1 背景と目的
 [性能評価報告書](performance_evaluation.md) で確認した通り、実マウント時のスループットやマルチスレッド並列アクセス時の挙動には、以下の複合要因が関与する。

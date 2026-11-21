@@ -24,6 +24,7 @@ Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高�
 - [詳細設計書](docs/detailed_design.md)
 - [テスト報告書・利用ガイド](docs/testing_and_usage.md)
 - [性能評価報告書 (`--direct-io` / NTFS / WSL2 比較)](docs/performance_evaluation.md)
+- [Perfetto トレース定量解析・性能改善計画](docs/perfetto_trace_analysis.md)
 - [今後の構想・ロードマップ](docs/future_roadmap.md)
 
 ## ビルドとテスト
