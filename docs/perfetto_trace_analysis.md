@@ -219,8 +219,8 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 | `VFS DIO 8T Seq 64KB` (`MB/s` / `ReadFile` max) | `5,404.1 MB/s` / `37.96 ms` (`98.6%` 連続独占) | **`31,835.1 MB/s`** / `0.240 ms` (`0.4%` 連続) | — | _未計測_ |
 | `VFS DIO 8T Rnd 4KB /model.gguf` (`MB/s` / `ReadFile` mean) | `632.4 MB/s` (`0.63x`) / `49.11 µs` | **`1,155.4 MB/s`** (`0.88x`) / `24.51 µs` | — | _未計測_ |
 | `VFS DIO 8T Rnd 4KB /frag.bin` (`MB/s` / `ReadFile` mean) | `640.6 MB/s` (`0.79x`) / `49.71 µs` | **`1,260.7 MB/s`** (`1.13x`) / `24.46 µs` | — | _未計測_ |
-| 同一 SSD `Warm/Cached Seq 1024KB` (`MB/s`) | `1,490.5 MB/s` | _未計測_ | _未計測_ | _未計測_ |
-| 同一 SSD `Warm/Cached Rnd 4KB` (`MB/s`) | `36.8 MB/s` | _未計測_ | _未計測_ | _未計測_ |
+| `同一 SSD Warm/Cached Seq 1024KB` (`MB/s`) | `1,490.5 MB/s` | _未計測_ | `9,190.0 MB/s` <br><sub>(`.img` ライブ A/B: `2,359.0` → **`9,190.0 MB/s`**; 同一 SSD スクリプト未実施)</sub> | _未計測_ |
+| `同一 SSD Warm/Cached Rnd 4KB` (`MB/s`) | `36.8 MB/s` | _未計測_ | `1,015.3 MB/s` <br><sub>(`.img` ライブ A/B: `134.1` → **`1,015.3 MB/s`**; 同一 SSD スクリプト未実施)</sub> | _未計測_ |
 | `cache_lock wait` 合計 / max (`M0_8T_Rnd_4KB_frag`) | `43.7 ms` / `262.0 µs` | `798.0 ms` / `353.5 µs` | — | _未計測_ |
 
 ### 5.1 Step 1 (`FILE_FLAG_OVERLAPPED`) 効果検証結果
@@ -241,3 +241,22 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
    - **次のボトルネック（Step 3 対象の顕在化）**:
      - `ReadFile` 待機が解けた結果、Mode 0 では **`win32_io.cache_lock` の競合が一気に顕在化**（`M0_8T_Seq_64KB`: `wait 1,337.9 ms` / max `380.6 µs`、`M0_8T_Rnd_4KB_model`: `wait 889.7 ms` vs `hold 122.8 ms` [wait/hold **7.25x**]、`M0_8T_Rnd_4KB_frag`: `wait 798.0 ms`）。
      - Mode 1 では `extent_cache.lock` の待ちが `M1_8T_Seq_64KB` で `7.3 ms`（`63.5 ms` 中、max `70.3 µs`）、`M1_8T_Rnd_4KB` で `14.7〜16.5 ms`（max `109.7〜249.1 µs`）発生している。
+
+### 5.2 Step 2 (RO 時 `FileInfoTimeout = INFINITE`) 効果検証結果
+
+128 MB の作業用 ext4 イメージ（64 MB 非ゼロ `/model.gguf`）を実 WinFsp ドライブ（`Z:`、RO 既定 Direct I/O + `--trace` 有効）としてマウントし、`--file-info-timeout 1000`（従来相当）と既定 `INFINITE`（Step 2）で同一測定（`zeroext_bench.exe --read` 4 種連続）を比較した。
+
+1. **実 WinFsp マウント A/B ベンチマーク比較（64 MB `/model.gguf`）**:
+   | ワークロード | Timeout = `1000 ms` | Timeout = `INFINITE` (Step 2 既定) | 速度比 |
+   | :--- | ---: | ---: | ---: |
+   | `CACHED-WARM SEQ (1024KB)` | `2,359.0 MB/s` (`2,359 IOPS`) | **`9,190.0 MB/s`** (`9,190 IOPS`) | **3.90x** |
+   | `CACHED-WARM SEQ (64KB)` | `1,666.7 MB/s` (`26,667 IOPS`) | **`8,027.9 MB/s`** (`128,446 IOPS`) | **4.82x** |
+   | `CACHED-WARM RND (4KB)` (16K ops) | `134.1 MB/s` (`34,328 IOPS`) | **`1,015.3 MB/s`** (`259,927 IOPS`) | **7.57x** |
+   | `UNBUF SEQ (1024KB)` | `2,607.0 MB/s` (`2,607 IOPS`) | `2,704.6 MB/s` (`2,705 IOPS`) | `1.04x` |
+
+2. **Perfetto トレース解析によるコールバック回数比較**:
+   - **`FspRead` 呼び出し回数・ユーザー空間転送量**:
+     - `1000 ms`: **`17,736` 回** / `448.1 MB` / 合計 `243.03 ms`（ウォーム時も全読込がユーザー空間へ到達）
+     - `INFINITE`: **`131` 回** / `128.0 MB` / 合計 `43.86 ms`（**`FspRead` 回数を 99.3% 削減**。初回 64 MB ウォームアップ＋明示 `UNBUF` 64 MB の 128 MB のみがユーザー空間を通過し、3 種の `CACHED-WARM` 計測中はカーネル `CcCopyRead` で完結）
+   - **メタデータ照会回数**: `FspGetSecurityByName` が `10` → `8` 回、`FspOpen` が `10` → `8` 回へ減少。
+   - **CLI オーバーライド**: 外部変更を即座に追従したい用途向けに `zeroext mount --file-info-timeout <ms|infinite>` を追加した（RW および書き込み可能 Overlay は引き続き既定 `1000 ms` を維持）。

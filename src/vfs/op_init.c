@@ -226,6 +226,8 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     ctx->case_insensitive = cfg->case_insensitive;
     /* Direct Extent I/O is enabled by default whenever Lower ext4 is Read-Only unless explicitly disabled */
     ctx->enable_direct_io = (lower_ro && !cfg->disable_direct_io) ? 1 : 0;
+    ctx->has_file_info_timeout = cfg->has_file_info_timeout ? 1 : 0;
+    ctx->file_info_timeout = cfg->file_info_timeout;
     ctx->journal_state = probe.journal_state;
     ctx->partition_offset = part_offset;
     ctx->partition_size = part_size;

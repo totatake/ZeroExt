@@ -42,6 +42,7 @@ static int test_winfsp_interface_e2e(void) {
         winfsp_driver_build_volume_params(ctx, &vp);
         TEST_ASSERT_EQ_INT(4096, vp.SectorSize);
         TEST_ASSERT_EQ_INT(0, vp.ReadOnlyVolume);
+        TEST_ASSERT_EQ_INT(1000, vp.FileInfoTimeout);
         TEST_ASSERT_EQ_INT(1, vp.UmFileContextIsUserContext2);
         TEST_ASSERT(wcscmp(vp.FileSystemName, L"ext4") == 0);
     }
@@ -177,8 +178,89 @@ static int test_winfsp_interface_e2e(void) {
     return 0;
 }
 
+static void remove_dir_tree_a(const char *dir) {
+    char pattern[MAX_PATH];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    snprintf(pattern, sizeof(pattern), "%s\\*", dir);
+    h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            char child[MAX_PATH];
+            if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
+            snprintf(child, sizeof(child), "%s\\%s", dir, fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                remove_dir_tree_a(child);
+            } else {
+                SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
+                DeleteFileA(child);
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryA(dir);
+}
+
+static int test_winfsp_volume_params_ro_cache_timeout(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    FSP_FSCTL_VOLUME_PARAMS vp;
+
+    test_make_temp_path(img_path, sizeof(img_path), "winfsp_timeout.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "winfsp_timeout_upper");
+    remove_dir_tree_a(upper_dir);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "ROTIMEOUT"));
+
+    /* 1. Default Read-Only mount enables INFINITE ((UINT32)-1) FileInfoTimeout for NT CcCopyRead */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    winfsp_driver_build_volume_params(ctx, &vp);
+    TEST_ASSERT_EQ_INT(1, vp.ReadOnlyVolume);
+    TEST_ASSERT(vp.FileInfoTimeout == (UINT32)-1);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 2. Explicit override forces requested timeout even in Read-Only mode */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    cfg.has_file_info_timeout = 1;
+    cfg.file_info_timeout = 1000U;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    winfsp_driver_build_volume_params(ctx, &vp);
+    TEST_ASSERT_EQ_INT(1, vp.ReadOnlyVolume);
+    TEST_ASSERT_EQ_INT(1000, vp.FileInfoTimeout);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 3. Writable Overlay mount keeps 1000 ms timeout for upperdir coherence */
+    TEST_ASSERT(CreateDirectoryA(upper_dir, NULL));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.overlay_upper_dir = upper_dir;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    winfsp_driver_build_volume_params(ctx, &vp);
+    TEST_ASSERT_EQ_INT(0, vp.ReadOnlyVolume);
+    TEST_ASSERT_EQ_INT(1000, vp.FileInfoTimeout);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    remove_dir_tree_a(upper_dir);
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_winfsp_callbacks(void) {
     int suite_failures = 0;
     RUN_TEST(test_winfsp_interface_e2e);
+    RUN_TEST(test_winfsp_volume_params_ro_cache_timeout);
     return suite_failures;
 }

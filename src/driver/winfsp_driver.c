@@ -783,7 +783,13 @@ void winfsp_driver_build_volume_params(ext4_vfs_ctx_t *ctx, FSP_FSCTL_VOLUME_PAR
     out_params->MaxComponentLength = EXT2_NAME_LEN;
     out_params->VolumeCreationTime = ext4_now_filetime();
     out_params->VolumeSerialNumber = vol.serial_number;
-    out_params->FileInfoTimeout = 1000;
+    /* On Read-Only volumes, INFINITE ((UINT32)-1) enables the Windows NT Cache Manager (CcCopyRead)
+     * and avoids repeated metadata round-trips. RW and writable Overlay keep 1000 ms for coherence. */
+    if (ctx->has_file_info_timeout) {
+        out_params->FileInfoTimeout = ctx->file_info_timeout;
+    } else {
+        out_params->FileInfoTimeout = ctx->read_only ? (UINT32)-1 : 1000U;
+    }
     out_params->CaseSensitiveSearch = ctx->case_insensitive ? 0 : 1;
     out_params->CasePreservedNames = 1;
     out_params->UnicodeOnDisk = 1;

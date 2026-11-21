@@ -101,8 +101,8 @@ static void print_usage(void) {
         "  zeroext mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
         "  zeroext extents <image_or_disk> <ext4_path> [--partition <N>]\n"
         "  zeroext mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
-        "                [--no-direct-io | --direct-io] [--ro-fallback] [--force-dirty] [--cache-blocks <N>] [--debug]\n"
-        "                [--stop-event <name>] [--json-events] [--stats-interval <ms>]\n"
+        "                [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>] [--ro-fallback] [--force-dirty]\n"
+        "                [--cache-blocks <N>] [--debug] [--stop-event <name>] [--json-events] [--stats-interval <ms>]\n"
         "                [--trace <output_json>] [--trace-events <N>]\n"
         "  zeroext unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
@@ -786,10 +786,13 @@ static int cmd_mount(int argc, char **argv) {
     const char *overlay_dir = parse_str_opt(argc, argv, "--overlay", NULL);
     const char *stop_event_name = parse_str_opt(argc, argv, "--stop-event", NULL);
     const char *trace_path = parse_str_opt(argc, argv, "--trace", NULL);
+    const char *fi_timeout_str = parse_str_opt(argc, argv, "--file-info-timeout", NULL);
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     uint32_t cache_blocks = parse_u32_opt(argc, argv, "--cache-blocks", 2048);
     uint32_t stats_interval = parse_u32_opt(argc, argv, "--stats-interval", 0);
     uint32_t trace_events = parse_u32_opt(argc, argv, "--trace-events", 0);
+    int has_fi_timeout = 0;
+    uint32_t fi_timeout_ms = 0;
     int rw = has_flag(argc, argv, "--rw");
     int ro_fallback = has_flag(argc, argv, "--ro-fallback");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
@@ -830,6 +833,26 @@ static int cmd_mount(int argc, char **argv) {
         fprintf(stderr, "%s\n", msg);
         emit_mount_error_json(json_events, "args", -EINVAL, msg);
         return 1;
+    }
+
+    if (fi_timeout_str && fi_timeout_str[0] != '\0') {
+        if (_stricmp(fi_timeout_str, "infinite") == 0 || strcmp(fi_timeout_str, "-1") == 0) {
+            has_fi_timeout = 1;
+            fi_timeout_ms = (uint32_t)-1;
+        } else {
+            char *endp = NULL;
+            unsigned long val;
+            errno = 0;
+            val = (fi_timeout_str[0] == '-') ? 0UL : strtoul(fi_timeout_str, &endp, 10);
+            if (fi_timeout_str[0] == '-' || errno == ERANGE || !endp || *endp != '\0') {
+                const char *msg = "Error: invalid --file-info-timeout value (expected non-negative ms or 'infinite').";
+                fprintf(stderr, "%s\n", msg);
+                emit_mount_error_json(json_events, "args", -EINVAL, msg);
+                return 1;
+            }
+            has_fi_timeout = 1;
+            fi_timeout_ms = (uint32_t)val;
+        }
     }
 
     if (stop_event_name && stop_event_name[0] != '\0') {
@@ -883,6 +906,8 @@ static int cmd_mount(int argc, char **argv) {
     cfg.case_insensitive = 1;
     cfg.enable_direct_io = direct_io ? 1 : 0;
     cfg.disable_direct_io = no_direct_io ? 1 : 0;
+    cfg.has_file_info_timeout = has_fi_timeout;
+    cfg.file_info_timeout = fi_timeout_ms;
 
     ext4_vfs_ctx_t *ctx = NULL;
     int rc = ext4_vfs_mount(&cfg, &ctx);
