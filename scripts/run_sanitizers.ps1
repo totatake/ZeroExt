@@ -7,13 +7,11 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 
-$Vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-$Cmake  = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-$Ctest  = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe"
-
-if (-not (Test-Path $Vcvars)) { throw "vcvars64.bat not found at $Vcvars" }
-if (-not (Test-Path $Cmake))  { throw "cmake.exe not found at $Cmake" }
-if (-not (Test-Path $Ctest))  { throw "ctest.exe not found at $Ctest" }
+. (Join-Path $PSScriptRoot "find_vs.ps1")
+$Toolchain = Resolve-ZeroExtVsToolchain
+$Vcvars = $Toolchain.Vcvars
+$Cmake  = $Toolchain.Cmake
+$Ctest  = $Toolchain.Ctest
 
 $PythonBin = Join-Path $env:LOCALAPPDATA "Python\bin"
 if (Test-Path (Join-Path $PythonBin "python.exe")) {

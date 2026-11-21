@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build and test (Release + CTest + ZeroExtGui)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
+
+      - name: Run sanitizers and static analysis (ASan + CRT Leak Check + /analyze)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
