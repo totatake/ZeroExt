@@ -101,6 +101,7 @@ static int parse_gpt(io_channel io, const char *path_utf8, uint32_t sector_size,
     if (table_off + table_bytes > out->total_size_bytes) {
         table_bytes = out->total_size_bytes - table_off;
     }
+    if (table_bytes < entry_size) return 0;
 
     table_buf = (uint8_t *)malloc((size_t)table_bytes);
     if (!table_buf) return 0;

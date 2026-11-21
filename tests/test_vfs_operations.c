@@ -713,6 +713,138 @@ static int test_multi_group_backup_superblock_flush(void) {
     return 0;
 }
 
+typedef struct {
+    ext4_vfs_ctx_t *ctx;
+    int             tid;
+    volatile LONG  *stop_flag;
+    int             error;
+} rw_stress_arg_t;
+
+static DWORD WINAPI rw_stress_writer(LPVOID param) {
+    rw_stress_arg_t *a = (rw_stress_arg_t *)param;
+    uint8_t payload[512];
+    memset(payload, (uint8_t)(0x40 + a->tid), sizeof(payload));
+    for (int iter = 0; iter < 60; iter++) {
+        char p1[128], p2[128];
+        ext4_file_handle_t *h = NULL;
+        uint32_t w = 0;
+        snprintf(p1, sizeof(p1), "/stress/w%d_%02d.tmp", a->tid, iter % 8);
+        snprintf(p2, sizeof(p2), "/stress/w%d_%02d.ren", a->tid, iter % 8);
+        (void)ext4_vfs_create(a->ctx, p1, 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL);
+        if (ext4_vfs_open_stat(a->ctx, p1, 1, &h, NULL) == 0) {
+            if (ext4_vfs_write_stat(a->ctx, h->ino, payload, 0, sizeof(payload), 0, "tmp", &w, NULL, NULL) != 0) {
+                ext4_vfs_close_handle(h);
+                a->error = 1;
+                return 1;
+            }
+            ext4_vfs_close_handle(h);
+        }
+        (void)ext4_vfs_rename(a->ctx, p1, p2, 1);
+        (void)ext4_vfs_unlink(a->ctx, p2);
+    }
+    return 0;
+}
+
+static DWORD WINAPI rw_stress_reader(LPVOID param) {
+    rw_stress_arg_t *a = (rw_stress_arg_t *)param;
+    ext4_stat_t st;
+    uint8_t buf[4096];
+    while (InterlockedCompareExchange(a->stop_flag, 0, 0) == 0) {
+        char p[128];
+        ext4_file_handle_t *h = NULL;
+        uint32_t got = 0;
+        for (int k = 0; k < 4; k++) {
+            snprintf(p, sizeof(p), "/STRESS/SEED_%02d.BIN", (a->tid + k) % 8);
+            if (ext4_vfs_open_stat(a->ctx, p, 0, &h, &st) != 0) {
+                a->error = 2;
+                return 1;
+            }
+            if (ext4_vfs_read_handle(a->ctx, h, buf, 0, sizeof(buf), &got) != 0 || got != sizeof(buf)) {
+                ext4_vfs_close_handle(h);
+                a->error = 3;
+                return 1;
+            }
+            ext4_vfs_close_handle(h);
+
+            /* Probe actively mutated & missing paths (result may be 0 or -ENOENT, never corruption) */
+            snprintf(p, sizeof(p), "/stress/w%d_%02d.tmp", k & 1, (a->tid + k) % 8);
+            int rc = ext4_vfs_stat(a->ctx, p, &st);
+            if (rc != 0 && rc != -ENOENT) {
+                a->error = 4;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int test_concurrent_rw_and_dentry_invalidation_stress(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    uint8_t seed_buf[4096];
+    volatile LONG stop_flag = 0;
+    HANDLE writers[2];
+    HANDLE readers[8];
+    rw_stress_arg_t wargs[2];
+    rw_stress_arg_t rargs[8];
+
+    memset(seed_buf, 0x5C, sizeof(seed_buf));
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_rw_stress.img");
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 16ULL * 1024ULL * 1024ULL, "STRESS"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/stress", 0755, NULL));
+
+    for (int i = 0; i < 8; i++) {
+        char p[128];
+        ext4_file_handle_t *h = NULL;
+        uint32_t w = 0;
+        snprintf(p, sizeof(p), "/stress/seed_%02d.bin", i);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, p, 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, p, 1, &h, NULL));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write_stat(ctx, h->ino, seed_buf, 0, sizeof(seed_buf), 0, NULL, &w, NULL, NULL));
+        ext4_vfs_close_handle(h);
+    }
+
+    for (int t = 0; t < 8; t++) {
+        rargs[t].ctx = ctx;
+        rargs[t].tid = t;
+        rargs[t].stop_flag = &stop_flag;
+        rargs[t].error = 0;
+        readers[t] = CreateThread(NULL, 0, rw_stress_reader, &rargs[t], 0, NULL);
+        TEST_ASSERT(readers[t] != NULL);
+    }
+    for (int t = 0; t < 2; t++) {
+        wargs[t].ctx = ctx;
+        wargs[t].tid = t;
+        wargs[t].stop_flag = &stop_flag;
+        wargs[t].error = 0;
+        writers[t] = CreateThread(NULL, 0, rw_stress_writer, &wargs[t], 0, NULL);
+        TEST_ASSERT(writers[t] != NULL);
+    }
+
+    WaitForMultipleObjects(2, writers, TRUE, INFINITE);
+    InterlockedExchange(&stop_flag, 1);
+    WaitForMultipleObjects(8, readers, TRUE, INFINITE);
+
+    for (int t = 0; t < 2; t++) {
+        CloseHandle(writers[t]);
+        TEST_ASSERT_EQ_INT(0, wargs[t].error);
+    }
+    for (int t = 0; t < 8; t++) {
+        CloseHandle(readers[t]);
+        TEST_ASSERT_EQ_INT(0, rargs[t].error);
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -724,5 +856,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_dentry_cache_positive_negative_and_invalidation);
     RUN_TEST(test_write_stat_preserves_extra_times_and_extents);
     RUN_TEST(test_multi_group_backup_superblock_flush);
+    RUN_TEST(test_concurrent_rw_and_dentry_invalidation_stress);
     return suite_failures;
 }

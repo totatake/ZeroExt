@@ -239,3 +239,28 @@ Direct I/O の有無による VFS 単体層・WinFsp 実マウント経由のス
 ```
 
 出力された `.json` ファイルをブラウザで [https://ui.perfetto.dev/](https://ui.perfetto.dev/) にドラッグ＆ドロップすると、WinFsp コールバック、`ctx->rwlock` / `win32_io.cache_lock` / `extent_cache.lock` の待ち／保持時間、`win32_io_pread_direct` / `ReadFile` / `WriteFile`、Overlay Copy-up、各種キャッシュヒット／ミスカウンタをスレッド別タイムラインで解析できます。
+
+---
+
+## 5. メモリ安全性・リーク・排他チェック（Sanitizer / 静的解析）
+
+C11 実装のメモリ破壊・解放漏れ・排他競合バグを継続的に検出するため、`CMakeLists.txt` のオプションおよび専用検証スクリプト [scripts/run_sanitizers.ps1](../scripts/run_sanitizers.ps1) を用意しています。
+
+```powershell
+# 3 種類すべて（ASan + CRT リークチェック + /analyze 静的解析）を一括実行
+powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
+
+# 個別実行（-Mode asan | leak | analyze）
+powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1 -Mode asan
+powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1 -Mode leak
+powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1 -Mode analyze
+```
+
+| チェック種別 | CMake オプション / ツール | 検出対象 | 補足 |
+| :--- | :--- | :--- | :--- |
+| **AddressSanitizer (ASan)** | `-DZEROEXT_ENABLE_ASAN=ON`<br>(`RelWithDebInfo` + `/fsanitize=address`) | ヒープ・スタック・グローバル境界外読み書き、Use-After-Free、二重解放 | `8〜10` スレッド並列ストレス（`test_concurrent_rw_and_dentry_invalidation_stress` 等）を含む CTest 全 6 スイートを実行し、競合起因のメモリ破壊を検出します。 |
+| **メモリリーク検出** | `-DZEROEXT_ENABLE_LEAK_CHECK=ON`<br>(`Debug` + `_CrtMemCheckpoint` / `_CrtMemDifference`) | テスト終了時に未解放のヒープブロック（1 バイト単位） | Windows MSVC 環境の ASan は LeakSanitizer 非対応のため、Debug CRT ヒープスナップショット比較によりリークがあれば CTest を即失敗させます。 |
+| **静的コード解析** | `-DZEROEXT_ENABLE_ANALYZE=ON`<br>(`cl.exe /analyze`) | NULL 逆参照、バッファ範囲外アクセス、未初期化変数、リソース・ロック不整合 | 自前 C ソース（`src/`・`tests/`）に対してビルド時に静的解析を実行します。 |
+
+> [!NOTE]
+> Windows x64 環境では GCC / Clang の ThreadSanitizer (`-fsanitize=thread`) が公式サポートされていないため、排他安全性については **ASan 有効下でのマルチスレッド競合ストレステスト**（`win32_io` シャードキャッシュ / `dentry_cache` 世代無効化 / RW 同時アクセス）および **`/analyze` 静的解析** により実効的な検証を行っています。

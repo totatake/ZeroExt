@@ -74,6 +74,12 @@ GUI のみをビルド・テストする場合は以下を実行します：
 powershell -ExecutionPolicy Bypass -File .\scripts\build_gui.ps1
 ```
 
+メモリ破壊・メモリリーク・排他競合（ASan / CRT リーク検出 / `/analyze` 静的解析）をまとめて検証する場合は以下を実行します：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
+```
+
 ビルド完了後は `.\build\gui\ZeroExtGui.exe` から GUI マウントマネージャーを起動できます。
 
 ## GUI アプリケーション (`ZeroExtGui.exe`)

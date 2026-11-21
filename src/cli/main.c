@@ -622,11 +622,25 @@ static int cmd_write(int argc, char **argv) {
         fseek(fp, 0, SEEK_SET);
         data_len = sz > 0 ? (size_t)sz : 0;
         data_buf = (uint8_t *)malloc(data_len ? data_len : 1);
-        if (data_len > 0) fread(data_buf, 1, data_len, fp);
+        if (!data_buf) {
+            fclose(fp);
+            fprintf(stderr, "Out of memory reading '%s'\n", payload);
+            return 1;
+        }
+        if (data_len > 0 && fread(data_buf, 1, data_len, fp) != data_len) {
+            fclose(fp);
+            free(data_buf);
+            fprintf(stderr, "Failed to read host file '%s'\n", payload);
+            return 1;
+        }
         fclose(fp);
     } else {
         data_len = strlen(payload);
         data_buf = (uint8_t *)_strdup(payload);
+        if (!data_buf) {
+            fprintf(stderr, "Out of memory\n");
+            return 1;
+        }
     }
 
     ext4_vfs_ctx_t *ctx = NULL;
