@@ -46,7 +46,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage, $dist | Out-Null
 
           Copy-Item -Path ".\build\gui\*" -Destination $stage -Recurse -Force
-          Copy-Item -Path ".\build\zeroext_bench.exe" -Destination $stage -Force
           Copy-Item -Path ".\LICENSE", ".\THIRD_PARTY_NOTICES.md", ".\README.md", ".\README.ja.md" -Destination $stage -Force
 
           $zipPath = Join-Path $dist "ZeroExt-$tag-win-x64.zip"
