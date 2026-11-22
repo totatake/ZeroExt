@@ -2,7 +2,7 @@
 
 > **一言でいうと**: `ZeroExt` は、Windows 上から Linux の ext2 / ext3 / ext4 パーティション・イメージを **BSOD リスクゼロのユーザー空間ドライバ** でありながら **Windows Native NTFS 並み（Warm 読取 10.5 GB/s / 253K IOPS・Cold 実 SSD 読取 1.56 GB/s）** で直接共有できるファイルシステムドライバです。
 
-- 本書の前提となるベンチマーク実測値・検証環境は [性能評価報告書](performance_evaluation.md)（計測リビジョン `78cd744` / `e2fsprogs 1.47.4` 適用後）および [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md) に基づきます。
+- 本書の前提となるベンチマーク実測値・検証環境は [性能評価報告書](reports/performance-evaluation.md)（計測リビジョン `78cd744` / `e2fsprogs 1.47.4` 適用後）および [Perfetto トレース定量解析・性能改善計画](reports/perfetto-trace-analysis.md) に基づきます。
 - コンポーネント構成・ADR（設計判断記録）は [アーキテクチャ設計書](architecture.md) を参照してください。
 
 ---
@@ -20,7 +20,7 @@ Windows から Linux (ext4) 上の巨大なデータ（例：AI モデル、学�
 | **読取専用ビューア / 複製** | ×（エクスポート前提） | ―（NTFS へ複製要） | ― | ○ | ゼロ | × |
 
 > [!NOTE]
-> 上記スループット値は同一物理 NVMe SSD（`INTEL SSDPEKNU512GZ`, `AMD Ryzen 5 5600G`）上で 512 MB 連続ファイルを比較計測した結果です（[performance_evaluation.md §2.3](performance_evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext--wsl---mount---vhd)）。
+> 上記スループット値は同一物理 NVMe SSD（`INTEL SSDPEKNU512GZ`, `AMD Ryzen 5 5600G`）上で 512 MB 連続ファイルを比較計測した結果です（[reports/performance-evaluation.md §2.3](reports/performance-evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext--wsl---mount---vhd)）。
 
 ---
 
@@ -109,7 +109,7 @@ Windows の Win32 API では、`FILE_FLAG_OVERLAPPED` なしで開いた同一 `
 ---
 
 ### 2.3 実測 Perfetto トレース駆動の「ロックレス・シャード化キャッシュ」とメタデータ高速化
-`--trace` 機能自身による定量的タイムライン解析に基づき、競合点とメタデータ冗長処理を 1 つずつ除去しました（[perfetto_trace_analysis.md §5](perfetto_trace_analysis.md#5-改善効果トラッキングbefore--after-記録欄)）。
+`--trace` 機能自身による定量的タイムライン解析に基づき、競合点とメタデータ冗長処理を 1 つずつ除去しました（[reports/perfetto-trace-analysis.md §5](reports/perfetto-trace-analysis.md#5-改善効果トラッキングbefore--after-記録欄)）。
 
 - **データキャッシュの 64B キャッシュライン整列シャード化**:
   - [win32_io.c](../src/io/win32_io.c): `win32_io` ブロックキャッシュを **32 シャード（64B アライン）**＋`SRWLOCK` Shared 参照＋**CLOCK インプレース置換**（ロック内 `malloc`/`free` ゼロ）へ刷新し、`cache_lock wait` を **-94.4%〜-96.3%** 削減。

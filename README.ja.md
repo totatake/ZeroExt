@@ -25,7 +25,7 @@ flowchart LR
     App -.->|"比較: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM 境界 RPC 往復\n198 MB/s (4KB Rnd 17.6 MB/s)"]
 ```
 
-- 技術的な目新しさ・詳細シーケンス比較・全ベンチマーク解説は **[ZeroExt 技術解説・既存手法比較・ユースケースガイド](docs/why_zeroext.md)** および **[性能評価報告書](docs/performance_evaluation.md)** を参照してください。
+- 技術的な目新しさ・詳細シーケンス比較・全ベンチマーク解説は **[ZeroExt 技術解説・既存手法比較・ユースケースガイド](docs/overview.md)** および **[性能評価報告書](docs/reports/performance-evaluation.md)** を参照してください。
 
 ## 主なユースケース
 
@@ -35,7 +35,7 @@ flowchart LR
 - **組込み・VM イメージ (`.img`) の非破壊検証**: `--overlay` で差分だけ NTFS 上に保持しつつ動作確認（WinFsp なし環境では GUI / CLI のオフライン閲覧も利用可）。
 - **停止済み WSL2 (`ext4.vhdx`) の高速検索**: `\\wsl.localhost`（`17.6 MB/s`）を回避し、ネイティブツールから最大 57 倍以上のランダム応答で参照可能。
 
-各ユースケースの具体的なコマンド例や注意点は [docs/why_zeroext.md](docs/why_zeroext.md#3-有効に利用できる実践ユースケース) を参照してください。
+各ユースケースの具体的なコマンド例や注意点は [docs/overview.md](docs/overview.md#3-有効に利用できる実践ユースケース) を参照してください。
 
 ## 特徴
 
@@ -47,24 +47,29 @@ flowchart LR
   - `CreateFileW(FILE_FLAG_OVERLAPPED)`＋`FILE_SKIP_SET_EVENT_ON_HANDLE`＋FLS イベント再利用による真の並列非同期 I/O（`FileObject->Lock` 直列化を解消）
   - 4KB セクタ境界の自動 Read-Modify-Write (RMW) と GPT / MBR / EBR パーティション境界ガード
   - 32 シャード（64B 整列・`SRWLOCK` Shared 参照・CLOCK インプレース置換）ブロックキャッシュ＋16 シャード（世代エポック一括無効化付き）正／負 Dentry キャッシュ
-- **Dirty Journal 安全保護**: マウント前に `EXT3_FEATURE_INCOMPAT_RECOVER` / `EXT2_ERROR_FS` / JBD2 スーパーブロック (`s_start != 0`) を検査し、未再生ジャーナルが残るボリュームへの不用意な RW マウントを自動抑止（または Read-Only 自動フォールバック）。
+- **Dirty Journal 安全保護**: マウント前に `EXT3_FEATURE_INCOMPAT_RECOVER` / `EXT2_ERROR_FS` / JBD2 スーパーブロック (`s_start != 0`) を検査し、未再生ジャーナルが残るボリュームへの不用意な RW マウントを自動抑止（または `--ro-fallback` で Read-Only 自動フォールバック）。
 - **Perfetto 性能トレース出力 (`--trace`)**: 通常時は単一分岐によるゼロオーバーヘッドを維持しつつ、`--trace <output.json>` 指定時のみスレッドローカルリングバッファ（ロックレス記録・`QueryPerformanceCounter` 精度）へ WinFsp コールバック、`SRWLOCK` 待ち／保持時間、Extent／LRU キャッシュヒット、Direct I/O、`ReadFile`/`WriteFile`、Overlay Copy-up/Whiteout を記録し、[Perfetto UI](https://ui.perfetto.dev/) でタイムライン可視化が可能。
 - **Zero-Patch `e2fsprogs` 追従構造**: `third_party/e2fsprogs` への Windows 固有ハックを排除し、`compat/` と `scripts/generate_e2fsprogs_headers.py` へ分離。
 
 ## ドキュメント
 
-- **[技術解説・既存手法比較・実践ユースケースガイド (`why_zeroext.md`)](docs/why_zeroext.md)**
+- **[ドキュメント索引ハブ (`docs/README.md`)](docs/README.md)**
+- **[技術解説・既存手法比較・実践ユースケースガイド (`overview.md`)](docs/overview.md)**
 - [要件定義書](docs/requirements.md)
-- [アーキテクチャ設計書・ADR (設計判断記録)](docs/architecture.md)
-- [詳細設計書](docs/detailed_design.md)
-- [テスト報告書・利用ガイド](docs/testing_and_usage.md)
-- [性能評価報告書 (`--direct-io` / NTFS / WSL2 比較)](docs/performance_evaluation.md)
-- [Perfetto トレース定量解析・性能改善計画](docs/perfetto_trace_analysis.md)
-- [今後の構想・ロードマップ](docs/future_roadmap.md)
+- [システムアーキテクチャ設計書](docs/architecture.md)
+- [アーキテクチャ設計判断記録 (ADR)](docs/adr/README.md)
+- [詳細設計書](docs/design/detailed-design.md)
+- [利用・ビルド・CLI ガイド](docs/guides/usage.md)
+- [テスト仕様・検証ガイド](docs/testing.md)
+- [性能評価報告書 (`--direct-io` / NTFS / WSL2 比較)](docs/reports/performance-evaluation.md)
+- [Perfetto トレース定量解析・性能改善計画](docs/reports/perfetto-trace-analysis.md)
+- [ロードマップ・マイルストーン](docs/roadmap.md)
+- [変更履歴 (`CHANGELOG.md`)](CHANGELOG.md)
+- [コントリビューションガイド (`CONTRIBUTING.md`)](CONTRIBUTING.md)
 
 ## ビルドとテスト
 
-Visual Studio 2022 BuildTools 環境で以下を実行します（ビルド時に WinFsp SDK の事前導入は不要です。`.NET 10 SDK` が導入されている環境では GUI アプリ `ZeroExtGui.exe` も自動ビルド・テストされます）：
+Windows 環境で Visual Studio 2022（BuildTools / Community / Professional / Enterprise）と Python 3.x を用意し、以下を実行します（ビルド時に WinFsp SDK の事前導入は不要です。`.NET 10 SDK` が導入されている環境では GUI アプリ `ZeroExtGui.exe` と `ZeroExt.Gui.Tests` も自動ビルド・テストされます）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
@@ -91,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
   - **Read-Only（推奨・既定）**: Direct I/O 有効で高速・安全に読取。
   - **Overlay（非破壊 RW）**: Lower ext4 を RO 保護し、変更・新規作成だけ指定の NTFS Upperdir へ保存（`.wh.__ext4_lower_id` の事前検証付き）。
   - **Read-Write**: Dirty 状態検出時の自動 RO フォールバック設定（`--ro-fallback`）に対応。
-- **リアルタイム統計・システムトレイ常駐**: 読取／書込速度・累計転送量のリアルタイム表示、「エクスプローラーで開く」、安全なワンクリック・アンマウント、システムトレイ常駐、および CLI コマンドプレビュー。
+- **リアルタイム統計・残留解除・システムトレイ**: 読取／書込速度・累計転送量のリアルタイム表示、「エクスプローラーで開く」、安全なワンクリック・アンマウント＆対象検証付き残留ドライブ解除、システムトレイ常駐、**英語／日本語 UI 言語の即時切替**、および CLI コマンドプレビュー。
 - **WinFsp 不要のオフライン機能**: WinFsp 未導入環境でも、ext2/3/4 イメージ内のフォルダ・ファイル閲覧（`ファイルブラウザ` タブ）や新規 `.img` 作成（`mkfs`）、WinFsp 導入ガイド表示を利用可能。
 - **疎結合アーキテクチャ**: GPLv2 の `libext2fs` / `zeroext_core` を直接リンクせず、`zeroext.exe` をサブプロセス（JSON / Named Event IPC）として制御します。
 
@@ -113,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
   1. [WinFsp 公式サイト](https://winfsp.dev/) または [GitHub Releases](https://github.com/winfsp/winfsp/releases) から最新の `winfsp-*.msi` をダウンロードして実行します。
   2. セットアップ種別は既定の **Core** のみで動作します（実行時に `C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll` を自動検出・動的ロードします）。
 
-詳細なビルド手順・テスト結果・CLI リファレンスは [docs/testing_and_usage.md](docs/testing_and_usage.md) を参照してください。
+詳細なビルド手順・CLI リファレンスは [docs/guides/usage.md](docs/guides/usage.md)、テスト仕様・Sanitizer 手順は [docs/testing.md](docs/testing.md) を参照してください。
 
 ## CLI 使用例
 

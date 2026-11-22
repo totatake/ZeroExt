@@ -37,6 +37,8 @@ Windows 11 / 10 環境において、別ドライブや仮想イメージファ�
 | **FR-07** | **CLI 管理・オフライン操作ツール (`zeroext.exe`)** | `list`, `inspect`, `mkfs`, `ls`, `stat`, `cat`, `write`, `mkdir`, `rm`, `mv`, `extents`, `mount`, `unmount` サブコマンドを備え、WinFsp マウントだけでなくイメージ生成・オフラインファイル操作・エクステントマッピング検査・診断を単体で実行できること。 |
 | **FR-08** | **ダイレクト・エクステント I/O エンジン (既定有効 / `--no-direct-io` で無効化)** | Read-Only マウント（既定の RO 動作）および `--overlay`（Lower が RO の場合）において既定でダイレクト・エクステント I/O を有効化し、`--no-direct-io` 指定時のみ標準ブロックキャッシュ経路へ切り替えられること（`--rw` マウント時は自動無効化、かつ `--direct-io` 明示併用は `-EINVAL` で拒否）。初回読み取り時にエクステントツリー（多段ツリー含む）・間接ブロック・インラインデータを抽出してキャッシュし、以降の `Read` 要求を `libext2fs` およびメタデータロックをバイパスして二分探索 `O(log N)` で物理セクタへ直読すること（未初期化エクステント・スパースホールのゼロ埋めを含む）。 |
 | **FR-09** | **NTFS Upperdir オーバーレイマウント (`--overlay`)** | Lower 側の ext4 ボリュームを厳密に Read-Only で開いたまま（Dirty Journal ボリュームも安全に参照可）、Windows NTFS 上の指定ディレクトリを Upper 層として重ね合わせ、新規作成・変更（Copy-up）・削除（`.wh.<name>` ホワイトアウト / `.wh.__dir_opaque` 不透過ディレクトリ）・リネームを非破壊の Read-Write ボリューム（ドライブレターまたは NTFS 空フォルダマウントポイント）として提供すること。Lower 識別ファイル (`.wh.__ext4_lower_id`) により異なる Lower への既存 Upperdir の誤流用を防止すること。 |
+| **FR-10** | **デスクトップ GUI マウントマネージャー (`ZeroExtGui.exe`)** | `.NET 10` WPF によるディスク／`.img` 一覧・JBD2 状態可視化、RO / Overlay / RW マウント切替、システムトレイ常駐、残留ドライブ安全解除、オフラインファイルブラウザ、および英語／日本語 i18n 即時切替を提供すること。GPLv2 の `libext2fs` を直接リンクせず `zeroext.exe` を JSON / Named Event IPC 経由のサブプロセスとして制御すること。 |
+| **FR-11** | **Perfetto 性能トレース出力 (`--trace`)** | 未指定時は単一分岐でゼロオーバーヘッドを維持し、`--trace <path.json>` 指定時に WinFsp コールバック、`SRWLOCK` 待ち／保持、キャッシュヒット、I/O スパンをスレッドローカルリングバッファへ記録して Chrome Trace Event JSON（[Perfetto UI](https://ui.perfetto.dev/) 対応）として出力できること。 |
 
 ---
 
@@ -53,9 +55,7 @@ Windows 11 / 10 環境において、別ドライブや仮想イメージファ�
 
 ## 5. 今後の拡張構想（ロードマップ）
 
-現行スコープ外ながら、今後の機能拡張・性能可視化に向けて以下 2 項目を構想として位置づけている。詳細方針は [今後の構想・ロードマップ](future_roadmap.md) を参照。
+上記の基本機能（GUI `ZeroExtGui.exe` および Perfetto トレース出力 `--trace` を含む）は実装済みであり、今後の安全性強化・Overlay 運用性向上・非破壊診断 (`fsck-lite`)・配布拡充の方針は [ロードマップ](roadmap.md) で管理している。
 
-1. **GUI アプリケーションの追加**:
-   - ディスク／パーティション／JBD2 ジャーナル状態の可視化、マウントモード（既定 RO＋Direct I/O / `--overlay` / `--rw` / `--no-direct-io`）設定およびトレイ監視を行う GUI フロントエンド（コア `zeroext.exe` とはプロセス疎結合を維持）。
-2. **性能解析用 Perfetto トレース出力機能の追加**:
-   - WinFsp コールバック、`ctx->rwlock` / `cache_lock` 競合、`extent_cache` / LRU キャッシュヒット、I/O レイテンシ、Overlay Copy-up 等を [Perfetto UI](https://ui.perfetto.dev/) でタイムライン解析できる明示オプション型トレース出力機能。
+- **Phase 1（継続中）**: 非空レガシー Upperdir の既定拒否＆Lower 識別子強化、`inspect --json` 診断拡充・`zeroext doctor`（GUI 多言語化は `v0.5.0` で完了済み）。
+- **Phase 2〜4**: Overlay 差分管理コマンド・ハッシュマップ化・Reparse Point symlink、ext4 非対応機能明示＆`zeroext fsck-lite`、`winget` / WSL2 ワークフロー強化。

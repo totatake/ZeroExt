@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build and test (Release + CTest + ZeroExtGui)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
+
+      - name: Run sanitizers and static analysis (ASan + CRT Leak Check + /analyze)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $stage = Join-Path $env:RUNNER_TEMP "ZeroExt-$tag-win-x64"
+          $dist  = Join-Path $PWD "dist"
+          New-Item -ItemType Directory -Force -Path $stage, $dist | Out-Null
+
+          Copy-Item -Path ".\build\gui\*" -Destination $stage -Recurse -Force
+          Copy-Item -Path ".\LICENSE", ".\THIRD_PARTY_NOTICES.md", ".\README.md", ".\README.ja.md" -Destination $stage -Force
+
+          $zipPath = Join-Path $dist "ZeroExt-$tag-win-x64.zip"
+          Compress-Archive -Path "$stage\*" -DestinationPath $zipPath -Force
+
+          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ZeroExt-$tag-win-x64.zip" | Set-Content -Path "$zipPath.sha256" -Encoding ascii
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: dist/*
+
+  release:
+    needs: build-and-package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

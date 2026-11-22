@@ -1,13 +1,27 @@
-# 今後の構想・ロードマップ (`ZeroExt` / `zeroext`)
+# ロードマップ (`ZeroExt` / `zeroext`)
 
-本書は、現行の `ZeroExt`（`v0.4.x` 時点：`zeroext.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExtGui.exe` デスクトップアプリ）について、今後の安全強化・国際化・運用性向上・ext4 互換性拡充のロードマップを定義するものである。
+本書は **ZeroExt**（`v0.7.0` 時点：`zeroext.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExtGui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
 
 > [!NOTE]
-> 当初構想していた **Phase 0 基盤（GUI アプリケーション `ZeroExtGui.exe` および Perfetto トレース出力 `--trace`）は実装完了済み** である。概要と関連設計は末尾の [完了済み基盤](#完了済み基盤implemented-foundations) を参照されたい。
+> Phase 0 基盤（GUI アプリケーション `ZeroExtGui.exe`・Perfetto トレース出力 `--trace`）に加え、**Phase 1.1（GUI 英語 / 日本語 i18n）は `v0.5.0` で実装完了** し、`v0.6.0` では WinFsp/ext4 ターゲット検証による安全アンマウント保護を追加済みである。
 
 ---
 
-## 1. 基本方針と安全境界
+## 1. 完了済みマイルストーン
+
+| バージョン | 完了日 | 主な達成事項 |
+| :--- | :--- | :--- |
+| `v0.1.0` | 2026-11-19 | `ZeroExt`（`zeroext.exe`）初回リリース。`libext2fs` + WinFsp 基盤、RO / Overlay 既定 Direct Extent I/O、NTFS `--overlay`（`.wh.__ext4_lower_id`）、Dirty Journal 保護、`UmFileContextIsUserContext2 = 1`、同一 SSD ベンチマーク |
+| `v0.2.0` | 2026-11-19 | デスクトップ GUI マウントマネージャー `ZeroExtGui.exe`（.NET 10 WPF・疎結合 JSON / Named Event IPC）および `ZeroExt.Gui.Tests` |
+| `v0.3.0` | 2026-11-21 | `--trace` Perfetto 出力、Step 1〜4 性能最適化（`OVERLAPPED` + `INFINITE` Timeout + シャード化キャッシュ + Dentry キャッシュ + `FspGetDirInfoByName`）、ASan / Debug CRT リーク / `/analyze` 検証基盤 |
+| `v0.4.0` | 2026-11-21 | GitHub Actions CI & タグ自動リリース、VS ツールチェーン自動検出、`LICENSE` (GPLv2) / `THIRD_PARTY_NOTICES.md`、日英バイリンガル `README` |
+| `v0.5.0` | 2026-11-21 | 同梱 `e2fsprogs` `1.47.4` 追従（`fs_lock` 導入）・ベンチマーク再評価、`ZeroExtGui.exe` 英語／日本語ライブ切替 (i18n)、Phase 1〜4 ロードマップ拡充 |
+| `v0.6.0` | 2026-11-21 | CLI `unmount` および GUI 残留ドライブ解除における `QueryDosDeviceW` / `GetVolumeInformationW` ターゲット安全性検証と単体／GUI テスト追加 |
+| `v0.7.0` | 2026-11-22 | OSS リポジトリ構造標準化（`CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `AGENTS.md`）、`docs/` の kebab-case 再編、`ADR-0001`〜`ADR-0013` 抽出、CI / Release ワークフロー分離 |
+
+---
+
+## 2. 基本方針と安全境界
 
 `ZeroExt` の中核価値は、以下の 4 点にある。
 
@@ -25,34 +39,28 @@
 
 ---
 
-## 2. ロードマップ全体像
+## 3. ロードマップ全体像
 
-| Phase | テーマ | 主な対象・成果物 | 優先度 |
+| Phase | テーマ | 主な対象・成果物 | 状況 / 優先度 |
 | :--- | :--- | :--- | :---: |
-| **Phase 1**<br>（最優先・短期） | **GUI 多言語化（英語 / 日本語）と安全性・診断の強化** | `ZeroExtGui.exe` i18n（英語／日本語切替）、非空レガシー Upperdir の既定拒否＆Lower ID 強化、`inspect` 診断情報拡充・`zeroext doctor` | **高** |
+| **Phase 1**<br>（短期） | **GUI 多言語化と安全性・診断の強化** | `ZeroExtGui.exe` i18n（**`v0.5.0` 完了**）、`unmount` 安全検証（**`v0.6.0` 完了**）、非空レガシー Upperdir の既定拒否＆Lower ID 強化、`inspect` 診断拡充・`zeroext doctor` | **進行中（高）** |
 | **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export`、ハッシュ化による inode/path マップ高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **中〜高** |
 | **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出、非破壊診断 `zeroext fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、`--rw` 標準 `libext2fs` 経路の最適化 | **中** |
 | **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／ポータブル配布評価、停止済み WSL2 `ext4.vhdx` 連携ワークフロー強化 | **低〜中** |
 
 ---
 
-## 3. Phase 1：GUI 多言語化（英語 / 日本語）と安全性・診断の強化
+## 4. Phase 1：GUI 多言語化（完了）と安全性・診断の強化
 
-### 3.1 GUI アプリケーションの多言語化（i18n：英語 / 日本語）
+### 4.1 GUI アプリケーションの多言語化（i18n：英語 / 日本語）— **実装済み (`v0.5.0`)**
 
-現在 GitHub 公開に合わせて `README.md` は英語化された一方、`gui/ZeroExt.Gui/` 配下は画面文言・ツールチップ・ステータス表示・エラー翻訳・システムトレイメニューがすべて日本語ハードコードとなっている（対象：`Views/MainWindow.xaml`、`Views/CreateImageDialog.xaml`、`Views/ForceUnmountDialog.xaml`、`Views/WinFspGuideDialog.xaml`、`ViewModels/MainViewModel.cs`、`Services/MountErrorTranslator.cs`、`Services/TrayIconService.cs`、`Converters/Converters.cs`）。海外ユーザーも含め直感的に利用できるよう、GUI の多言語化を最優先で実施する。
+`v0.5.0`（commit `c576f6a`）にて `Strings.en.xaml` / `Strings.ja.xaml`・`LocalizationService`・`MountErrorTranslator` の多言語リソース化と即時切替 UI、および `Localization_CompletenessAndSwitching` 自動テストを実装済みである。
 
-- **UI 文字列の外出しとリソース化**:
-  - `.resx` または XAML `ResourceDictionary` キー参照方式を採用し、全画面 XAML・ダイアログ・ViewModel ステータス文字列・トレイコンテキストメニューを一元管理する。
-  - `MountErrorTranslator.cs` が返すタイトル・メッセージ・対処提案文言も言語リソースから解決するよう改修する。
-- **言語設定と自動選択**:
-  - `GuiSettings`（`gui/ZeroExt.Gui/Models/GuiSettings.cs`）に `Language` プロパティ（`"auto"` / `"en"` / `"ja"`）を追加する。
-  - 既定値 `"auto"` では OS ロケール（`CultureInfo.CurrentUICulture`）を参照し、日本語環境は `"ja"`、それ以外の環境は `"en"` へフォールバックする。
-  - GUI ヘッダー／設定欄からアプリ再起動なし（または即時リソース差し替え）で **English / 日本語** を切り替えられるようにする。
-- **自動テスト (`ZeroExt.Gui.Tests`)**:
-  - `en` / `ja` リソース間で全キーが過不足なく定義されていることを検証するキー網羅テスト、および主要エラーに対する `MountErrorTranslator` の日英切替出力テストを追加する。
+- **UI 文字列リソース & 言語切替**:
+  - `ResourceDictionary` により全画面 XAML・ダイアログ・ViewModel・トレイメニュー・エラー翻訳を一元管理し、`GuiSettings.Language`（`"auto"` / `"en"` / `"ja"`）およびヘッダー切替 UI で再起動なし切り替えに対応。
+- **今後の保守**: 新機能追加時は `Strings.en.xaml` と `Strings.ja.xaml` の両方を更新し、`ZeroExt.Gui.Tests` でキー網羅性を継続検証する。
 
-### 3.2 Overlay Upperdir 安全性・Lower 識別子ガードの強化
+### 4.2 Overlay Upperdir 安全性・Lower 識別子ガードの強化
 
 現在 `src/overlay/overlay_vfs.c`（`overlay_validate_lower_id`）は Upperdir 直下の `.wh.__ext4_lower_id` に `<lower_uuid>:<blocks_count>:<block_size>` を保存し、別ボリュームとの不一致時はエラーを返している。残る安全ギャップを以下の通り解消する。
 
@@ -66,7 +74,7 @@
   - 選択されたボリュームが `NEEDS_RECOVERY` / `HAS_ERRORS` の場合、GUI 上で Read-Write 選択を自動抑止して Read-Only または Overlay（Lower RO 保持）を推奨表示する。
   - マウント開始前に選択済み Upperdir と対象 Lower の整合性を事前チェックし、不一致時は即座に警告・別 Upperdir 指定を促す。
 
-### 3.3 `inspect` 診断出力の拡充と `zeroext doctor` コマンド
+### 4.3 `inspect` 診断出力の拡充と `zeroext doctor` コマンド
 
 - **`zeroext inspect --json` の拡張**:
   - 現在の数値ビットフラグ（`feature_compat` / `feature_incompat` / `feature_ro_compat` / `journal_state` / `journal_start` 等）に加え、可読な機能フラグ名配列、Partition UUID・開始セクタ・セクタ数、`last_mount_time` / `last_fsck_time` / `fsck_error_count`、チェックサム状態、および推奨マウント可否サマリー（`mount_advice`: Read-Only / Overlay / Read-Write 可否と理由）を出力する。
@@ -75,9 +83,9 @@
 
 ---
 
-## 4. Phase 2：Overlay 運用性・スケーラビリティ・名前空間の強化
+## 5. Phase 2：Overlay 運用性・スケーラビリティ・名前空間の強化
 
-### 4.1 Overlay 差分管理コマンド & GUI 支援 (`overlay status / diff / validate / export`)
+### 5.1 Overlay 差分管理コマンド & GUI 支援 (`overlay status / diff / validate / export`)
 
 `--overlay` の大きな強みは「Lower ext4 を傷つけず、NTFS Upperdir に差分だけが残る」点にある。これを運用ワークフローとして完結させるため、CLI サブコマンド群と GUI 連携を追加する。
 
@@ -90,7 +98,7 @@
 - **GUI 上での差分プレビューと安全なリセット**:
   - 指定 Upperdir 内の変更件数やサイズをマウント前後で確認し、不要になった差分フォルダの安全な初期化を行える UI を提供する。
 
-### 4.2 Overlay 内部構造のスケーラビリティと inode 安定性
+### 5.2 Overlay 内部構造のスケーラビリティと inode 安定性
 
 - **`ov_ino_entry_t` の O(N) リニア探索からハッシュテーブル化への置換**:
   - 現行 `src/overlay/overlay_vfs.c` の双方向 inode ⇔ path マッピング（`ov_ino_entry_t *entries`）は単方向連結リストの線形探索となっており、数万ファイル規模のディレクトリ走査・並列アクセス時に `map_lock` 競合および検索コストが増大する。Open-addressing またはバケットハッシュ＋パスインデックスへ置き換え、`O(1)` 化する。
@@ -99,7 +107,7 @@
 - **Lower 大規模ディレクトリ `rename` 時のコスト対策**:
   - 現行の `overlay_vfs_rename()` は Lower 側ディレクトリをリネームする際、`copy_lower_tree_to_upper()` によりサブツリー全体を NTFS Upperdir へ再帰 Copy-up する仕様となっている。巨大モデルやデータセットを含むディレクトリで意図せず大量コピーが発生するリスクをドキュメント・GUI 警告で明示しつつ、容量事前チェックや中断安全性の向上を検討する。
 
-### 4.3 WinFsp シンボリックリンク透過対応（Reparse Point）および名前空間エッジケース
+### 5.3 WinFsp シンボリックリンク透過対応（Reparse Point）および名前空間エッジケース
 
 - **Windows Reparse Point (`SYMLINK`) 連携**:
   - VFS 層には既に `src/vfs/op_symlink.c`（`ext4_vfs_readlink` / `ext4_vfs_symlink`）が存在する。`src/driver/winfsp_driver.c` 側で `GetReparsePoint` 等を実装し、少なくとも Read-Only マウントにおいて ext4 上のシンボリックリンクを Windows 側へ安全に公開できるようにする（ディレクトリ循環参照防止やセキュリティ境界を明確化）。
@@ -110,16 +118,16 @@
 
 ---
 
-## 5. Phase 3：ext4 互換性・読み取り専用診断 (`fsck-lite`)・RW 標準経路の改善
+## 6. Phase 3：ext4 互換性・読み取り専用診断 (`fsck-lite`)・RW 標準経路の改善
 
-### 5.1 未対応 ext4 機能の明示検出と境界テスト拡充
+### 6.1 未対応 ext4 機能の明示検出と境界テスト拡充
 
 - **未対応 incompatible 機能の明示エラー化**:
   - `fscrypt`（`EXT4_FEATURE_INCOMPAT_ENCRYPT`）、`fs-verity`、外部ジャーナルデバイス等の未サポート機能が有効なボリュームをプローブ／マウントした際、汎用エラーではなく理由と対処方法を明示したエラー・警告を返すようにする。
 - **ext4 フォーマット境界の回帰テスト拡充**:
   - 多段（depth >= 2）エクステントツリー、uninitialized extent（`EXT2_EXTENT_FLAGS_UNINIT`）、スパースファイル（hole ゼロ埋め・`truncate` 境界）、`inline_data`、`huge_file` / 64bit ブロック、`metadata_csum` 不正時のエラー検出・`--ignore-csum-errors` 挙動をカバーするテストを拡充する。
 
-### 5.2 読み取り専用整合性診断 (`zeroext fsck-lite`)
+### 6.2 読み取り専用整合性診断 (`zeroext fsck-lite`)
 
 - Windows 上で ext4 メタデータの健全性を非破壊で検証できる `zeroext fsck-lite <image_or_disk> [--partition N] [--json]` を実装する。
 - 主な検証対象：
@@ -129,7 +137,7 @@
   - ディレクトリエントリの破損・不正長、孤立 inode リスト、JBD2 ジャーナルヘッダ状態
 - **位置づけ**: 危険検出とレポート出力に限定し、修復操作は一切行わない。
 
-### 5.3 `--rw` 標準 `libext2fs` 経路の最適化（Direct I/O は無効維持）
+### 6.3 `--rw` 標準 `libext2fs` 経路の最適化（Direct I/O は無効維持）
 
 - 前述の安全境界通り、`--rw` では Direct Extent I/O を有効化せず、整合性を最優先する。
 - 直接 `--rw` マウント時の書き込み・読み取りスループット改善が必要な場合は、以下の**標準経路内の安全な最適化**で対応する：
@@ -139,36 +147,36 @@
 
 ---
 
-## 6. Phase 4：配布・パッケージング・エコシステム拡充
+## 7. Phase 4：配布・パッケージング・エコシステム拡充
 
-### 6.1 パッケージ配布 (`winget` / ポータブル ZIP / 自己完結ビルド)
+### 7.1 パッケージ配布 (`winget` / ポータブル ZIP / 自己完結ビルド)
 
-- 既に稼働している GitHub Actions の `v*.*.*` リリース自動公開 CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）を基盤に、`winget` 公式パッケージ登録（`winget-pkgs`）を検討する。
+- GitHub Actions の `v*.*.*` リリース自動公開ワークフロー（[.github/workflows/release.yml](../.github/workflows/release.yml)）を基盤に、`winget` 公式パッケージ登録（`winget-pkgs`）を検討する。
 - 現在 `ZeroExtGui.exe` はフレームワーク依存の `.NET 10 Desktop Runtime` 前提となっているため、ランタイム未導入環境でもそのまま起動できる自己完結（`self-contained`）配布版の提供要否・サイズトレードオフを評価する。
 
-### 6.2 WSL2 `ext4.vhdx` 連携ワークフロー強化
+### 7.2 WSL2 `ext4.vhdx` 連携ワークフロー強化
 
 - 停止済み WSL2 仮想ディスク（`ext4.vhdx`）の安全な Read-Only 検査・高速参照手順について、WSL 稼働中の二重アクセス衝突を防ぐプリチェックや GUI/CLI 補助ガイドを拡充する。
 
 ---
 
-## 完了済み基盤（Implemented Foundations）
+## 8. 完了済み基盤（Implemented Foundations）
 
-以下は初期構想（旧 Phase 0）から既に実装・統合され、実運用および自動テストに組み込まれている基盤機能である。
+以下は初期構想（旧 Phase 0 および初期リリース群）から既に実装・統合され、実運用および自動テストに組み込まれている基盤機能である。
 
-### A. デスクトップ GUI アプリケーション (`ZeroExtGui.exe`) — **実装済み**
+### A. デスクトップ GUI アプリケーション (`ZeroExtGui.exe`) — **実装済み (`v0.2.0` / `v0.5.0` / `v0.6.0`)**
 
-- **実装場所**: `gui/ZeroExt.Gui/`（WPF / `.NET 10`）、テスト：`gui/ZeroExt.Gui.Tests/`（9 件自動テスト + `--self-test`）。
+- **実装場所**: `gui/ZeroExt.Gui/`（WPF / `.NET 10`）、テスト：`gui/ZeroExt.Gui.Tests/`（11 件自動テスト + `--self-test`）。
 - **実現済み機能**:
   - 物理ディスク・`.img` ファイル（ドラッグ＆ドロップ対応）の自動一覧と GPT / MBR / EBR・ラベル・UUID・使用率・JBD2 ジャーナル状態（`CLEAN` / `NEEDS_RECOVERY` / `HAS_ERRORS`）可視化
-  - Read-Only（既定・Direct I/O ON）／Overlay（`.wh.__ext4_lower_id` 検証付き）／Read-Write（Dirty 時自動 RO フォールバック）の切替、詳細オプション、CLI プレビュー
-  - リアルタイム転送統計・システムトレイ常駐・ワンクリック安全アンマウント・残留ドライブ解除・WinFsp 導入ガイド・非管理者時の UAC 再起動導線・WinFsp 不要のオフラインファイルブラウザ／`mkfs`
-- **アーキテクチャ境界**: [アーキテクチャ設計書 ADR-002](architecture.md#adr-002-独立プロジェクト-zeroext-として分離開発する) に沿い、GPLv2 の `zeroext_core` / `libext2fs` を直接リンクせず `zeroext.exe` を `--json` / `--json-events` / `--stop-event` によるサブプロセス疎結合で制御する構成を維持している。詳細は [テスト報告書・利用ガイド](testing_and_usage.md) を参照。
+  - Read-Only（既定・Direct I/O ON）／Overlay（`.wh.__ext4_lower_id` 検証付き）／Read-Write（Dirty 時自動 RO フォールバック）の切替、英語／日本語 i18n 即時切替、詳細オプション、CLI プレビュー
+  - リアルタイム転送統計・システムトレイ常駐・ワンクリック安全アンマウント・WinFsp/ext4 ターゲット保護付き残留ドライブ解除・WinFsp 導入ガイド・非管理者時の UAC 再起動導線・WinFsp 不要のオフラインファイルブラウザ／`mkfs`
+- **アーキテクチャ境界**: [ADR-0002](adr/0002-standalone-project-boundary.md) に沿い、GPLv2 の `zeroext_core` / `libext2fs` を直接リンクせず `zeroext.exe` を `--json` / `--json-events` / `--stop-event` によるサブプロセス疎結合で制御する構成を維持している。詳細は [利用ガイド](guides/usage.md) および [テスト仕様・検証ガイド](testing.md) を参照。
 
-### B. 性能解析用 Perfetto トレース出力機能 (`--trace`) — **実装済み**
+### B. 性能解析用 Perfetto トレース出力機能 (`--trace`) — **実装済み (`v0.3.0`)**
 
 - **実装場所**: `src/trace/perfetto_trace.h` / `src/trace/perfetto_trace.c`（テスト：`tests/test_perfetto_trace.c`）。
 - **実現済み機能**:
   - 非指定時は単一分岐によるゼロオーバーヘッドを維持し、`zeroext mount --trace <path>`・`zeroext_bench.exe --trace <path>`・GUI 詳細設定から有効化可能
   - スレッドローカルリングバッファ（ロックレス記録・`QueryPerformanceCounter` 精度）へ WinFsp コールバック、`SRWLOCK` 待ち／保持時間、Extent／LRU キャッシュ、Direct I/O、`ReadFile`/`WriteFile`、Overlay Copy-up/Whiteout を記録し Chrome Trace Event JSON を出力（[Perfetto UI](https://ui.perfetto.dev/) 対応）
-- **活用実績**: 実測トレースに基づく定量ボトルネック分析と Step 1〜4 最適化（最大 +153%〜1,294% 改善）については [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md) および [性能評価報告書](performance_evaluation.md) を参照。
+- **活用実績**: 実測トレースに基づく定量ボトルネック分析と Step 1〜4 最適化（最大 +153%〜1,294% 改善）については [Perfetto トレース定量解析・性能改善計画](reports/perfetto-trace-analysis.md) および [性能評価報告書](reports/performance-evaluation.md) を参照。

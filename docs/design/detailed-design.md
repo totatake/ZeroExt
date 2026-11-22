@@ -10,18 +10,32 @@
 ZeroExt\
 ├── CMakeLists.txt
 ├── LICENSE                               # GPLv2
-├── README.md
+├── THIRD_PARTY_NOTICES.md                # サードパーティ権利表記 (e2fsprogs / WinFsp)
+├── AGENTS.md                             # AI コーディングエージェント向け運用・不変条件ガイド
+├── CHANGELOG.md                          # Keep a Changelog 形式変更履歴
+├── CONTRIBUTING.md                       # 開発手順・PR ガイドライン
+├── SECURITY.md                           # 脆弱性報告ポリシー・セキュリティ境界
+├── README.md / README.ja.md              # バイリンガル README
+├── .github/                              # CI (ci.yml) / Release (release.yml) / Issue・PR テンプレート
 ├── docs/
+│   ├── README.md                         # ドキュメント索引ハブ
+│   ├── overview.md                       # 開発背景・技術比較・ユースケース
 │   ├── requirements.md                   # 要件定義書
-│   ├── architecture.md                   # アーキテクチャ設計書・ADR
-│   ├── detailed_design.md                # 本詳細設計書
-│   ├── testing_and_usage.md              # テスト報告書・利用ガイド
-│   ├── performance_evaluation.md         # `--direct-io` 性能評価報告書
-│   └── future_roadmap.md                 # 今後の構想（GUI / Perfettoトレース）
+│   ├── architecture.md                   # アーキテクチャ設計書
+│   ├── testing.md                        # テスト仕様・CTest / GUI / Sanitizer 検証ガイド
+│   ├── roadmap.md                        # 完了済みマイルストーン & 今後のロードマップ
+│   ├── adr/                              # 設計判断記録 (0001〜0013)
+│   ├── design/                           # 詳細設計書 (detailed-design.md)
+│   ├── guides/                           # 利用・ビルド・CLI/GUI 運用ガイド (usage.md)
+│   ├── reports/                          # 性能評価・Perfetto トレース解析レポート
+│   └── assets/                           # 図表・スクリーンショット配置用
 ├── scripts/
 │   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> ext2_err.h/c, ext2_types.h, crc32c_table.h
 │   ├── update_e2fsprogs.ps1              # e2fsprogs 更新＆ビルド検証自動化スクリプト
-│   ├── build_and_test.ps1                # MSVC + Ninja + CTest 実行スクリプト
+│   ├── build_and_test.ps1                # MSVC + Ninja + CTest (+ GUI) 実行スクリプト
+│   ├── build_gui.ps1                     # .NET 10 WPF GUI ビルド＆テストスクリプト
+│   ├── find_vs.ps1                       # Visual Studio ツールチェーン自動検出ヘルパー
+│   ├── run_sanitizers.ps1                # ASan / Debug CRT リーク / /analyze 検証スクリプト
 │   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ZeroExt/WSL2)
 ├── compat/
 │   ├── msvc_compat.h                     # ext2fs PRIVATE /FI 強制インクルード用互換シム
@@ -32,6 +46,7 @@ ZeroExt\
 │   └── winfsp/include/winfsp/winfsp.h    # WinFsp ABI 定義 & 動的ローダー
 ├── src/
 │   ├── common/                           # ext4_errno.h / .c
+│   ├── trace/                            # perfetto_trace.h / .c (Chrome Trace Event JSON)
 │   ├── io/                               # win32_io.h / .c
 │   ├── disk/                             # partition_table, superblock_probe, disk_scanner
 │   ├── extent/                           # extent_map.h / .c (ダイレクト・エクステント直結I/O)
@@ -39,7 +54,8 @@ ZeroExt\
 │   ├── vfs/                              # ext4_vfs.h, op_*.c
 │   ├── driver/                           # winfsp_driver.h / .c
 │   └── cli/                              # main.c (zeroext.exe)
-└── tests/                                # test_main.c + 単体・結合テスト群 + bench_direct_io.c
+├── tests/                                # test_main.c + 単体・結合テスト群 + bench_direct_io.c
+└── gui/                                  # ZeroExt.sln (.NET 10 WPF ZeroExt.Gui + ZeroExt.Gui.Tests)
 ```
 
 ### CMake ターゲット構成
@@ -50,14 +66,14 @@ ZeroExt\
    - コンパイルオプション (MSVC): `PRIVATE` `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_compat.h` `/W3`、`INTERFACE` `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_public_compat.h`
    - デバッグ形式 (`CMP0141`): `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT = "Embedded"`（`/Z7` により `mspdbsrv.exe` 非依存でビルド）
 3. **`zeroext_core`（静的ライブラリ）**:
-   - ソース: `src/common/*.c`, `src/io/*.c`, `src/disk/*.c`, `src/extent/*.c`, `src/overlay/*.c`, `src/vfs/*.c`, `src/driver/*.c`
+   - ソース: `src/common/*.c`, `src/trace/*.c`, `src/io/*.c`, `src/disk/*.c`, `src/extent/*.c`, `src/overlay/*.c`, `src/vfs/*.c`, `src/driver/*.c`
    - リンク: `ext2fs`, `advapi32`, `shell32`, `user32`
 4. **`zeroext`（実行ファイル）**:
    - ソース: `src/cli/main.c`
    - リンク: `zeroext_core`, `ext2fs`, `dbghelp`
 5. **`zeroext_tests`（実行ファイル / CTest 登録）**:
    - ソース: `tests/test_*.c`
-   - CTest スイート: `win32_io`, `partition_and_probe`, `vfs_operations`, `winfsp_callbacks`, `extent_and_overlay`
+   - CTest スイート: `win32_io`, `partition_and_probe`, `vfs_operations`, `winfsp_callbacks`, `extent_and_overlay`, `perfetto_trace`
 6. **`zeroext_bench`（実行ファイル / Direct I/O ベンチマーク）**:
    - ソース: `tests/bench_direct_io.c`
    - リンク: `zeroext_core`, `ext2fs`
@@ -248,7 +264,7 @@ typedef struct ext4_vfs_ctx {
 
 - **`FSP_FSCTL_VOLUME_PARAMS` 設定**:
   - `SectorSize = (UINT16)vol.block_size`、`SectorsPerAllocationUnit = 1`、`MaxComponentLength = 255`
-  - `FileInfoTimeout = 1000`
+  - `FileInfoTimeout = (UINT32)-1` (`INFINITE`, Read-Only マウント時既定) または `1000` (`--rw` / 書込可能 `--overlay` 時既定、`--file-info-timeout` で上書き可)
   - `CaseSensitiveSearch = ctx->case_insensitive ? 0 : 1`、`CasePreservedNames = 1`、`UnicodeOnDisk = 1`
   - `PersistentAcls = 0`、`ReadOnlyVolume = ctx->read_only ? 1 : 0`、`SupportsPosixUnlinkRename = 1`
   - `FileSystemName = L"ext4"`

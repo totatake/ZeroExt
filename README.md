@@ -25,7 +25,7 @@ flowchart LR
     App -.->|"Compare: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM Boundary RPC Roundtrips\n198 MB/s (4KB Rnd 17.6 MB/s)"]
 ```
 
-- For architectural novelty, sequence diagrams, and full benchmark details, see **[Why ZeroExt: Architecture Comparison & Use Cases](docs/why_zeroext.md)** and **[Performance Evaluation Report](docs/performance_evaluation.md)** (Japanese docs).
+- For architectural novelty, sequence diagrams, and full benchmark details, see **[Why ZeroExt: Architecture Comparison & Use Cases](docs/overview.md)** and **[Performance Evaluation Report](docs/reports/performance-evaluation.md)** (Japanese docs).
 
 ## Key Use Cases
 
@@ -35,7 +35,7 @@ flowchart LR
 - **Non-Destructive Embedded / VM Image (`.img`) Inspection**: Test modifications in an NTFS `--overlay` while keeping the base `.img` untouched (offline CLI/GUI browsing also works without WinFsp).
 - **Fast Access to Stopped WSL2 (`ext4.vhdx`) Images**: Bypass `\\wsl.localhost` (`17.6 MB/s`) and access files up to 57x+ faster on random reads from native Windows tools.
 
-See [docs/why_zeroext.md](docs/why_zeroext.md#3-有効に利用できる実践ユースケース) for concrete command examples and caveats.
+See [docs/overview.md](docs/overview.md#3-有効に利用できる実践ユースケース) for concrete command examples and caveats.
 
 ## Features
 
@@ -53,16 +53,21 @@ See [docs/why_zeroext.md](docs/why_zeroext.md#3-有効に利用できる実践�
 
 ## Documentation
 
-*(Most detailed design and evaluation documents are currently written in Japanese.)*
+*(Detailed engineering documents under `docs/` are primarily written in Japanese.)*
 
-- **[Why ZeroExt: Architecture Comparison & Use Cases (`why_zeroext.md`)](docs/why_zeroext.md)**
+- **[Documentation Hub (`docs/README.md`)](docs/README.md)**
+- **[Overview / Why ZeroExt (`overview.md`)](docs/overview.md)**
 - [Requirements Specification](docs/requirements.md)
-- [Architecture & ADRs](docs/architecture.md)
-- [Detailed Design](docs/detailed_design.md)
-- [Testing Report & Usage Guide](docs/testing_and_usage.md)
-- [Performance Evaluation Report (`--direct-io` / NTFS / WSL2)](docs/performance_evaluation.md)
-- [Perfetto Trace Quantitative Analysis & Optimization Plan](docs/perfetto_trace_analysis.md)
-- [Future Roadmap](docs/future_roadmap.md)
+- [System Architecture](docs/architecture.md)
+- [Architecture Decision Records (ADRs)](docs/adr/README.md)
+- [Detailed Design](docs/design/detailed-design.md)
+- [Usage, Build & CLI Guide](docs/guides/usage.md)
+- [Testing & Verification Specification](docs/testing.md)
+- [Performance Evaluation Report (`--direct-io` / NTFS / WSL2)](docs/reports/performance-evaluation.md)
+- [Perfetto Trace Quantitative Analysis & Optimization Plan](docs/reports/perfetto-trace-analysis.md)
+- [Roadmap & Milestones](docs/roadmap.md)
+- [Changelog](CHANGELOG.md)
+- [Contributing Guide](CONTRIBUTING.md)
 
 ## Building & Testing
 
@@ -93,7 +98,7 @@ After building, launch the GUI mount manager from `.\build\gui\ZeroExtGui.exe`.
   - **Read-Only (Recommended / Default)**: Fast and safe reading with Direct I/O enabled.
   - **Overlay (Non-Destructive RW)**: Keeps the lower ext4 volume read-only while saving changes to a designated NTFS upper directory (with `.wh.__ext4_lower_id` guard).
   - **Read-Write**: Supports automatic read-only fallback (`--ro-fallback`) when a dirty journal is detected.
-- **Live Stats & System Tray**: Real-time read/write throughput and cumulative transfer counters, "Open in Explorer", safe one-click unmount, system tray integration, and live CLI command preview.
+- **Live Stats, Residual Cleanup & System Tray**: Real-time read/write throughput and cumulative transfer counters, "Open in Explorer", safe one-click unmount & verified residual-drive cleanup, system tray integration, live **English / Japanese UI language switching**, and CLI command preview.
 - **Offline Features Without WinFsp**: Browse ext2/3/4 image folders/files (`File Browser` tab), create new `.img` files (`mkfs`), and view WinFsp setup guidance even without WinFsp installed.
 - **Loosely Coupled Architecture**: Does not link GPLv2 `libext2fs` / `zeroext_core` directly; controls `zeroext.exe` as a subprocess via JSON / Named Event IPC.
 
@@ -113,7 +118,7 @@ To mount a volume to a Windows drive letter (e.g. `M:`) using `zeroext.exe mount
   1. Download the latest `winfsp-*.msi` from [winfsp.dev](https://winfsp.dev/) or [GitHub Releases](https://github.com/winfsp/winfsp/releases).
   2. The default **Core** installation is sufficient (`zeroext.exe` dynamically discovers and loads `C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll` at runtime).
 
-For full CLI reference and build/test details, see [docs/testing_and_usage.md](docs/testing_and_usage.md).
+For full CLI reference and build/test details, see [docs/guides/usage.md](docs/guides/usage.md) and [docs/testing.md](docs/testing.md).
 
 ## CLI Examples
 

@@ -3,9 +3,9 @@
 本書は、Read-Only / `--overlay` モードで動作するダイレクト・エクステント I/O 経路（ロックレス extent ベース並列 `pread`、現在は既定で有効・`--no-direct-io` で標準経路へ切替可）の有無による読み取り性能の違いに加え、**同一物理 NVMe SSD 上での Windows Native (NTFS)・`ZeroExt` (`zeroext.exe`)・`wsl --mount --vhd` 横並び比較** の実測結果をまとめたものである。
 
 - 対象プロジェクト: **`ZeroExt`**（コマンド名: `zeroext.exe`、ベンチマークバイナリ: `zeroext_bench.exe`、評価リビジョン: `78cd744` / Step 1〜4 最適化・`e2fsprogs 1.47.4` 反映後）
-- ベンチマーク実装: [tests/bench_direct_io.c](../tests/bench_direct_io.c)（ビルド成果物: `build/zeroext_bench.exe`）
-- 同一 SSD 比較スクリプト: [scripts/bench_compare_ssd.ps1](../scripts/bench_compare_ssd.ps1)（管理者権限 PowerShell 実行）
-- 最適化の経緯と詳細トレース解析: [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md)
+- ベンチマーク実装: [tests/bench_direct_io.c](../../tests/bench_direct_io.c)（ビルド成果物: `build/zeroext_bench.exe`）
+- 同一 SSD 比較スクリプト: [scripts/bench_compare_ssd.ps1](../../scripts/bench_compare_ssd.ps1)（管理者権限 PowerShell 実行）
+- 最適化の経緯と詳細トレース解析: [Perfetto トレース定量解析・性能改善計画](perfetto-trace-analysis.md)
 - 注記: 本書内の「`--no-direct-io` / `Std`」は標準 `ext2fs_file_read` 経路、「`--direct-io` ON / `DIO`」は RO / `--overlay` 時の既定動作に対応する。また Step 2 (`8bd61df`) 以降、RO マウント時は `FileInfoTimeout = INFINITE` (`(UINT32)-1`) が既定となり Windows NT Cache Manager が有効化されている。
 
 ---
@@ -170,7 +170,7 @@
 ### 3.2 小ブロック（4 KB）ランダム読込における挙動とトレードオフ
 
 1. **`FILE_FLAG_OVERLAPPED` とロックレス経路による多スレッド 4 KB 性能**:
-   - Step 1 の `FILE_FLAG_OVERLAPPED`（[win32_io.c](../src/io/win32_io.c)）導入により `FileObject->Lock` によるカーネル直列化（Lock Convoy）を解消した結果、Direct I/O 側の `8T Rnd 4KB` は最適化前の `632.4` → **`1,280.4 MB/s` (`327,778 IOPS`)**（`/frag.bin`: `640.6` → **`1,251.9 MB/s`**）と約 2 倍に向上しており、`e2fsprogs 1.47.4` 適用後もロックレスのまま維持されている。
+   - Step 1 の `FILE_FLAG_OVERLAPPED`（[win32_io.c](../../src/io/win32_io.c)）導入により `FileObject->Lock` によるカーネル直列化（Lock Convoy）を解消した結果、Direct I/O 側の `8T Rnd 4KB` は最適化前の `632.4` → **`1,280.4 MB/s` (`327,778 IOPS`)**（`/frag.bin`: `640.6` → **`1,251.9 MB/s`**）と約 2 倍に向上しており、`e2fsprogs 1.47.4` 適用後もロックレスのまま維持されている。
    - 一方、標準経路（`enable_direct_io=0`）は `e2fsprogs 1.47.4` 以降の `fs_lock` 導入により `8T Rnd 4KB` が `464.2 MB/s`（`/frag.bin`: `376.9 MB/s`）となったため、現在では多スレッド 4 KB ランダム読込を含め**全ワークロードで既定の Direct I/O ON が 2.76x〜3.32x 優位**となる。
 2. **WinFsp 実マウント時の 4 KB 非バッファランダム性能**:
    - WinFsp 経由の `UNBUF RND (4KB)` はカーネル〜ユーザー空間ディスパッチ費用（約 `25〜28 us/op`）が支配的となるため、`--direct-io` ON/OFF の差は **1.00x**（`142.9` vs `143.1 MB/s`）にとどまる。ただし通常のキャッシュ有効（`CACHED-WARM`）利用では後述の NT Cache Manager により **`990.5 MB/s` (`253,557 IOPS`)** に達する。
@@ -200,7 +200,7 @@
   - 外部プロセスからイメージを同時更新するような特殊用途でカーネルキャッシュを抑制したい場合は `--file-info-timeout 1000`（`--rw` および書き込み可能 `--overlay` は既定で `1000 ms` かつ Direct I/O 無効）。
 
 > [!NOTE]
-> Step 1〜4 の各段階における Perfetto トレース定量的効果およびメタデータ最適化（`FspGetSecurityByName` **11.97x**、`FspOpen` **27.62x**、`FspReadDirectory` **14.51x**）の詳細は [Perfetto トレース定量解析・性能改善計画](perfetto_trace_analysis.md) を参照。
+> Step 1〜4 の各段階における Perfetto トレース定量的効果およびメタデータ最適化（`FspGetSecurityByName` **11.97x**、`FspOpen` **27.62x**、`FspReadDirectory` **14.51x**）の詳細は [Perfetto トレース定量解析・性能改善計画](perfetto-trace-analysis.md) を参照。
 
 ---
 

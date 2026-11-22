@@ -1,6 +1,6 @@
 # Perfetto トレース定量解析・性能改善計画
 
-本書は、Perfetto トレース出力機能（commit `aa37709`）を用いて取得したインプロセス VFS ベンチマークトレース（`zeroext_bench_trace.json`）およびライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）を全件定量解析し、[性能評価報告書](performance_evaluation.md) で課題として挙がっていた **8 スレッド時の Direct I/O 逆転現象（0.63x〜0.79x）・`ReadFile` 待機・ロック競合・Warm キャッシュ効力不足・メタデータ応答遅延** の根本原因と改善ロードマップをまとめたものである。
+本書は、Perfetto トレース出力機能（commit `aa37709`）を用いて取得したインプロセス VFS ベンチマークトレース（`zeroext_bench_trace.json`）およびライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）を全件定量解析し、[性能評価報告書](performance-evaluation.md) で課題として挙がっていた **8 スレッド時の Direct I/O 逆転現象（0.63x〜0.79x）・`ReadFile` 待機・ロック競合・Warm キャッシュ効力不足・メタデータ応答遅延** の根本原因と改善ロードマップをまとめたものである。
 
 ---
 
@@ -19,11 +19,11 @@
 
 1. **8 スレッド Direct I/O 逆転・`ReadFile` 待機の真因は「ユーザー空間ロック競合」ではなく「カーネル `FileObject->Lock` 直列化（`FILE_FLAG_OVERLAPPED` 未指定）」**:
    - `enable_direct_io=1` 時の `1T Rnd 4KB` の `ReadFile` 平均遅延は **`3.65 µs`** だが、`8T Rnd 4KB` では **`49.11 µs`（13.5 倍悪化）**、`8T Seq 64KB` では **`79.12 µs`（最大 `37,955.5 µs` = 37.96 ms）** へ急増していた。
-   - [src/io/win32_io.c](../src/io/win32_io.c#L493-L495) の `CreateFileW` に `FILE_FLAG_OVERLAPPED` が指定されていないため、`OVERLAPPED.Offset` を渡しても Windows カーネル（`NtReadFile`）が **`FileObject->Lock` で全スレッドの `ReadFile` を完全に直列化**し、さらにスレッド間で激しい **Lock Convoy（最大 36.32 ms もの単一スレッド飢餓）** を引き起こしていた。
+   - [src/io/win32_io.c](../../src/io/win32_io.c#L493-L495) の `CreateFileW` に `FILE_FLAG_OVERLAPPED` が指定されていないため、`OVERLAPPED.Offset` を渡しても Windows カーネル（`NtReadFile`）が **`FileObject->Lock` で全スレッドの `ReadFile` を完全に直列化**し、さらにスレッド間で激しい **Lock Convoy（最大 36.32 ms もの単一スレッド飢餓）** を引き起こしていた。
    - ユーザー空間の `extent_cache.lock` の待ち時間は合計 `0.4〜6.6 ms`（総時間の `0.04%〜0.13%`）にすぎず、真のボトルネックは **Windows カーネル側 I/O ハンドルの同期モード**にあった。
-   - [性能評価報告書 §3.2](performance_evaluation.md#32-小ブロック4-kbランダム読込における挙動とトレードオフ) で観察されていた `8T Rnd 4KB` での逆転（0.63x）も、標準経路が 8 MB LRU キャッシュヒット（74.7%〜86.3%）によって `FileObject->Lock` への突入回数を約 1/2〜1/4 に減らせていたことが大きく寄与している。
+   - [性能評価報告書 §3.2](performance-evaluation.md#32-小ブロック4-kbランダム読込における挙動とトレードオフ) で観察されていた `8T Rnd 4KB` での逆転（0.63x）も、標準経路が 8 MB LRU キャッシュヒット（74.7%〜86.3%）によって `FileObject->Lock` への突入回数を約 1/2〜1/4 に減らせていたことが大きく寄与している。
 2. **実マウント Warm 性能の頭打ち原因は `FileInfoTimeout = 1000` による WinFsp キャッシュマネージャ無効化**:
-   - [src/driver/winfsp_driver.c](../src/driver/winfsp_driver.c#L786) で有限値（`1000 ms`）が設定されているため Windows NT Cache Manager（`CcCopyRead`）が有効にならず、2 回目以降の読込でも毎回ユーザー空間へフォールバックしている。
+   - [src/driver/winfsp_driver.c](../../src/driver/winfsp_driver.c#L786) で有限値（`1000 ms`）が設定されているため Windows NT Cache Manager（`CcCopyRead`）が有効にならず、2 回目以降の読込でも毎回ユーザー空間へフォールバックしている。
 3. **非同期 OVERLAPPED 化後に顕在化するユーザー空間側の 3 大ボトルネックも特定**:
    - **① `win32_io.cache_lock` のロック内 `malloc`/`free` と単一 Exclusive 競合**: 212 ms 中に 204,298 回（約 96 万回/秒）取得され、4 KB ランダム時は `wait`（`37.6〜43.7 ms`）が `hold`（`31.5〜32.4 ms`）を上回る。
    - **② 標準経路・断片化ファイルでの毎回 `ext2fs_file_open/close`＋4 KB 分割 I/O**: `/frag.bin` では `/model.gguf` 比で CPU オーバーヘッドが `1.24 µs/op`（6.7%）→ `9.89 µs/op`（38.1%）へ約 8 倍増加。
@@ -99,16 +99,16 @@
     - 最悪飢餓例: `tid=1780` が単発の 4 KB `ReadFile` で `1.19 ms` 待機する間に、他スレッドが `189` 回の `ReadFile` を完了。
 
 **コード上の根本原因**
-- [win32_io.c#L493-L495](../src/io/win32_io.c#L493-L495) の `CreateFileW` で、`file_flags` に `FILE_FLAG_OVERLAPPED` が設定されていない（`FILE_FLAG_NO_BUFFERING` または `FILE_FLAG_RANDOM_ACCESS` のみ）。
+- [win32_io.c#L493-L495](../../src/io/win32_io.c#L493-L495) の `CreateFileW` で、`file_flags` に `FILE_FLAG_OVERLAPPED` が設定されていない（`FILE_FLAG_NO_BUFFERING` または `FILE_FLAG_RANDOM_ACCESS` のみ）。
 - Windows NT I/O マネージャでは、`FILE_FLAG_OVERLAPPED` を指定せずに開いたファイルハンドル（同期ハンドル）に対して `OVERLAPPED` 構造体付きで `ReadFile` / `WriteFile` を発行しても、カーネル `NtReadFile` が **`FILE_OBJECT` 内の同期用ロック（`FileObject->Lock`）を排他取得してからディスパッチするため、同一プロセス内の全ワーカースレッドの I/O が 1 本に直列化される**。
 
 **改善方針**
-1. [win32_open](../src/io/win32_io.c#L493-L495) で `file_flags |= FILE_FLAG_OVERLAPPED;` を付与する。
-2. [raw_pread_exact / raw_pwrite_exact](../src/io/win32_io.c#L265-L325) にて非同期完了を正しくハンドリングする:
+1. [win32_open](../../src/io/win32_io.c#L493-L495) で `file_flags |= FILE_FLAG_OVERLAPPED;` を付与する。
+2. [raw_pread_exact / raw_pwrite_exact](../../src/io/win32_io.c#L265-L325) にて非同期完了を正しくハンドリングする:
    - 各スレッドにつき 1 個の自動／手動リセットイベント（`CreateEventW`）を `FlsAlloc` デストラクタ付きの TLS へキャッシュし、I/O ごとの `CreateEvent`/`CloseHandle` コストをゼロにする。
    - `ov.hEvent = tls_event;` を設定して `ReadFile`/`WriteFile` を呼び、`FALSE` かつ `GetLastError() == ERROR_IO_PENDING` の場合のみ `GetOverlappedResult(h, &ov, &got, TRUE)` で完了を待機する（即時完了時はイベント待機システムコールすら不要）。
 3. **非同期ハンドル化の注意点**:
-   - [query_handle_size_and_sector](../src/io/win32_io.c#L75-L92) 内で実ディスクに対して呼ばれる `DeviceIoControl`（`IOCTL_DISK_GET_LENGTH_INFO`, `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`）は、ハンドルが `FILE_FLAG_OVERLAPPED` の場合 **`OVERLAPPED` 構造体の受け渡しと `ERROR_IO_PENDING` 待機が必須** となるため、合わせて対応する（`GetFileSizeEx` と `FlushFileBuffers` は `OVERLAPPED` 不要）。
+   - [query_handle_size_and_sector](../../src/io/win32_io.c#L75-L92) 内で実ディスクに対して呼ばれる `DeviceIoControl`（`IOCTL_DISK_GET_LENGTH_INFO`, `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`）は、ハンドルが `FILE_FLAG_OVERLAPPED` の場合 **`OVERLAPPED` 構造体の受け渡しと `ERROR_IO_PENDING` 待機が必須** となるため、合わせて対応する（`GetFileSizeEx` と `FlushFileBuffers` は `OVERLAPPED` 不要）。
 4. **期待効果**:
    - `.img` 上の 8T Direct I/O 並列読込が真に並列化され、1T 対比での逆転および 38 ms 級スパイクが解消される（`8T Seq 64KB`・`8T Rnd 4KB` で数倍のスループット向上が見込まれる）。
    - 実物理ディスク（`\\.\PhysicalDriveN`、`FILE_FLAG_NO_BUFFERING`）に対しても NVMe へ **Queue Depth > 1** の複数 I/O を同時発行可能になり、実 SSD での並列読込・ランダム IOPS が向上する。
@@ -118,8 +118,8 @@
 ### 3.2 【Priority 2 / 高・実マウント Warm 性能極大化】WinFsp `FileInfoTimeout = INFINITE` による OS キャッシュ有効化
 
 **現状と原因**
-- [性能評価報告書 §2.3・§3.3](performance_evaluation.md#L105-L113) で計測した通り、実物理 SSD 上での Warm 読込性能は `Native NTFS`（`10,953.9 MB/s` / 4KB Rnd `986.2 MB/s`）に対し、`ZeroExt DIO` は Cold 時（`1,490.9 MB/s`）と同一水準（`1,490.5 MB/s` / 4KB Rnd `36.8 MB/s`）で頭打ちになっている。
-- 原因は [winfsp_driver.c#L786](../src/driver/winfsp_driver.c#L786) にある `out_params->FileInfoTimeout = 1000;` である。WinFsp カーネルドライバは `FileInfoTimeout = (UINT32)-1`（`INFINITE`）のときのみ Windows NT Cache Manager（`CcCopyRead`）によるファイルデータ／メタデータキャッシュを有効化する仕様となっている。
+- [性能評価報告書 §2.3・§3.3](performance-evaluation.md#L105-L113) で計測した通り、実物理 SSD 上での Warm 読込性能は `Native NTFS`（`10,953.9 MB/s` / 4KB Rnd `986.2 MB/s`）に対し、`ZeroExt DIO` は Cold 時（`1,490.9 MB/s`）と同一水準（`1,490.5 MB/s` / 4KB Rnd `36.8 MB/s`）で頭打ちになっている。
+- 原因は [winfsp_driver.c#L786](../../src/driver/winfsp_driver.c#L786) にある `out_params->FileInfoTimeout = 1000;` である。WinFsp カーネルドライバは `FileInfoTimeout = (UINT32)-1`（`INFINITE`）のときのみ Windows NT Cache Manager（`CcCopyRead`）によるファイルデータ／メタデータキャッシュを有効化する仕様となっている。
 
 **改善方針**
 - **Read-Only マウント（`ctx->read_only == 1`）時**はバッキングの ext4 ボリュームが外部変更されない前提で `FileInfoTimeout = (UINT32)-1` を既定値とする（必要に応じて `VolumeInfoTimeout` / `DirInfoTimeout` / `SecurityTimeout` も設定可能とし、互換性確認用の無効化フラグを残す）。
@@ -132,23 +132,23 @@
 
 Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の陰に隠れていたユーザー空間ロックとアトミック操作のオーバーヘッドが支配的になる。
 
-#### (a) `win32_io.cache_lock`（[src/io/win32_io.c#L161-L240](../src/io/win32_io.c#L161-L240)）
+#### (a) `win32_io.cache_lock`（[src/io/win32_io.c#L161-L240](../../src/io/win32_io.c#L161-L240)）
 - **観測された問題**:
   - `M0_8T_Seq_64KB` では 212 ms 中に **204,298 回**（約 96 万回/秒）の `AcquireSRWLockExclusive` が発生。
   - `M0_8T_Rnd_4KB_model`（wait `37.6 ms` vs hold `31.5 ms` = **1.19x**）および `M0_8T_Rnd_4KB_frag`（wait `43.7 ms` vs hold `32.4 ms` = **1.35x**）では、**待ち時間が保持時間を上回る**ロック飽和状態にある。
-  - 最大保持時間はベンチで `256.0 µs`、ライブ GUI トレースでは **`904.0 µs`** に達している。これは [cache_put_block](../src/io/win32_io.c#L181-L204) が **Exclusive ロック保持中に `free()`・`calloc()`・`malloc(4096)` を毎回呼び、CRT ヒープのロック競合を内包しているため**である。
+  - 最大保持時間はベンチで `256.0 µs`、ライブ GUI トレースでは **`904.0 µs`** に達している。これは [cache_put_block](../../src/io/win32_io.c#L181-L204) が **Exclusive ロック保持中に `free()`・`calloc()`・`malloc(4096)` を毎回呼び、CRT ヒープのロック競合を内包しているため**である。
 - **改善案**:
   1. **Eviction 時のメモリ構造体・バッファの In-place 再利用**: キャッシュ満杯時に `victim` を `free`→再 `malloc` せず、`victim` のハッシュリンクだけ張り替えて 4 KB バッファを上書き再利用する（ロック内ヒープ操作を完全排除）。
   2. **ハッシュ・LRU の 16〜32 シャード分割（`block & (N - 1)`）**: シャードごとに `SRWLOCK` を独立させ、8 スレッド以上での競合率を 1/16〜1/32 へ低減する。
   3. （追加余地）参照専用のヒット更新には `ref_bit`＋CLOCK 置換＋`AcquireSRWLockShared` を用い、LRU ポインタ付け替えによる Exclusive ロックを削減する。
 
-#### (b) `extent_cache.lock` とファイルハンドルキャッシュ（[src/extent/extent_map.c#L448-L476](../src/extent/extent_map.c#L448-L476), [src/vfs/op_read.c#L19-L35](../src/vfs/op_read.c#L19-L35)）
+#### (b) `extent_cache.lock` とファイルハンドルキャッシュ（[src/extent/extent_map.c#L448-L476](../../src/extent/extent_map.c#L448-L476), [src/vfs/op_read.c#L19-L35](../../src/vfs/op_read.c#L19-L35)）
 - **観測された問題**:
   - トレース上の合計待ち時間は `1.1〜6.6 ms`（0.04%〜0.13%）と現時点では小さいが、`M1_8T_Rnd_4KB_model` で `max wait = 127.5 µs` が既に発生している。
-  - [ext4_vfs_lower_read](../src/vfs/op_read.c#L19-L35) は、同一ファイルの毎回の read ごとに `ext4_extent_cache_get`（`AcquireSRWLockExclusive`＋LRU 移動＋`InterlockedIncrement(&map->ref_count)`）と `ext4_extent_map_release`（`InterlockedDecrement`）を実行している。さらに [win32_aligned_read](../src/io/win32_io.c#L359-L360) 末尾でも 2 本の `InterlockedAdd64`（`priv->stats.bytes_read`, `priv->ext2_stats.bytes_read`）が全スレッド共通のキャッシュラインを更新し続けている。
+  - [ext4_vfs_lower_read](../../src/vfs/op_read.c#L19-L35) は、同一ファイルの毎回の read ごとに `ext4_extent_cache_get`（`AcquireSRWLockExclusive`＋LRU 移動＋`InterlockedIncrement(&map->ref_count)`）と `ext4_extent_map_release`（`InterlockedDecrement`）を実行している。さらに [win32_aligned_read](../../src/io/win32_io.c#L359-L360) 末尾でも 2 本の `InterlockedAdd64`（`priv->stats.bytes_read`, `priv->ext2_stats.bytes_read`）が全スレッド共通のキャッシュラインを更新し続けている。
   - Priority 1 修正後に Direct I/O が 50 万〜100 万 IOPS 級へ達すると、これらの共有キャッシュラインのバウンスが次の頭打ち要因になる。
 - **改善案**:
-  1. [ext4_file_handle_t](../src/vfs/ext4_vfs.h#L87-L94) に `ext4_extent_map_t *cached_extents` を保持し、`FspOpen` で 1 度だけ retain して `FspClose` で release する経路を追加（WinFsp `FspRead` パスの `extent_cache.lock` と `ref_count` 更新を **完全ゼロ化**）。
+  1. [ext4_file_handle_t](../../src/vfs/ext4_vfs.h#L87-L94) に `ext4_extent_map_t *cached_extents` を保持し、`FspOpen` で 1 度だけ retain して `FspClose` で release する経路を追加（WinFsp `FspRead` パスの `extent_cache.lock` と `ref_count` 更新を **完全ゼロ化**）。
   2. `ext4_extent_cache_get` 自体は LRU 先頭要素またはヒット率安定時は **`AcquireSRWLockShared` のみで参照**し、LRU 降格閾値を超えた場合のみ Exclusive 再配置（またはシャード化）する。
   3. 統計カウンタ更新の頻度低減・スレッドローカル集約または `ext2_stats` 重複更新の見直し。
 
@@ -161,8 +161,8 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
   - `win32_io.cache_lock` 取得回数: `2.47 回/op`（`145,414 / 58,779`）→ **`4.57 回/op`**（`179,740 / 39,363`）へ増加。
   - `ReadFile`・`cache_lock` を差し引いた **純 VFS CPU 時間**: `1.24 µs/op`（総時間の `6.7%`）→ **`9.89 µs/op`（総時間の `38.1%` / `389.3 ms`）へ約 8 倍増加**。
 - **コード上の原因**:
-  - [ext4_vfs_lower_read](../src/vfs/op_read.c#L48-L60) の標準フォールバック経路は、read 1 回ごとに `ext2fs_file_open`（ヒープ確保＋inode 読込）→ `ext2fs_file_llseek` → `ext2fs_file_read`（4 KB ブロック単位ループ）→ `ext2fs_file_close` を毎回やり直している。このため `64 KB` 読込であっても常に 4 KB × 16 回の `ReadFile` に分割され、実ディスク（`FILE_FLAG_NO_BUFFERING`）で `52.1 MB/s` まで低下する直接原因になっている（[性能評価報告書 §3.3](performance_evaluation.md#L184-L186)）。
-  - また書込側 [ext4_vfs_write](../src/vfs/op_write.c#L28-L58) も `ext2fs_file_open/close` 完了直後に、改めて `ext2fs_read_inode_full` ＋ `ext2fs_write_inode_full` を実行しており、inode 更新が重複している。
+  - [ext4_vfs_lower_read](../../src/vfs/op_read.c#L48-L60) の標準フォールバック経路は、read 1 回ごとに `ext2fs_file_open`（ヒープ確保＋inode 読込）→ `ext2fs_file_llseek` → `ext2fs_file_read`（4 KB ブロック単位ループ）→ `ext2fs_file_close` を毎回やり直している。このため `64 KB` 読込であっても常に 4 KB × 16 回の `ReadFile` に分割され、実ディスク（`FILE_FLAG_NO_BUFFERING`）で `52.1 MB/s` まで低下する直接原因になっている（[性能評価報告書 §3.3](performance-evaluation.md#L184-L186)）。
+  - また書込側 [ext4_vfs_write](../../src/vfs/op_write.c#L28-L58) も `ext2fs_file_open/close` 完了直後に、改めて `ext2fs_read_inode_full` ＋ `ext2fs_write_inode_full` を実行しており、inode 更新が重複している。
 
 **改善方針**
 1. **`--rw` モードでの安全キャッシュ付き Direct-Extent Read の解禁**: `ctx->rwlock (S)` を保持したまま、write / truncate / delete 時に即座に invalidate される extent マップを用いて `win32_aligned_read` を直接呼ぶ経路を `--rw` にも拡張する（`libext2fs` のデータブロックキャッシュと整合しない場合のみキャッシュ無効またはフラッシュ整合を保証）。これにより `--rw` および断片化ファイル読込での CPU 38% 消費と 4 KB 細切れ I/O を同時に解消できる。
@@ -176,14 +176,14 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 1. **存在しないファイル（負のルックアップ）の 37.9% が毎回ディレクトリ全件線形走査を誘発**:
    - `FspGetSecurityByName` 全 `1,858` 回のうち **`704` 回（`37.9%`）が `STATUS_OBJECT_NAME_NOT_FOUND` (`0xC0000034`)** を返している（Windows Explorer の `desktop.ini`, `.lnk`, `autorun.inf` 等のプローブ）。
-   - [ext4_vfs_lookup_locked](../src/vfs/op_init.c#L89-L145) は、`ctx->case_insensitive == 1` の既定設定では `ext2fs_namei` 失敗時に大文字小文字無視フォールバックのため `ext2fs_dir_iterate2` で **親ディレクトリを最初から最後まで全件線形走査（`ci_lookup_cb`）** しており、結果として `ctx->rwlock (S)` を最大 `2.34 ms` 保持し続けている。
+   - [ext4_vfs_lookup_locked](../../src/vfs/op_init.c#L89-L145) は、`ctx->case_insensitive == 1` の既定設定では `ext2fs_namei` 失敗時に大文字小文字無視フォールバックのため `ext2fs_dir_iterate2` で **親ディレクトリを最初から最後まで全件線形走査（`ci_lookup_cb`）** しており、結果として `ctx->rwlock (S)` を最大 `2.34 ms` 保持し続けている。
    - **対策**: 小規模な **正／負 dentry キャッシュ**（`(parent_ino, lower_name) -> child_ino | NEGATIVE_ENOENT`、変更系 VFS 操作時に invalidate）を導入する。
 2. **`FspOpen` の `ctx->rwlock` 二重取得＆inode 二重読込**:
-   - [FspOpen_impl](../src/driver/winfsp_driver.c#L232-L258) は `ext4_vfs_open` で `ctx->rwlock (S)`＋`ext2fs_read_inode` を実行した直後に、`FileInfo` 取得のため再度 `ext4_vfs_stat_ino` で `ctx->rwlock (S)`＋`ext2fs_read_inode_full` を実行している。
+   - [FspOpen_impl](../../src/driver/winfsp_driver.c#L232-L258) は `ext4_vfs_open` で `ctx->rwlock (S)`＋`ext2fs_read_inode` を実行した直後に、`FileInfo` 取得のため再度 `ext4_vfs_stat_ino` で `ctx->rwlock (S)`＋`ext2fs_read_inode_full` を実行している。
    - **対策**: `ext4_vfs_open` 側で `ext2fs_read_inode_full` を使い `ext4_stat_t` を同時に返す（または統合版を呼ぶ）ことでロック取得・inode 読込回数を半減する。
 3. **`FspReadDirectory` の $O(N^2)$ Marker 再走査と `GetDirInfoByName` 未実装**:
-   - [op_readdir.c](../src/vfs/op_readdir.c#L36-L42) の `vfs_readdir_cb_internal` が **全ディレクトリエントリに対して無条件で `ext2fs_read_inode_full` を発行したあと**、[fsp_readdir_cb](../src/driver/winfsp_driver.c#L687-L692) で `Marker` 到達前のエントリを捨てている。ファイル数が多いディレクトリで複数回 `FspReadDirectory` に分割されると $O(N^2)$ の inode 読込が発生し、`ctx->rwlock (S)` 最大 `3.41 ms` 保持の主因となる。
-   - また [winfsp.h#L290](../third_party/winfsp/include/winfsp/winfsp.h#L290) の `GetDirInfoByName` が未実装のため、1 件だけの検索が `ReadDirectory` 全列挙へフォールバックする場合がある。
+   - [op_readdir.c](../../src/vfs/op_readdir.c#L36-L42) の `vfs_readdir_cb_internal` が **全ディレクトリエントリに対して無条件で `ext2fs_read_inode_full` を発行したあと**、[fsp_readdir_cb](../../src/driver/winfsp_driver.c#L687-L692) で `Marker` 到達前のエントリを捨てている。ファイル数が多いディレクトリで複数回 `FspReadDirectory` に分割されると $O(N^2)$ の inode 読込が発生し、`ctx->rwlock (S)` 最大 `3.41 ms` 保持の主因となる。
+   - また [winfsp.h#L290](../../third_party/winfsp/include/winfsp/winfsp.h#L290) の `GetDirInfoByName` が未実装のため、1 件だけの検索が `ReadDirectory` 全列挙へフォールバックする場合がある。
    - **対策**: `Marker` 判定を `ext2fs_read_inode_full` より前に移動して既処理エントリの inode 読込を完全にスキップし、合わせて `GetDirInfoByName` コールバックを実装する。
 
 ---
@@ -194,10 +194,10 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 | ステップ | 対象ファイル・箇所 | 変更規模 | 主な期待効果 |
 | :---: | :--- | :---: | :--- |
-| **Step 1** | [src/io/win32_io.c](../src/io/win32_io.c#L493-L495)<br>(`FILE_FLAG_OVERLAPPED`＋TLS イベント完了待ち＋`DeviceIoControl` 対応) | 小〜中 | 8T `ReadFile` カーネル直列化・`38 ms` Lock Convoy を根治。`.img` 8T 並列・実 NVMe SSD QD>1 を解放。 |
-| **Step 2** | [src/driver/winfsp_driver.c](../src/driver/winfsp_driver.c#L786)<br>(RO マウント時 `FileInfoTimeout = (UINT32)-1` 既定化) | 極小 | 実マウント Warm 性能を Native NTFS 水準（約 7〜25 倍）へ引き上げ＋メタデータ再照会を大幅削減。 |
-| **Step 3** | [src/io/win32_io.c](../src/io/win32_io.c#L161-L240)（LRU バッファ再利用＋シャード化）<br>[src/extent/extent_map.c](../src/extent/extent_map.c#L448-L476)・[ext4_vfs.h](../src/vfs/ext4_vfs.h#L87-L94)（`extent_cache` Shared 化＋ハンドル保持） | 中 | Step 1 後に顕在化するユーザー空間ロック競合・ロック内 `malloc`/`free` (`256〜904 µs` スパイク)・キャッシュラインバウンスを解消。 |
-| **Step 4** | [op_init.c](../src/vfs/op_init.c#L89-L145)・[op_readdir.c](../src/vfs/op_readdir.c#L36-L42)・[winfsp_driver.c](../src/driver/winfsp_driver.c#L232-L258)・[op_write.c](../src/vfs/op_write.c#L28-L58) | 中 | 負のルックアップ高速化、`FspOpen` 二重読込解消、`FspReadDirectory` $O(N^2)$ 解消、`--rw` 経路改善。 |
+| **Step 1** | [src/io/win32_io.c](../../src/io/win32_io.c#L493-L495)<br>(`FILE_FLAG_OVERLAPPED`＋TLS イベント完了待ち＋`DeviceIoControl` 対応) | 小〜中 | 8T `ReadFile` カーネル直列化・`38 ms` Lock Convoy を根治。`.img` 8T 並列・実 NVMe SSD QD>1 を解放。 |
+| **Step 2** | [src/driver/winfsp_driver.c](../../src/driver/winfsp_driver.c#L786)<br>(RO マウント時 `FileInfoTimeout = (UINT32)-1` 既定化) | 極小 | 実マウント Warm 性能を Native NTFS 水準（約 7〜25 倍）へ引き上げ＋メタデータ再照会を大幅削減。 |
+| **Step 3** | [src/io/win32_io.c](../../src/io/win32_io.c#L161-L240)（LRU バッファ再利用＋シャード化）<br>[src/extent/extent_map.c](../../src/extent/extent_map.c#L448-L476)・[ext4_vfs.h](../../src/vfs/ext4_vfs.h#L87-L94)（`extent_cache` Shared 化＋ハンドル保持） | 中 | Step 1 後に顕在化するユーザー空間ロック競合・ロック内 `malloc`/`free` (`256〜904 µs` スパイク)・キャッシュラインバウンスを解消。 |
+| **Step 4** | [op_init.c](../../src/vfs/op_init.c#L89-L145)・[op_readdir.c](../../src/vfs/op_readdir.c#L36-L42)・[winfsp_driver.c](../../src/driver/winfsp_driver.c#L232-L258)・[op_write.c](../../src/vfs/op_write.c#L28-L58) | 中 | 負のルックアップ高速化、`FspOpen` 二重読込解消、`FspReadDirectory` $O(N^2)$ 解消、`--rw` 経路改善。 |
 
 ### 4.2 再計測時のトレース運用メモ
 
@@ -205,7 +205,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
   ```powershell
   .\build\zeroext_bench.exe --trace zeroext_bench_trace_after.json --trace-events 524288
   ```
-- **ベンチマーク側スレッド名補足**: [tests/bench_direct_io.c](../tests/bench_direct_io.c#L46-L48) では `threads == 1` 実行時もメインスレッドで `bench_worker` を直接呼ぶため、メインスレッド名が `"Bench-Main"` から `"Bench-Worker"` に上書きされる。改善時は `threads > 1`（別スレッド起動時）のみ `ztrace_set_thread_name("Bench-Worker")` すると Perfetto UI 上の視認性が向上する。
+- **ベンチマーク側スレッド名補足**: [tests/bench_direct_io.c](../../tests/bench_direct_io.c#L46-L48) では `threads == 1` 実行時もメインスレッドで `bench_worker` を直接呼ぶため、メインスレッド名が `"Bench-Main"` から `"Bench-Worker"` に上書きされる。改善時は `threads > 1`（別スレッド起動時）のみ `ztrace_set_thread_name("Bench-Worker")` すると Perfetto UI 上の視認性が向上する。
 
 ---
 
@@ -283,7 +283,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
    - **`extent_cache.lock` の最大スパイク縮小（Mode 1、インプロセス計測）**:
      - `M1_8T_Seq_64KB`: wait 合計 `7.3 ms` → **`2.9 ms`**（max `70.3 µs` → **`14.3 µs`**）
      - `M1_8T_Rnd_4KB_model` / `frag`: max wait `109.7 µs` / `249.1 µs` → **`13.2 µs` / `9.3 µs`**（最大 26.8x 短縮、Shared 保持平均 **`0.04 µs`**）
-     - あわせて [FspRead_impl](../src/driver/winfsp_driver.c#L366) → `ext4_vfs_read_handle` により、ライブ WinFsp マウント経由の同一ファイル読込時は `ext4_file_handle_t` に保持した `cached_extents` を参照するため、`extent_cache.lock` の取得自体を初回のみへ削減した。
+     - あわせて [FspRead_impl](../../src/driver/winfsp_driver.c#L366) → `ext4_vfs_read_handle` により、ライブ WinFsp マウント経由の同一ファイル読込時は `ext4_file_handle_t` に保持した `cached_extents` を参照するため、`extent_cache.lock` の取得自体を初回のみへ削減した。
    - **次の残存ボトルネック（Step 4 対象）**:
      - `M0_8T_Rnd_4KB_frag` の総 VFS 時間 `2,958.3 ms` から `ReadFile` (`1,397.6 ms`) と `cache_lock` (`139.8 ms`) を引いた約 **`1,421 ms`（10.8 µs/op、約 48%）** は、毎回の `ext2fs_file_open/llseek/read/close` による純粋な `libext2fs` CPU コストが占めている。またライブ GUI トレース側のメタデータ経路（負のルックアップ、`FspOpen` 二重読込、`FspReadDirectory`）が Step 4 の改善対象となる。
 
@@ -292,11 +292,11 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 200 ファイルを含む 32 MB の ext4 イメージ（`/bigdir/file_0000.dat`〜`file_0199.dat` 各 4 KB）を実 WinFsp ドライブとしてマウントし、カーネル側のメタデータキャッシュを無効化した `--file-info-timeout 0`（＋`--trace-events 524288`）条件でユーザー空間コールバックの純粋な改善率を Before (`cd5e279`) / After（Step 4 実装＋`PassQueryDirectoryFileName = 1` 有効化）で A/B 比較した。
 
 1. **実装した最適化項目**:
-   - **16 シャード正／負 Dentry キャッシュ**（[src/vfs/op_init.c](../src/vfs/op_init.c)）: 16 シャード×256 スロット（計 4,096 エントリ）、Shared ロック参照・CLOCK インプレース置換・世代エポックによる $O(1)$ 一括無効化（`op_create`, `op_mkdir`, `op_unlink`, `op_rename`, `op_symlink` で `ctx->rwlock (X)` 保持下に無効化）。大文字小文字無視時にもディスク上の実ケースパスを保持し、`ext4_vfs_lookup_locked_ex` で `CasePreservedNames` を維持。
-   - **単一ロック・単一 inode 読込の統合 Open+Stat / Lookup+Stat**（[op_open.c](../src/vfs/op_open.c), [op_getattr.c](../src/vfs/op_getattr.c), [winfsp_driver.c](../src/driver/winfsp_driver.c)）: `ext4_vfs_open_stat` により `FspOpen` / `FspCreate` 直後の 2 回目の `ext4_vfs_stat_ino` を廃止。
-   - **早期 Marker スキップ＋`FspGetDirInfoByName` 実装**（[op_readdir.c](../src/vfs/op_readdir.c), [winfsp_driver.c](../src/driver/winfsp_driver.c)）: `ext4_vfs_readdir_from` で `ext2fs_read_inode_full` より前に Marker 照合を行い既処理エントリの inode 読込を回避。さらに `FspGetDirInfoByName` を実装し、`winfsp_driver_build_volume_params` で `PassQueryDirectoryFileName = 1` を設定して WinFsp が単一ファイル検索を `FspReadDirectory` にフォールバックしないようにした。
-   - **書込時冗長 inode I/O 削減**（[op_write.c](../src/vfs/op_write.c), [winfsp_driver.c](../src/driver/winfsp_driver.c)）: `ext4_vfs_write_stat` により 1 回の `ctx->rwlock (X)`＋1 回の `ext2fs_read_inode_full`＋`ext2fs_file_open2` で 256B 拡張時刻と `FileInfo` を同時に返し、`FspWrite` 後の `ext4_vfs_stat_ino` と二重 inode 読込を削減。
-   - **付随バグ修正（[closefs.c](../third_party/e2fsprogs/lib/ext2fs/closefs.c)）**: 無計測 160 MB `zeroext_bench.exe` 検証時に `write_backup_super_and_bgd` が 4 KB ブロック環境でも `sizeof(*sb_copy)` (1,024 B) しか確保せず `io_channel_write_blk64` に渡していたため、ヒープページ境界で `win32_aligned_write` が `0xC0000005`（読み出し範囲外）を起こし得る既存バグを発見・修正し、140 MB マルチグループ回帰テスト（`test_multi_group_backup_superblock_flush`）を追加した。
+   - **16 シャード正／負 Dentry キャッシュ**（[src/vfs/op_init.c](../../src/vfs/op_init.c)）: 16 シャード×256 スロット（計 4,096 エントリ）、Shared ロック参照・CLOCK インプレース置換・世代エポックによる $O(1)$ 一括無効化（`op_create`, `op_mkdir`, `op_unlink`, `op_rename`, `op_symlink` で `ctx->rwlock (X)` 保持下に無効化）。大文字小文字無視時にもディスク上の実ケースパスを保持し、`ext4_vfs_lookup_locked_ex` で `CasePreservedNames` を維持。
+   - **単一ロック・単一 inode 読込の統合 Open+Stat / Lookup+Stat**（[op_open.c](../../src/vfs/op_open.c), [op_getattr.c](../../src/vfs/op_getattr.c), [winfsp_driver.c](../../src/driver/winfsp_driver.c)）: `ext4_vfs_open_stat` により `FspOpen` / `FspCreate` 直後の 2 回目の `ext4_vfs_stat_ino` を廃止。
+   - **早期 Marker スキップ＋`FspGetDirInfoByName` 実装**（[op_readdir.c](../../src/vfs/op_readdir.c), [winfsp_driver.c](../../src/driver/winfsp_driver.c)）: `ext4_vfs_readdir_from` で `ext2fs_read_inode_full` より前に Marker 照合を行い既処理エントリの inode 読込を回避。さらに `FspGetDirInfoByName` を実装し、`winfsp_driver_build_volume_params` で `PassQueryDirectoryFileName = 1` を設定して WinFsp が単一ファイル検索を `FspReadDirectory` にフォールバックしないようにした。
+   - **書込時冗長 inode I/O 削減**（[op_write.c](../../src/vfs/op_write.c), [winfsp_driver.c](../../src/driver/winfsp_driver.c)）: `ext4_vfs_write_stat` により 1 回の `ctx->rwlock (X)`＋1 回の `ext2fs_read_inode_full`＋`ext2fs_file_open2` で 256B 拡張時刻と `FileInfo` を同時に返し、`FspWrite` 後の `ext4_vfs_stat_ino` と二重 inode 読込を削減。
+   - **付随バグ修正（[closefs.c](../../third_party/e2fsprogs/lib/ext2fs/closefs.c)）**: 無計測 160 MB `zeroext_bench.exe` 検証時に `write_backup_super_and_bgd` が 4 KB ブロック環境でも `sizeof(*sb_copy)` (1,024 B) しか確保せず `io_channel_write_blk64` に渡していたため、ヒープページ境界で `win32_aligned_write` が `0xC0000005`（読み出し範囲外）を起こし得る既存バグを発見・修正し、140 MB マルチグループ回帰テスト（`test_multi_group_backup_superblock_flush`）を追加した。
 
 2. **ライブ WinFsp ワークロード計測比較（`--file-info-timeout 0`）**:
    | ワークロード（Win32 API） | Before (`cd5e279`) | Step 4 後 (`PassQueryDirectoryFileName=1`) | 速度比 |
