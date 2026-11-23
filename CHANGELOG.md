@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-23
+
+### Added
+- Added `--case-sensitive` mount mode in CLI (`zeroext mount`) and `ZeroExtGui.exe` Advanced Options, enabling NTFS per-directory `FileCaseSensitiveInfo` on `--overlay` upperdirs and its subdirectories.
+- Added `:cs` suffix to `.wh.__ext4_lower_id` markers in case-sensitive overlay upperdirs to block accidental mixing with case-insensitive mounts.
+- Added pre-mount upperdir validation (`IsDirectoryCaseSensitive`), `_cs` suffix in suggested overlay paths, and translated GUI error diagnostics (`winerr=145`, `winerr=5`, unsupported volumes) in `MountErrorTranslator`.
+- Added native unit tests (`test_case_sensitive_coexistence`, `test_overlay_case_sensitive_upperdir`) and GUI tests for `--case-sensitive` arg building, `:cs` upperdir validation, and error translations.
+
+### Changed
+- Prioritized drive letter `L:` first (`L:..Z:`, `E:..K:`, `D:`) in `DriveLetterService` and standardized CLI usage, GUI hints, and documentation examples on `L:`.
+- Clarified GUI header language selector labels (`🌐 Auto (JA)` / `🌐 Auto (EN)` / `🌐 English` / `🌐 日本語`).
+
+### Fixed
+- Themed WPF `ComboBox` and `ComboBoxItem` dropdown popups in `Controls.xaml` so Dark mode no longer renders white text on a white popup background.
+- Moved "Add Image..." and "New Image..." buttons to the left sidebar footer (`UniformGrid`) to prevent right-edge header clipping of the theme toggle button.
+
 ## [0.7.0] - 2026-11-22
 
 ### Changed
@@ -61,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/totatake/ZeroExt/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/totatake/ZeroExt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/totatake/ZeroExt/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/totatake/ZeroExt/compare/v0.4.0...v0.5.0

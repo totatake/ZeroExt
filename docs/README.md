@@ -9,8 +9,8 @@
 | [overview.md](overview.md) | 開発背景、2-Tier I/O バイパス・技術的特徴、他手法比較（NTFS / WSL2 9P 等）、実践ユースケース |
 | [requirements.md](requirements.md) | ソフトウェア要件仕様書（対応スコープ・プロジェクト境界・機能要件 `FR-01`..`11` / 非機能要件 `NFR-01`..`04`） |
 | [architecture.md](architecture.md) | システムアーキテクチャ設計書（コンポーネント図・シーケンス図・`e2fsprogs` 追従構造・ADR サマリー） |
-| [testing.md](testing.md) | テスト仕様・検証ガイド（CTest 6 スイート 30 関数・GUI テスト 11 件・ASan / CRT リーク検出 / `/analyze`） |
-| [roadmap.md](roadmap.md) | 完了済みマイルストーン（`v0.1.0`〜`v0.7.0`）および Phase 1〜4 開発ロードマップ |
+| [testing.md](testing.md) | テスト仕様・検証ガイド（CTest 6 スイート 32 関数・GUI テスト 11 件・ASan / CRT リーク検出 / `/analyze`） |
+| [roadmap.md](roadmap.md) | 完了済みマイルストーン（`v0.1.0`〜`v0.8.0`）および Phase 1〜4 開発ロードマップ |
 
 ## サブディレクトリ
 

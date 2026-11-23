@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **30 テスト関数**）が登録されています。`zeroext_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **32 テスト関数**）が登録されています。`zeroext_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -65,6 +65,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_write_stat_preserves_extra_times_and_extents` | `ext4_vfs_write_stat` 単一パス更新時の 256B iノード拡張時刻およびエクステント整合維持 |
 | `test_multi_group_backup_superblock_flush` | 複数ブロックグループ（140MB 規模）環境でのバックアップスーパーブロック／BGD フラッシュ安全検証 |
 | `test_concurrent_rw_and_dentry_invalidation_stress` | 並列 RW アクセスと Dentry 世代無効化・`fs_lock` が混在する高負荷ストレステスト（ASan 対象） |
+| `test_case_sensitive_coexistence` | `case_insensitive = 0` 時における `/Foo.txt` / `/foo.txt`・`/Sub` / `/sub` 共存・リネーム・削除・RO 再マウント永続性検証 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 
@@ -83,6 +84,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_extent_indirect_uninit_and_inline` | 既定 RO（Direct I/O ON）での従来型間接ブロック (`EXT4_STORAGE_INDIRECT`)、インラインデータ (`EXT4_INLINE_DATA_FL`)、未初期化エクステント (`is_uninit`) ゼロ埋め直読 |
 | `test_overlay_vfs_and_persistence` | Dirty ext4 の RO 下位マウント＋既定 Direct I/O 併用、Copy-up 書込・追記・再マウント永続性、ホワイトアウト (`.wh.*`)・不透過ディレクトリ、別 UUID イメージに対する `.wh.__ext4_lower_id` 拒否 (`-EINVAL`)、下位非破壊検証 |
 | `test_read_handle_cached_extents` | オープンハンドル (`ext4_file_handle_t.cached_extents`) 保持時のロックレス直読およびクローズ解放検証 |
+| `test_overlay_case_sensitive_upperdir` | `case_insensitive = 0` + NTFS Upperdir での `FileCaseSensitiveInfo` 設定／拒否保護、`.wh.__ext4_lower_id` の `:cs` 混用ブロック検証 |
 
 ### 2.6 `perfetto_trace` ([tests/test_perfetto_trace.c](../tests/test_perfetto_trace.c))
 

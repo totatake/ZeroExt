@@ -1,9 +1,9 @@
 # ロードマップ (`ZeroExt` / `zeroext`)
 
-本書は **ZeroExt**（`v0.7.0` 時点：`zeroext.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExtGui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
+本書は **ZeroExt**（`v0.8.0` 時点：`zeroext.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExtGui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
 
 > [!NOTE]
-> Phase 0 基盤（GUI アプリケーション `ZeroExtGui.exe`・Perfetto トレース出力 `--trace`）に加え、**Phase 1.1（GUI 英語 / 日本語 i18n）は `v0.5.0` で実装完了** し、`v0.6.0` では WinFsp/ext4 ターゲット検証による安全アンマウント保護を追加済みである。
+> Phase 0 基盤（GUI アプリケーション `ZeroExtGui.exe`・Perfetto トレース出力 `--trace`）に加え、**Phase 1.1（GUI 英語 / 日本語 i18n）は `v0.5.0` で実装完了** し、`v0.6.0` で安全アンマウント保護、`v0.8.0` で `--case-sensitive` マウント＆NTFS Upperdir 対応および GUI テーマ／レイアウト改善を追加済みである。
 
 ---
 
@@ -18,6 +18,7 @@
 | `v0.5.0` | 2026-11-21 | 同梱 `e2fsprogs` `1.47.4` 追従（`fs_lock` 導入）・ベンチマーク再評価、`ZeroExtGui.exe` 英語／日本語ライブ切替 (i18n)、Phase 1〜4 ロードマップ拡充 |
 | `v0.6.0` | 2026-11-21 | CLI `unmount` および GUI 残留ドライブ解除における `QueryDosDeviceW` / `GetVolumeInformationW` ターゲット安全性検証と単体／GUI テスト追加 |
 | `v0.7.0` | 2026-11-22 | OSS リポジトリ構造標準化（`CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `AGENTS.md`）、`docs/` の kebab-case 再編、`ADR-0001`〜`ADR-0013` 抽出、CI / Release ワークフロー分離 |
+| `v0.8.0` | 2026-11-23 | `--case-sensitive` モード実装（NTFS Upperdir `FileCaseSensitiveInfo`・`:cs` マーカーガード・事前検証／エラー翻訳・`_cs` 推奨パス）、`L:` 優先統一、Dark モード `ComboBox` 修正・GUI ヘッダー見切れ解消 |
 
 ---
 
@@ -114,7 +115,7 @@
   - Overlay におけるシンボリックリンク／ハードリンク挙動（Lower symlink 参照・Upper 側作成ルールと制限事項）の仕様確定と回帰テスト追加を行う。
 - **Windows 固有の名前空間エッジケース対策**:
   - `CON`, `AUX`, `NUL`, `COM1` 等の Windows 予約デバイス名や `:` / `*` / `?` 等を含む ext4 パスを安全に扱うためのガードと変換／アクセス抑止ルールを整理する。
-  - ext4 の大文字小文字区別（case-sensitive）ディレクトリ上で同一ディレクトリ内に `Foo.txt` と `foo.txt` が共存する場合の探索・解決優先順位をテストケース付きで明確化する。
+  - ext4 の大文字小文字区別については `v0.8.0` で `--case-sensitive` モードおよび NTFS Upperdir 対応（`FileCaseSensitiveInfo`）と共存テストを実装済み。今後は既定 Case-Insensitive モードにおける `Foo.txt` / `foo.txt` 衝突時の解決優先順位・診断ルールを引き続き整理する。
 
 ---
 
@@ -164,7 +165,7 @@
 
 以下は初期構想（旧 Phase 0 および初期リリース群）から既に実装・統合され、実運用および自動テストに組み込まれている基盤機能である。
 
-### A. デスクトップ GUI アプリケーション (`ZeroExtGui.exe`) — **実装済み (`v0.2.0` / `v0.5.0` / `v0.6.0`)**
+### A. デスクトップ GUI アプリケーション (`ZeroExtGui.exe`) — **実装済み (`v0.2.0` / `v0.5.0` / `v0.6.0` / `v0.8.0`)**
 
 - **実装場所**: `gui/ZeroExt.Gui/`（WPF / `.NET 10`）、テスト：`gui/ZeroExt.Gui.Tests/`（11 件自動テスト + `--self-test`）。
 - **実現済み機能**:

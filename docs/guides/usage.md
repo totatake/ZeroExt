@@ -38,14 +38,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1 -Clean
 `.\build\gui\ZeroExtGui.exe` を起動すると、CLI コマンドを意識せずに ext2 / ext3 / ext4 ボリュームの検査・マウント・管理を行えます。
 
 - **表示言語（英語 / 日本語）切替**:
-  - 既定では OS ロケールに応じて英語または日本語を自動選択し、画面上から再起動なしで即時切り替えできます（`v0.5.0` で追加）。
+  - 既定では OS ロケールに応じて自動選択され、ヘッダーの言語メニュー（`🌐 Auto (JA)` / `🌐 Auto (EN)` / `🌐 English` / `🌐 日本語`）から再起動なしで即時切り替えできます。
 - **ソース追加・検査**:
   - 起動時に接続中の物理ディスクを自動スキャンします（非管理者権限の場合はツールバーの **「管理者権限で再起動」** から UAC 昇格できます）。
-  - `.img` / `.raw` ファイルは **「イメージを追加...」** ボタンまたはウィンドウへのドラッグ＆ドロップで追加できます（非管理者権限のままマウント可能）。
-  - **「新規作成...」** から新規 ext4 イメージを作成できます。
+  - `.img` / `.raw` ファイルの追加（**「イメージを追加...」** ボタンまたはドラッグ＆ドロップ）と新規 ext4 イメージ作成（**「新規作成...」**）は左ペイン下部から実行できます（非管理者権限のまま利用可能）。
 - **マウント設定タブ**:
-  - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（NTFS Upperdir の `.wh.__ext4_lower_id` 事前チェック機能付き）・**Read-Write**（Dirty 時の自動 RO フォールバック選択可）を選択し、空きドライブレターまたは空 NTFS フォルダへワンクリックでマウントします。
-  - 詳細設定では Direct I/O 切替・LRU キャッシュブロック数・デバッグログ・Perfetto トレース出力・同等 CLI コマンドのコピーを行えます。
+  - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（NTFS Upperdir の `.wh.__ext4_lower_id` 事前チェック機能付き）・**Read-Write**（Dirty 時の自動 RO フォールバック選択可）を選択し、空きドライブレター（既定は `L:` 優先）または空 NTFS フォルダへワンクリックでマウントします。
+  - 詳細設定では Direct I/O 切替・大文字／小文字の区別（`--case-sensitive`）・LRU キャッシュブロック数・デバッグログ・Perfetto トレース出力・同等 CLI コマンドのコピーを行えます。
 - **アクティブマウントタブ & システムトレイ**:
   - 稼働中のマウントごとの読取／書込スループット（MB/s）および累計転送量をリアルタイム表示し、「エクスプローラーで開く」や安全なアンマウントを実行できます。
   - マウント中にウィンドウを閉じた場合はシステムトレイへ最小化してマウントを維持できます（トレイメニューから再表示・開く・一括アンマウント終了が可能）。
@@ -134,6 +133,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 主なオプション一覧：
 - `--rw`: ext4 への直接 Read-Write マウントを有効化（未指定時は Read-Only、`--overlay` とは併用不可）
 - `--overlay <dir>`: NTFS Upperdir を指定して非破壊 Overlay RW マウント（Lower ext4 は厳密 RO、`--rw` とは併用不可）
+- `--case-sensitive`: ファイル名・ディレクトリ名の大文字・小文字を区別してマウント（`--overlay` 併用時は空の NTFS Upperdir に `FileCaseSensitiveInfo` 属性を設定し、`.wh.__ext4_lower_id` に `:cs` 識別子を記録）
 - `--no-direct-io`: RO / `--overlay` 時の既定 Direct Extent I/O を無効化し、標準ブロックキャッシュ経路を使用
 - `--direct-io`: Direct Extent I/O を明示有効化（RO / `--overlay` では既定 ON のため通常不要、`--rw` とは併用不可）
 - `--cache-blocks <N>`: LRU ブロックキャッシュ数（既定 2048 ブロック = 8MB @ 4KB）
