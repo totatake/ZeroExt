@@ -101,10 +101,6 @@
 
                     <Button Content="{DynamicResource Str_RescanBtn}" Style="{StaticResource SecondaryButtonStyle}"
                             Command="{Binding RefreshDisksCommand}" Margin="0,0,8,0" />
-                    <Button Content="{DynamicResource Str_AddImageBtn}" Style="{StaticResource SecondaryButtonStyle}"
-                            Click="OnAddImageClick" Margin="0,0,8,0" />
-                    <Button Content="{DynamicResource Str_NewImageBtn}" Style="{StaticResource SecondaryButtonStyle}"
-                            Click="OnCreateImageClick" Margin="0,0,8,0" />
                     <Button Content="{DynamicResource Str_ForceUnmountBtn}" Style="{StaticResource SecondaryButtonStyle}"
                             Click="OnForceUnmountClick" Margin="0,0,8,0" />
                     <ComboBox SelectedValuePath="Tag"
@@ -368,11 +364,25 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <Border Grid.Row="2" Padding="12,8"
+                    <Border Grid.Row="2" Padding="12,10"
                             BorderBrush="{DynamicResource SubtleBorderBrush}" BorderThickness="0,1,0,0">
-                        <TextBlock Text="{DynamicResource Str_DropImagesHint}"
-                                   FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"
-                                   HorizontalAlignment="Center" TextWrapping="Wrap" />
+                        <StackPanel>
+                            <UniformGrid Columns="2" Margin="0,0,0,8">
+                                <Button Content="{DynamicResource Str_AddImageBtn}"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        Padding="8,6"
+                                        Margin="0,0,4,0"
+                                        Click="OnAddImageClick" />
+                                <Button Content="{DynamicResource Str_NewImageBtn}"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        Padding="8,6"
+                                        Margin="4,0,0,0"
+                                        Click="OnCreateImageClick" />
+                            </UniformGrid>
+                            <TextBlock Text="{DynamicResource Str_DropImagesHint}"
+                                       FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"
+                                       HorizontalAlignment="Center" TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
                 </Grid>
             </Border>
