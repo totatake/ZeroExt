@@ -13,7 +13,7 @@ Windows から Linux (ext4) 上の巨大なデータ（例：AI モデル、学�
 
 | 方式 / ツール | ドライブ直接マウント | Warm 読取性能<br><sub>(Seq 1MB / Rnd 4KB)</sub> | Cold 実 SSD 直読<br><sub>(Seq 1MB)</sub> | 現代 ext4 対応<br><sub>(`metadata_csum` / 64bit)</sub> | BSOD リスク / 署名要件 | 非破壊書込<br><sub>(`Overlay`)</sub> |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt`（本ツール）** | **◎ 標準ドライブ (`M:`)** | **`10,543` / `991 MB/s`**<br><sub>(`Native NTFS` の `1.00x〜1.08x`)</sub> | **`1,564 MB/s`**<br><sub>(`WSL2 9P` の `9.73x`)</sub> | **◎ 本家 `e2fsprogs` (`libext2fs`)** | **ゼロ**（ユーザー空間 / WinFsp） | **◎ (`--overlay`)** |
+| **`ZeroExt`（本ツール）** | **◎ 標準ドライブ (`L:`)** | **`10,543` / `991 MB/s`**<br><sub>(`Native NTFS` の `1.00x〜1.08x`)</sub> | **`1,564 MB/s`**<br><sub>(`WSL2 9P` の `9.73x`)</sub> | **◎ 本家 `e2fsprogs` (`libext2fs`)** | **ゼロ**（ユーザー空間 / WinFsp） | **◎ (`--overlay`)** |
 | **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost\...`) | `196` / `17.9 MB/s`<br><sub>(`ZeroExt` 比 `1/54〜1/72`)</sub> | `161 MB/s` | ◎（Linux カーネル） | 低（VM 常駐・メモリ占有大） | × |
 | **旧来の非公式カーネル FSD**<br><sub>(`Ext2Fsd` 等)</sub> | ◎ | 高速（カーネル空間） | 高速 | △〜×（最新 ext4 機能非対応の系統が多い） | **高**（カーネル不具合即 BSOD / 署名問題） | × |
 | **商用ドライバ**<br><sub>(`Paragon Linux File Systems` 等)</sub> | ◎ | 高速（カーネル空間） | 高速 | ◎（有償・プロプライエタリ） | 中（サードパーティ `.sys` 常駐） | × |
@@ -53,7 +53,7 @@ flowchart LR
 
     App -->|"WSL2 (\\wsl.localhost)"| WSL
     App -->|"素朴なユーザー空間 FSD"| Naive
-    App -->|"ZeroExt (M:)"| ZeroExtPath
+    App -->|"ZeroExt (L:)"| ZeroExtPath
 ```
 
 #### Read / `mmap` 時のシーケンス比較
@@ -70,7 +70,7 @@ sequenceDiagram
     App->>WSL: ReadFile 1 MB (via \\wsl.localhost)
     WSL-->>App: Plan9/HVSocket RPC で毎回パケット化・コピー (167.5 MB/s)
 
-    App->>Kern: ReadFile 1 MB (ZeroExt M:)
+    App->>Kern: ReadFile 1 MB (ZeroExt L:)
     Kern->>Ext: FspRead(Offset, 1 MB)
     Ext->>Ext: cached_extents 二分探索 O(log N) (ファイル開放後ロック不要)
     Ext->>SSD: ReadFile(FILE_FLAG_OVERLAPPED) で連続エクステント一括直読
@@ -81,7 +81,7 @@ sequenceDiagram
     App->>WSL: ReadFile (via \\wsl.localhost)
     WSL-->>App: Linux 側キャッシュに載っていても 9P/VM 越えで頭打ち (198.4 MB/s)
 
-    App->>Kern: ReadFile / mmap fault (ZeroExt M:)
+    App->>Kern: ReadFile / mmap fault (ZeroExt L:)
     Note right of Kern: RO 時は FileInfoTimeout=INFINITE により NT Cache Manager CcCopyRead が有効
     Kern-->>App: ユーザー空間 zeroext.exe を呼ばずメモリ直結応答 (10,524 MB/s / Native NTFS 比 1.01x)
 ```
@@ -146,10 +146,10 @@ Linux デュアルブート環境や組込みイメージを Windows から扱�
 - **推奨コマンド例**:
   ```powershell
   # モデル共有 (Read-Only + Direct I/O + NT Cache、最も安全・高速)
-  zeroext.exe mount --source \\.\PhysicalDrive2 --partition 3 --mountpoint M:
+  zeroext.exe mount --source \\.\PhysicalDrive2 --partition 3 --mountpoint L:
 
   # ComfyUI 等でモデルディレクトリ配下へログやキャッシュ書込も必要な場合 (非破壊 Overlay)
-  zeroext.exe mount --source \\.\PhysicalDrive2 --partition 3 --mountpoint M: --overlay D:\ai_overlay_upper
+  zeroext.exe mount --source \\.\PhysicalDrive2 --partition 3 --mountpoint L: --overlay D:\ai_overlay_upper
   ```
 - **注意点**: Linux の休止状態（Hibernate）や高速スタートアップ状態ではなく、Linux を完全にシャットダウンしたパーティションを対象にしてください。
 
@@ -164,7 +164,7 @@ Linux デュアルブート環境や組込みイメージを Windows から扱�
 
 ### ユースケース 3：大容量クリエイティブ素材・ゲームアセットの OS 間共有（動画 RAW・3D アセット・ライブラリ）
 - **課題**: OS 間の受け渡しに使われがちな exFAT はジャーナリングがなく電源断に弱い一方、NTFS は Linux 側での権限・シンボリックリンク・大容量ビルドに不向きです。
-- **ZeroExt が効く理由**: Linux 側の高信頼 ext4 パーティションに置いた 4K/8K RAW 動画やゲームアセットを Windows の動画編集・開発環境へドライブレター（`M:`）として透過マウントし、プロキシファイルやプロジェクト設定だけ `--overlay` で NTFS Upperdir に保存できます。
+- **ZeroExt が効く理由**: Linux 側の高信頼 ext4 パーティションに置いた 4K/8K RAW 動画やゲームアセットを Windows の動画編集・開発環境へドライブレター（`L:`）として透過マウントし、プロキシファイルやプロジェクト設定だけ `--overlay` で NTFS Upperdir に保存できます。
 
 ---
 
@@ -195,7 +195,7 @@ Linux デュアルブート環境や組込みイメージを Windows から扱�
   zeroext.exe cat .\rootfs.img /etc/fstab
 
   # 非破壊テストマウント (.img はそのまま、変更差分だけ .\test_diff へ)
-  zeroext.exe mount --source .\rootfs.img --partition 2 --mountpoint M: --overlay .\test_diff
+  zeroext.exe mount --source .\rootfs.img --partition 2 --mountpoint L: --overlay .\test_diff
   ```
 
 ---

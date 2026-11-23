@@ -10,7 +10,7 @@ A high-performance **ext2 / ext3 / ext4** user-space filesystem driver, CLI tool
 
 | Approach | Mount Style | Warm Read (`1MB` / `4KB Rnd`) | Cold NVMe (`1MB`) | Modern ext4 | BSOD Risk | Non-Destructive Write |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt` (Default RO / DIO)** | **Drive (`M:` etc.)** | **`10,524` / `1,017 MB/s`**<br><sub>(`1.01x–1.04x` vs Native NTFS)</sub> | **`1,551 MB/s`** | **Yes (`libext2fs`)** | **Zero** | **Yes (`--overlay`)** |
+| **`ZeroExt` (Default RO / DIO)** | **Drive (`L:` etc.)** | **`10,524` / `1,017 MB/s`**<br><sub>(`1.01x–1.04x` vs Native NTFS)</sub> | **`1,551 MB/s`** | **Yes (`libext2fs`)** | **Zero** | **Yes (`--overlay`)** |
 | **WSL2 (`wsl --mount` + 9P)** | UNC (`\\wsl.localhost`) | `198` / `17.6 MB/s`<br><sub>(`1/53–1/69` of `ZeroExt`)</sub> | `168 MB/s` | Yes | Low (VM req.) | No |
 | **Legacy Kernel FSD (`Ext2Fsd`, etc.)** | Drive | Fast | Fast | Partial / Legacy | **High** | No |
 | **Commercial Drivers / Viewers** | Drive / Viewer | Fast / Copy req. | Fast / Copy req. | Yes / Partial | Medium / Zero | No |
@@ -104,7 +104,7 @@ After building, launch the GUI mount manager from `.\build\gui\ZeroExtGui.exe`.
 
 ## Installing WinFsp (Required for Drive Mounting)
 
-To mount a volume to a Windows drive letter (e.g. `M:`) using `zeroext.exe mount`, install the **WinFsp** runtime first (offline commands such as `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` work without WinFsp):
+To mount a volume to a Windows drive letter (e.g. `L:`) using `zeroext.exe mount`, install the **WinFsp** runtime first (offline commands such as `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` work without WinFsp):
 
 - **Using winget (Recommended)**:
   ```powershell
@@ -136,16 +136,16 @@ zeroext.exe cat test.img /data/hello.txt
 zeroext.exe extents test.img /data/hello.txt
 
 # Mount to a Windows drive letter via WinFsp (requires WinFsp runtime; defaults to RO + Direct Extent I/O ON)
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M:
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
 
 # Explicitly disable Direct I/O and mount via standard LRU cache
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --no-direct-io
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --no-direct-io
 
 # Read-Write mount (explicit --rw; Direct I/O is automatically disabled)
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
 
 # Overlay mount: keep ext4 Read-Only + Direct I/O ON, and redirect writes to an NTFS folder
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 ```
 
 ## License

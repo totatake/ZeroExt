@@ -10,7 +10,7 @@ Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高�
 
 | 方式 | マウント形態 | Warm 読取 (`1MB` / `4KB Rnd`) | Cold 実 SSD (`1MB`) | 現代 ext4 対応 | BSOD リスク | 非破壊書込 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt` (既定 RO / DIO)** | **◎ (`M:` 等)** | **`10,524` / `1,017 MB/s`**<br><sub>(`Native NTFS` 比 `1.01x〜1.04x`)</sub> | **`1,551 MB/s`** | **◎ (`libext2fs`)** | **ゼロ** | **◎ (`--overlay`)** |
+| **`ZeroExt` (既定 RO / DIO)** | **◎ (`L:` 等)** | **`10,524` / `1,017 MB/s`**<br><sub>(`Native NTFS` 比 `1.01x〜1.04x`)</sub> | **`1,551 MB/s`** | **◎ (`libext2fs`)** | **ゼロ** | **◎ (`--overlay`)** |
 | **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost`) | `198` / `17.6 MB/s`<br><sub>(`ZeroExt` 比 `1/53〜1/69`)</sub> | `168 MB/s` | ◎ | 低（VM 要） | × |
 | **旧来のカーネル FSD (`Ext2Fsd` 等)** | ◎ | 高速 | 高速 | △〜× | **高** | × |
 | **商用ドライバ / 読取ビューア** | ◎ / × | 高速 / 複製要 | 高速 / 複製要 | ◎ / ○ | 中 / ゼロ | × |
@@ -102,7 +102,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
 
 ## WinFsp のインストール（ドライブマウント実行時に必須）
 
-`zeroext.exe mount` を使用して Windows ドライブレター（例: `M:`）へマウントするには、事前に **WinFsp** ランタイムをインストールする必要があります（オフラインコマンド `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等は WinFsp なしでも動作します）。
+`zeroext.exe mount` を使用して Windows ドライブレター（例: `L:`）へマウントするには、事前に **WinFsp** ランタイムをインストールする必要があります（オフラインコマンド `list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等は WinFsp なしでも動作します）。
 
 以下のいずれかの方法でインストールしてください：
 
@@ -136,16 +136,16 @@ zeroext.exe cat test.img /data/hello.txt
 zeroext.exe extents test.img /data/hello.txt
 
 # WinFsp で Windows ドライブへマウント (WinFsp ランタイム要・既定は Read-Only + ダイレクトエクステント直読 ON)
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M:
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
 
 # Direct I/O を明示的に無効化して標準 LRU キャッシュ経由でマウント
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --no-direct-io
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --no-direct-io
 
 # Read-Write マウント（明示的に --rw を指定・Direct I/O は自動無効）
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
 
 # ext4 は Read-Only + 直読 (既定 ON) に保ち、書き込みだけ Windows NTFS フォルダへ逃がす Overlay マウント
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
+zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 ```
 
 ## ライセンス

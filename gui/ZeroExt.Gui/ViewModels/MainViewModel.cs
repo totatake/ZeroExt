@@ -171,7 +171,7 @@ namespace ZeroExt.Gui.ViewModels
         private PartitionItem? _selectedPartition;
         private MountMode _selectedMode = MountMode.ReadOnly;
         private bool _useFolderMountPoint;
-        private string _selectedDriveLetter = "M:";
+        private string _selectedDriveLetter = "L:";
         private string _mountFolderPath = string.Empty;
         private string _overlayUpperDir = string.Empty;
         private UpperDirCheckResult _upperDirCheck = new UpperDirCheckResult
@@ -705,7 +705,7 @@ namespace ZeroExt.Gui.ViewModels
             {
                 if (SelectedPartition == null)
                 {
-                    return "zeroext.exe mount --source <source> --mountpoint M:";
+                    return "zeroext.exe mount --source <source> --mountpoint L:";
                 }
                 return ZeroExtArgBuilder.BuildMountPreviewCommand(BuildCurrentMountRequest());
             }

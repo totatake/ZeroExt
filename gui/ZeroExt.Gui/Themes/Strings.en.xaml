@@ -255,7 +255,7 @@
     <sys:String x:Key="Str_ForceUnmountDriveLabel">Drive Letter to Remove</sys:String>
     <sys:String x:Key="Str_ForceUnmountDialogBtn">Remove Drive</sys:String>
     <sys:String x:Key="Str_ForceUnmountBusy">Removing...</sys:String>
-    <sys:String x:Key="Str_ForceUnmountErrInvalid">Please specify a valid drive letter other than C: (e.g. M:).</sys:String>
+    <sys:String x:Key="Str_ForceUnmountErrInvalid">Please specify a valid drive letter other than C: (e.g. L:).</sys:String>
     <sys:String x:Key="Str_ForceUnmountSuccessFmt">Removed drive definition for {0}.</sys:String>
     <sys:String x:Key="Str_ForceUnmountNotFoundFmt">No active mount definition found for {0} (exit={1}).</sys:String>
     <sys:String x:Key="Str_ForceUnmountNoCandidates">No stale ZeroExt/WinFsp drive letters were detected (normal drives are protected).</sys:String>
@@ -266,7 +266,7 @@
 
     <!-- WinFspGuideDialog -->
     <sys:String x:Key="Str_WinFspGuideTitle">WinFsp Runtime Setup Guide</sys:String>
-    <sys:String x:Key="Str_WinFspGuideDesc">Mounting ext2/3/4 volumes as a Windows drive letter (e.g. M:) or empty folder requires the WinFsp runtime (Core component). Even without WinFsp, File Browser and image creation remain available.</sys:String>
+    <sys:String x:Key="Str_WinFspGuideDesc">Mounting ext2/3/4 volumes as a Windows drive letter (e.g. L:) or empty folder requires the WinFsp runtime (Core component). Even without WinFsp, File Browser and image creation remain available.</sys:String>
     <sys:String x:Key="Str_WinFspMethod1">Option 1: Install via winget (Recommended)</sys:String>
     <sys:String x:Key="Str_WinFspMethod2">Option 2: Install via Chocolatey</sys:String>
     <sys:String x:Key="Str_WinFspMethod3">Option 3: Official Installer (.msi)</sys:String>

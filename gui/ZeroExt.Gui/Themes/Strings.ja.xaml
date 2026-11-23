@@ -255,7 +255,7 @@
     <sys:String x:Key="Str_ForceUnmountDriveLabel">解除するドライブレター</sys:String>
     <sys:String x:Key="Str_ForceUnmountDialogBtn">ドライブを解除</sys:String>
     <sys:String x:Key="Str_ForceUnmountBusy">解除中...</sys:String>
-    <sys:String x:Key="Str_ForceUnmountErrInvalid">C: 以外の有効なドライブレター（例: M:）を指定してください。</sys:String>
+    <sys:String x:Key="Str_ForceUnmountErrInvalid">C: 以外の有効なドライブレター（例: L:）を指定してください。</sys:String>
     <sys:String x:Key="Str_ForceUnmountSuccessFmt">{0} のドライブ定義を解除しました。</sys:String>
     <sys:String x:Key="Str_ForceUnmountNotFoundFmt">{0} に対するマウントが見つかりませんでした (exit={1})。</sys:String>
     <sys:String x:Key="Str_ForceUnmountNoCandidates">現在、解除可能な ZeroExt 残留ドライブは検出されませんでした（通常のドライブは保護されています）。</sys:String>
@@ -266,7 +266,7 @@
 
     <!-- WinFspGuideDialog -->
     <sys:String x:Key="Str_WinFspGuideTitle">WinFsp ランタイム セットアップガイド</sys:String>
-    <sys:String x:Key="Str_WinFspGuideDesc">Windows のドライブレター（例: M:）や空フォルダとして ext2/3/4 ボリュームをマウントするには、WinFsp ランタイム（Core コンポーネント）のインストールが必要です。未導入の場合でも「ファイルブラウザ」やイメージ作成機能はそのまま利用できます。</sys:String>
+    <sys:String x:Key="Str_WinFspGuideDesc">Windows のドライブレター（例: L:）や空フォルダとして ext2/3/4 ボリュームをマウントするには、WinFsp ランタイム（Core コンポーネント）のインストールが必要です。未導入の場合でも「ファイルブラウザ」やイメージ作成機能はそのまま利用できます。</sys:String>
     <sys:String x:Key="Str_WinFspMethod1">方法 1: winget でインストール（推奨）</sys:String>
     <sys:String x:Key="Str_WinFspMethod2">方法 2: Chocolatey でインストール</sys:String>
     <sys:String x:Key="Str_WinFspMethod3">方法 3: 公式インストーラ (.msi)</sys:String>

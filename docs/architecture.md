@@ -66,7 +66,7 @@ sequenceDiagram
     participant IO as win32_io_manager
     participant Dev as PhysicalDrive / .img
 
-    User->>CLI: zeroext mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: [--overlay C:\upper]
+    User->>CLI: zeroext mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: [--overlay C:\upper]
     CLI->>Disk: パーティション位置解決 (GPT/MBR/EBR) & ext4_probe_partition
     Disk-->>CLI: OffsetBytes, SizeBytes, Journal状態
     CLI->>VFS: ext4_vfs_mount(cfg) (Overlay時はLowerを厳密ROオープン)

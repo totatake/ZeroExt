@@ -84,7 +84,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1 -Clean
 ### 3.2 WinFsp のインストールと Windows ドライブレターへのマウント
 
 > [!IMPORTANT]
-> 実機のドライブレター（例: `M:`）としてマウントするには、事前に **WinFsp ランタイム** がインストールされている必要があります（`zeroext.exe` が実行時に `winfsp-x64.dll` を自動検出・ロードします）。
+> 実機のドライブレター（例: `L:`）としてマウントするには、事前に **WinFsp ランタイム** がインストールされている必要があります（`zeroext.exe` が実行時に `winfsp-x64.dll` を自動検出・ロードします）。
 > 物理ディスク（`\\.\PhysicalDriveX`）を対象にする場合は、**管理者権限のターミナル** から実行してください。
 
 #### WinFsp のインストール方法
@@ -114,17 +114,17 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 ```powershell
 # Read-Only + Direct Extent I/O マウント（既定動作：フラグ不要・GGUF 等も高速かつ安全に読取可）
-.\build\zeroext.exe mount --source test.img --mountpoint M:
+.\build\zeroext.exe mount --source test.img --mountpoint L:
 
 # Direct I/O を無効化して標準の 8MB ブロック LRU キャッシュ経路のみでマウント
-.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --no-direct-io
+.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --no-direct-io
 
 # Read-Write マウント（明示的に --rw を指定、Dirty Journal 検出時は自動拒否、Direct I/O は自動無効）
-.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --rw
+.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
 
 # 非破壊 Overlay マウント（Lower の ext4 は常に RO＋Direct I/O 既定 ON、作成/変更は NTFS Upperdir へ保存）
 # ※ 初回利用時に Upperdir に .wh.__ext4_lower_id を記録し、別の ext4 への誤再利用を自動ブロックします
-.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint M: --overlay D:\ext4_upper
+.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 
 # NTFS の空きディレクトリへ直接マウントすることも可能
 # （親ディレクトリは通常の NTFS 書き込み領域、サブフォルダ配下だけを Overlay/ext4 として公開）
@@ -155,7 +155,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 プロセスが強制終了や異常終了してドライブレターだけが残ってしまった場合は、マウント時と同じ権限（物理ディスクの場合は管理者権限）で以下を実行してドライブ定義を解除できます（安全のため `QueryDosDeviceW` と `GetVolumeInformationW` により対象ドライブを検査し、`C:` や通常の NTFS/exFAT ドライブ等、ZeroExt/WinFsp 以外のボリュームは解除を拒否します）：
 
 ```powershell
-.\build\zeroext.exe unmount M:
+.\build\zeroext.exe unmount L:
 ```
 
 > [!NOTE]
@@ -171,7 +171,7 @@ Direct I/O の有無による VFS 単体層・WinFsp 実マウント経由のス
 
 ```powershell
 # マウント中の動作をトレース（Ctrl+C またはアンマウント時に書き出し）
-.\build\zeroext.exe mount --source test.img --mountpoint M: --trace .\zeroext_mount_trace.json
+.\build\zeroext.exe mount --source test.img --mountpoint L: --trace .\zeroext_mount_trace.json
 
 # ベンチマーク実行中のロック競合・Direct I/O・LRU キャッシュ挙動をトレース
 .\build\zeroext_bench.exe --trace .\zeroext_bench_trace.json

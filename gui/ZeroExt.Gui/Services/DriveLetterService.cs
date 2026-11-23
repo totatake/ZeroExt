@@ -124,10 +124,10 @@ namespace ZeroExt.Gui.Services
                 }
             }
 
-            // Prefer M:..Z: first (matching ZeroExt docs), then E:..L:, then D:
+            // Prefer L:..Z: first (matching ZeroExt docs), then E:..K:, then D:
             var ordered = new List<char>();
-            for (char c = 'M'; c <= 'Z'; c++) ordered.Add(c);
-            for (char c = 'E'; c <= 'L'; c++) ordered.Add(c);
+            for (char c = 'L'; c <= 'Z'; c++) ordered.Add(c);
+            for (char c = 'E'; c <= 'K'; c++) ordered.Add(c);
             ordered.Add('D');
 
             var available = new List<string>();
