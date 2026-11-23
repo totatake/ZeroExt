@@ -109,7 +109,7 @@
                             Click="OnForceUnmountClick" Margin="0,0,8,0" />
                     <ComboBox SelectedValuePath="Tag"
                               SelectedValue="{Binding LanguageSetting, Mode=TwoWay}"
-                              Width="92"
+                              MinWidth="118"
                               Margin="0,0,8,0"
                               VerticalAlignment="Center"
                               ToolTip="{DynamicResource Str_LanguageToolTip}">

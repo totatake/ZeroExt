@@ -28,9 +28,9 @@
     <sys:String x:Key="Str_ThemeLight">☀ ライト</sys:String>
     <sys:String x:Key="Str_ThemeDark">🌙 ダーク</sys:String>
     <sys:String x:Key="Str_LanguageToolTip">表示言語を選択（Auto は OS ロケールに従います）</sys:String>
-    <sys:String x:Key="Str_LangAuto">Auto</sys:String>
-    <sys:String x:Key="Str_LangEnglish">English</sys:String>
-    <sys:String x:Key="Str_LangJapanese">日本語</sys:String>
+    <sys:String x:Key="Str_LangAuto">🌐 Auto (JA)</sys:String>
+    <sys:String x:Key="Str_LangEnglish">🌐 English</sys:String>
+    <sys:String x:Key="Str_LangJapanese">🌐 日本語</sys:String>
     <sys:String x:Key="Str_CoreMissingBanner">バックエンドエンジン zeroext.exe が見つかりません。build\zeroext.exe をビルドするか、右のボタンから場所を指定してください。</sys:String>
     <sys:String x:Key="Str_CoreMissingBrowseBtn">zeroext.exe を指定...</sys:String>
     <sys:String x:Key="Str_WinFspMissingBanner">WinFsp ランタイムがインストールされていないため Windows ドライブへのマウントは無効です（ファイルブラウザやイメージ作成は利用可能です）。</sys:String>

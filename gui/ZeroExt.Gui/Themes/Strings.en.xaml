@@ -28,9 +28,9 @@
     <sys:String x:Key="Str_ThemeLight">☀ Light</sys:String>
     <sys:String x:Key="Str_ThemeDark">🌙 Dark</sys:String>
     <sys:String x:Key="Str_LanguageToolTip">Select UI language (Auto follows OS locale)</sys:String>
-    <sys:String x:Key="Str_LangAuto">Auto</sys:String>
-    <sys:String x:Key="Str_LangEnglish">English</sys:String>
-    <sys:String x:Key="Str_LangJapanese">日本語</sys:String>
+    <sys:String x:Key="Str_LangAuto">🌐 Auto (EN)</sys:String>
+    <sys:String x:Key="Str_LangEnglish">🌐 English</sys:String>
+    <sys:String x:Key="Str_LangJapanese">🌐 日本語</sys:String>
     <sys:String x:Key="Str_CoreMissingBanner">Backend engine zeroext.exe was not found. Build build\zeroext.exe or locate it using the button on the right.</sys:String>
     <sys:String x:Key="Str_CoreMissingBrowseBtn">Locate zeroext.exe...</sys:String>
     <sys:String x:Key="Str_WinFspMissingBanner">WinFsp runtime is not installed, so mounting as a Windows drive is disabled (File Browser and image creation still work).</sys:String>
