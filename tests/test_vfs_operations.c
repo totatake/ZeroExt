@@ -845,6 +845,85 @@ static int test_concurrent_rw_and_dentry_invalidation_stress(void) {
     return 0;
 }
 
+static int test_case_sensitive_coexistence(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext2_ino_t ino_upper = 0, ino_lower = 0;
+    ext4_stat_t st;
+    uint32_t w = 0, r = 0;
+    char buf[64];
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_cs.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "CS_TEST"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    /* Create files and dirs differing only in case */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/Foo.txt", 0, 0644, 0, &ino_upper));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino_upper, "UPPER_FOO", 0, 9, 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/foo.txt", 0, 0644, 0, &ino_lower));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino_lower, "lower_foo", 0, 9, 0, &w, NULL));
+    TEST_ASSERT(ino_upper != ino_lower);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/Sub", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/sub", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/Sub/Item.txt", 0, 0644, 0, &ino_upper));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino_upper, "UPPER_SUB", 0, 9, 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/sub/item.txt", 0, 0644, 0, &ino_lower));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino_lower, "lower_sub", 0, 9, 0, &w, NULL));
+
+    /* Unmatched case must return -ENOENT */
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/FOO.TXT", &st));
+
+    /* Verify distinct contents */
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/Foo.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, sizeof(buf), &r));
+    TEST_ASSERT_EQ_INT(9, r);
+    TEST_ASSERT(strcmp(buf, "UPPER_FOO") == 0);
+
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/foo.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, sizeof(buf), &r));
+    TEST_ASSERT_EQ_INT(9, r);
+    TEST_ASSERT(strcmp(buf, "lower_foo") == 0);
+
+    /* Rename and unlink one case variant without affecting the other */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/Foo.txt", "/Bar.txt", 0));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/Foo.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/foo.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/foo.txt"));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/foo.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/Bar.txt", &st));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Remount RO with case_insensitive = 0 and verify persistence */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/Bar.txt", &st));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, sizeof(buf), &r));
+    TEST_ASSERT(strcmp(buf, "UPPER_FOO") == 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/Sub/Item.txt", &st));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/sub/Item.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/sub/item.txt", &st));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -857,5 +936,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_write_stat_preserves_extra_times_and_extents);
     RUN_TEST(test_multi_group_backup_superblock_flush);
     RUN_TEST(test_concurrent_rw_and_dentry_invalidation_stress);
+    RUN_TEST(test_case_sensitive_coexistence);
     return suite_failures;
 }

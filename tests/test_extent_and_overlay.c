@@ -527,6 +527,124 @@ static int test_read_handle_cached_extents(void) {
     return 0;
 }
 
+static int test_overlay_case_sensitive_upperdir(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext2_ino_t ino = 0;
+    uint32_t w = 0, r = 0;
+    ext4_stat_t st;
+    char buf[64];
+    int rc;
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_cs_lower.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "ov_cs_upper_dir");
+    DeleteFileA(img_path);
+    cleanup_dir_recursive(upper_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "OVCS"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/Foo.txt", 0, 0644, 0, &ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, "lower-FOO", 0, 9, 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/foo.txt", 0, 0644, 0, &ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, "lower-foo", 0, 9, 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/dir", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/dir/A.txt", 0, 0644, 0, &ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, "lower-A", 0, 7, 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/dir/a.txt", 0, 0644, 0, &ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, "lower-a", 0, 7, 0, &w, NULL));
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    cfg.overlay_upper_dir = upper_dir;
+    rc = ext4_vfs_mount(&cfg, &ctx);
+    if (rc != 0) {
+        /* If host filesystem does not support NTFS FileCaseSensitiveInfo, it must fail explicitly */
+        TEST_ASSERT(rc == -ENOTSUP || rc == -EACCES || rc == -ENOTEMPTY);
+        cleanup_dir_recursive(upper_dir);
+        DeleteFileA(img_path);
+        return 0;
+    }
+
+    /* Independent copy-up & overwrite for /Foo.txt and /foo.txt */
+    {
+        ext4_file_handle_t *h1 = NULL, *h2 = NULL;
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/Foo.txt", 1, &h1));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/foo.txt", 1, &h2));
+        TEST_ASSERT(h1->ino != h2->ino);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h1->ino, "upper-FOO!", 0, 10, 0, &w, NULL));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h2->ino, "upper-foo!", 0, 10, 0, &w, NULL));
+        ext4_vfs_close_handle(h1);
+        ext4_vfs_close_handle(h2);
+    }
+
+    /* Case-distinct subdirectories and files created in upperdir */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/Sub", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/sub", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/Sub/data.txt", 0, 0644, 0, &ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, "SUB-U", 0, 5, 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/sub/data.txt", 0, 0644, 0, &ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, "sub-l", 0, 5, 0, &w, NULL));
+
+    /* Unlink one case variant in lower-backed dir */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/dir/a.txt"));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/dir/a.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/dir/A.txt", &st));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/FOO.TXT", &st));
+
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    /* Reusing case-sensitive upperdir with case_insensitive=1 must be rejected */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    cfg.overlay_upper_dir = upper_dir;
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+
+    /* Reopening with case_insensitive=0 must preserve distinct upperdir contents */
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/Foo.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, sizeof(buf), &r));
+    TEST_ASSERT(strcmp(buf, "upper-FOO!") == 0);
+
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/foo.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, sizeof(buf), &r));
+    TEST_ASSERT(strcmp(buf, "upper-foo!") == 0);
+
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/Sub/data.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, sizeof(buf), &r));
+    TEST_ASSERT(strcmp(buf, "SUB-U") == 0);
+
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/sub/data.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, sizeof(buf), &r));
+    TEST_ASSERT(strcmp(buf, "sub-l") == 0);
+
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/dir/a.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/dir/A.txt", &st));
+
+    ext4_vfs_unmount(ctx);
+    cleanup_dir_recursive(upper_dir);
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_extent_and_overlay(void) {
     int suite_failures = 0;
     printf("\n=== Suite: extent_and_overlay ===\n");
@@ -534,5 +652,6 @@ int run_suite_extent_and_overlay(void) {
     RUN_TEST(test_extent_indirect_uninit_and_inline);
     RUN_TEST(test_overlay_vfs_and_persistence);
     RUN_TEST(test_read_handle_cached_extents);
+    RUN_TEST(test_overlay_case_sensitive_upperdir);
     return suite_failures;
 }

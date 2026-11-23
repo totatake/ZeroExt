@@ -668,6 +668,15 @@
                                                            Margin="20,0,0,8"
                                                            Visibility="{Binding IsReadWriteMode, Converter={StaticResource BoolToVis}}" />
 
+                                                <CheckBox Content="{DynamicResource Str_CaseSensitiveCheck}"
+                                                          IsChecked="{Binding CaseSensitive}"
+                                                          Margin="0,4,0,4" />
+                                                <TextBlock Text="{DynamicResource Str_CaseSensitiveOverlayNote}"
+                                                           FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"
+                                                           TextWrapping="Wrap"
+                                                           Margin="20,0,0,8"
+                                                           Visibility="{Binding IsOverlayMode, Converter={StaticResource BoolToVis}}" />
+
                                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
                                                     <TextBlock Text="{DynamicResource Str_CacheBlocksLabel}" VerticalAlignment="Center" Margin="0,0,8,0" />
                                                     <TextBox Width="90" Text="{Binding CacheBlocksText, UpdateSourceTrigger=PropertyChanged}" />

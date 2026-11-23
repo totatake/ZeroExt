@@ -181,6 +181,7 @@ namespace ZeroExt.Gui.ViewModels
             CanMount = false,
         };
         private bool _enableDirectIo = true;
+        private bool _caseSensitive;
         private string _cacheBlocksText = "2048";
         private bool _roFallbackOnDirty = true;
         private bool _forceDirty;
@@ -591,6 +592,19 @@ namespace ZeroExt.Gui.ViewModels
                 if (SetProperty(ref _enableDirectIo, value))
                 {
                     OnPropertyChanged(nameof(EffectiveDirectIo));
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
+        public bool CaseSensitive
+        {
+            get => _caseSensitive;
+            set
+            {
+                if (SetProperty(ref _caseSensitive, value))
+                {
+                    RefreshUpperDirValidation();
                     NotifyMountStateChanged();
                 }
             }
@@ -1131,6 +1145,7 @@ namespace ZeroExt.Gui.ViewModels
                 Mode = SelectedMode,
                 OverlayUpperDir = OverlayUpperDir.Trim(),
                 EnableDirectIo = DirectIoEditable && EnableDirectIo,
+                CaseSensitive = CaseSensitive,
                 CacheBlocks = cacheBlocks,
                 RoFallbackOnDirty = RoFallbackOnDirty,
                 ForceDirty = ForceDirty,
@@ -1161,7 +1176,8 @@ namespace ZeroExt.Gui.ViewModels
             string suffix = SelectedPartition.Info.PartitionNumber > 0
                 ? $"_p{SelectedPartition.Info.PartitionNumber}"
                 : string.Empty;
-            OverlayUpperDir = Path.Combine(localAppData, "ZeroExt", "Overlays", $"{sanitized}{suffix}");
+            string csSuffix = CaseSensitive ? "_cs" : string.Empty;
+            OverlayUpperDir = Path.Combine(localAppData, "ZeroExt", "Overlays", $"{sanitized}{suffix}{csSuffix}");
         }
 
         public void RefreshAvailableDriveLetters()
@@ -1293,6 +1309,7 @@ namespace ZeroExt.Gui.ViewModels
                 }
                 _overlayUpperDir = preset.OverlayUpperDir;
                 _enableDirectIo = preset.EnableDirectIo;
+                _caseSensitive = preset.CaseSensitive;
                 _cacheBlocksText = (preset.CacheBlocks > 0 ? preset.CacheBlocks : 2048).ToString();
                 _roFallbackOnDirty = preset.RoFallbackOnDirty;
 
@@ -1309,6 +1326,7 @@ namespace ZeroExt.Gui.ViewModels
                 OnPropertyChanged(nameof(MountFolderPath));
                 OnPropertyChanged(nameof(OverlayUpperDir));
                 OnPropertyChanged(nameof(EnableDirectIo));
+                OnPropertyChanged(nameof(CaseSensitive));
                 OnPropertyChanged(nameof(CacheBlocksText));
                 OnPropertyChanged(nameof(RoFallbackOnDirty));
             }
@@ -1316,6 +1334,7 @@ namespace ZeroExt.Gui.ViewModels
             {
                 _selectedMode = MountMode.ReadOnly;
                 _enableDirectIo = true;
+                _caseSensitive = false;
                 _roFallbackOnDirty = true;
                 _forceDirty = false;
                 OnPropertyChanged(nameof(SelectedMode));
@@ -1326,6 +1345,7 @@ namespace ZeroExt.Gui.ViewModels
                 OnPropertyChanged(nameof(EffectiveDirectIo));
                 OnPropertyChanged(nameof(ShowDirtyRwWarning));
                 OnPropertyChanged(nameof(EnableDirectIo));
+                OnPropertyChanged(nameof(CaseSensitive));
                 OnPropertyChanged(nameof(RoFallbackOnDirty));
                 OnPropertyChanged(nameof(ForceDirty));
             }
@@ -1343,6 +1363,7 @@ namespace ZeroExt.Gui.ViewModels
                 MountPoint = ActiveMountPointTarget,
                 OverlayUpperDir = OverlayUpperDir.Trim(),
                 EnableDirectIo = EnableDirectIo,
+                CaseSensitive = CaseSensitive,
                 CacheBlocks = cb,
                 RoFallbackOnDirty = RoFallbackOnDirty,
             };
@@ -1364,7 +1385,8 @@ namespace ZeroExt.Gui.ViewModels
 
             UpperDirCheck = DriveLetterService.CheckOverlayUpperDir(
                 OverlayUpperDir,
-                SelectedPartition?.Info.ExpectedOverlayLowerId);
+                SelectedPartition?.Info.ExpectedOverlayLowerId,
+                CaseSensitive);
         }
 
         private void NotifyMountStateChanged()

@@ -101,9 +101,9 @@ static void print_usage(void) {
         "  zeroext mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
         "  zeroext extents <image_or_disk> <ext4_path> [--partition <N>]\n"
         "  zeroext mount --source <image_or_disk> --mountpoint <M:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
-        "                [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>] [--ro-fallback] [--force-dirty]\n"
-        "                [--cache-blocks <N>] [--debug] [--stop-event <name>] [--json-events] [--stats-interval <ms>]\n"
-        "                [--trace <output_json>] [--trace-events <N>]\n"
+        "                [--case-sensitive] [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>]\n"
+        "                [--ro-fallback] [--force-dirty] [--cache-blocks <N>] [--debug] [--stop-event <name>]\n"
+        "                [--json-events] [--stats-interval <ms>] [--trace <output_json>] [--trace-events <N>]\n"
         "  zeroext unmount <M:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
         "  Default mount mode is Read-Only with Direct Extent I/O enabled.\n"
@@ -812,6 +812,7 @@ static int cmd_mount(int argc, char **argv) {
     int force_dirty = has_flag(argc, argv, "--force-dirty");
     int direct_io = has_flag(argc, argv, "--direct-io");
     int no_direct_io = has_flag(argc, argv, "--no-direct-io");
+    int case_sensitive = has_flag(argc, argv, "--case-sensitive");
     int json_events = has_flag(argc, argv, "--json-events");
     uint32_t debug_log = has_flag(argc, argv, "--debug") ? (uint32_t)-1 : 0;
     HANDLE stop_event = NULL;
@@ -917,7 +918,7 @@ static int cmd_mount(int argc, char **argv) {
     }
     cfg.ro_fallback_on_dirty = (cfg.read_only || ro_fallback) ? 1 : 0;
     cfg.force_rw_on_dirty = force_dirty;
-    cfg.case_insensitive = 1;
+    cfg.case_insensitive = case_sensitive ? 0 : 1;
     cfg.enable_direct_io = direct_io ? 1 : 0;
     cfg.disable_direct_io = no_direct_io ? 1 : 0;
     cfg.has_file_info_timeout = has_fi_timeout;

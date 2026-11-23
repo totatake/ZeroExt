@@ -22,6 +22,7 @@ typedef struct ov_ino_entry {
 
 struct ext4_overlay_ctx {
     wchar_t          upper_dir_w[1024];
+    int              case_sensitive;
     SRWLOCK          map_lock;
     CRITICAL_SECTION mut_cs;
     ov_ino_entry_t  *entries;
@@ -146,10 +147,75 @@ static int file_exists_w(const wchar_t *path_w, DWORD *out_attrs) {
     return (a != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
 }
 
-static int create_dir_recursive_w(const wchar_t *dir_w) {
+#ifndef FILE_CS_FLAG_CASE_SENSITIVE_DIR
+#define FILE_CS_FLAG_CASE_SENSITIVE_DIR 0x00000001
+#endif
+
+static int ensure_dir_case_sensitive_w(const wchar_t *dir_w) {
+    FILE_CASE_SENSITIVE_INFO cs;
+    HANDLE h;
+
+    /* Query first with read-only attributes handle (works on already-enabled non-empty dirs) */
+    h = CreateFileW(dir_w, FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return win32_err_to_errno(GetLastError());
+    }
+    memset(&cs, 0, sizeof(cs));
+    if (GetFileInformationByHandleEx(h, FileCaseSensitiveInfo, &cs, sizeof(cs)) &&
+        (cs.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR)) {
+        CloseHandle(h);
+        return 0;
+    }
+    CloseHandle(h);
+
+    /* Enable NTFS per-directory case sensitivity (requires write/attribute/delete rights) */
+    h = CreateFileW(dir_w,
+                    FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+        ext4_log(EXT4_LOG_ERROR,
+                 "Cannot open overlay directory '%ls' to enable NTFS case sensitivity (winerr=%lu).",
+                 dir_w, (unsigned long)err);
+        return win32_err_to_errno(err);
+    }
+    cs.Flags = FILE_CS_FLAG_CASE_SENSITIVE_DIR;
+    if (!SetFileInformationByHandle(h, FileCaseSensitiveInfo, &cs, sizeof(cs))) {
+        DWORD err = GetLastError();
+        CloseHandle(h);
+        ext4_log(EXT4_LOG_ERROR,
+                 "Failed to enable NTFS case sensitivity on '%ls' (winerr=%lu). "
+                 "Requires an empty NTFS directory and sufficient privileges "
+                 "(or pre-enable as Administrator via 'fsutil file setCaseSensitiveInfo <dir> enable').",
+                 dir_w, (unsigned long)err);
+        return (err == ERROR_NOT_SUPPORTED || err == ERROR_INVALID_FUNCTION)
+                   ? -ENOTSUP
+                   : win32_err_to_errno(err);
+    }
+    CloseHandle(h);
+    return 0;
+}
+
+static int path_is_within_root_w(const wchar_t *path_w, size_t path_len,
+                                 const wchar_t *root_w, size_t root_len) {
+    if (!root_w || path_len < root_len) return 0;
+    if (_wcsnicmp(path_w, root_w, root_len) != 0) return 0;
+    return (path_len == root_len || path_w[root_len] == L'\\' || path_w[root_len] == L'/') ? 1 : 0;
+}
+
+static int create_dir_recursive_w(const wchar_t *dir_w, const wchar_t *cs_root_w) {
     DWORD attrs = GetFileAttributesW(dir_w);
+    size_t cs_root_len = cs_root_w ? wcslen(cs_root_w) : 0;
     if (attrs != INVALID_FILE_ATTRIBUTES) {
-        return (attrs & FILE_ATTRIBUTE_DIRECTORY) ? 0 : -ENOTDIR;
+        if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) return -ENOTDIR;
+        if (path_is_within_root_w(dir_w, wcslen(dir_w), cs_root_w, cs_root_len)) {
+            return ensure_dir_case_sensitive_w(dir_w);
+        }
+        return 0;
     }
 
     {
@@ -170,6 +236,7 @@ static int create_dir_recursive_w(const wchar_t *dir_w) {
             if (tmp[i] == L'\\' || tmp[i] == L'/' || tmp[i] == 0) {
                 wchar_t saved = tmp[i];
                 if (i > 0) {
+                    int created_now = 0;
                     tmp[i] = 0;
                     attrs = GetFileAttributesW(tmp);
                     if (attrs == INVALID_FILE_ATTRIBUTES) {
@@ -178,9 +245,18 @@ static int create_dir_recursive_w(const wchar_t *dir_w) {
                             if (err != ERROR_ALREADY_EXISTS) {
                                 return win32_err_to_errno(err);
                             }
+                        } else {
+                            created_now = 1;
                         }
                     } else if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
                         return -ENOTDIR;
+                    }
+                    if (path_is_within_root_w(tmp, i, cs_root_w, cs_root_len)) {
+                        int csrc = ensure_dir_case_sensitive_w(tmp);
+                        if (csrc != 0) {
+                            if (created_now) RemoveDirectoryW(tmp);
+                            return csrc;
+                        }
                     }
                     tmp[i] = saved;
                 }
@@ -201,7 +277,7 @@ static int ensure_upper_parents_w(const ext4_overlay_ctx_t *ov, const char *norm
     if (rc != 0) return rc;
     rc = join_upper_path_w(ov, parent, parent_w, _countof(parent_w));
     if (rc != 0) return rc;
-    return create_dir_recursive_w(parent_w);
+    return create_dir_recursive_w(parent_w, ov->case_sensitive ? ov->upper_dir_w : NULL);
 }
 
 static int create_marker_file_w(const wchar_t *path_w) {
@@ -592,6 +668,10 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
             DWORD err = GetLastError();
             if (err != ERROR_ALREADY_EXISTS) return win32_err_to_errno(err);
         }
+        if (ov->case_sensitive) {
+            rc = ensure_dir_case_sensitive_w(res->upper_path_w);
+            if (rc != 0) return rc;
+        }
         return overlay_resolve(ctx, norm_path, NULL, 0, res);
     }
 
@@ -719,11 +799,12 @@ static int overlay_validate_lower_id(const ext4_overlay_ctx_t *ov, ext4_vfs_ctx_
 
     u = lower_ctx->fs->super->s_uuid;
     _snprintf_s(expected, sizeof(expected), _TRUNCATE,
-                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x:%llu:%u",
+                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x:%llu:%u%s",
                 u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
                 u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
                 (unsigned long long)ext2fs_blocks_count(lower_ctx->fs->super),
-                (unsigned)lower_ctx->fs->blocksize);
+                (unsigned)lower_ctx->fs->blocksize,
+                ov->case_sensitive ? ":cs" : "");
 
     _snwprintf_s(id_w, _countof(id_w), _TRUNCATE, L"%ls\\%ls", ov->upper_dir_w, OV_LOWER_ID_NAME_W);
     hr = CreateFileW(id_w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -794,13 +875,16 @@ int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
         return -EINVAL;
     }
 
-    rc = create_dir_recursive_w(full_w);
+    int case_sensitive = (lower_ctx && !lower_ctx->case_insensitive) ? 1 : 0;
+
+    rc = create_dir_recursive_w(full_w, case_sensitive ? full_w : NULL);
     if (rc != 0) return rc;
 
     ov = (ext4_overlay_ctx_t *)calloc(1, sizeof(*ov));
     if (!ov) return -ENOMEM;
 
     wcscpy_s(ov->upper_dir_w, _countof(ov->upper_dir_w), full_w);
+    ov->case_sensitive = case_sensitive;
     InitializeSRWLock(&ov->map_lock);
     InitializeCriticalSection(&ov->mut_cs);
     ov->next_synth_ino = OV_SYNTHETIC_INO_BASE;
@@ -1305,6 +1389,13 @@ int overlay_vfs_create_file(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, u
         if (!CreateDirectoryW(target_res.upper_path_w, NULL)) {
             rc = win32_err_to_errno(GetLastError());
             goto out_unlock;
+        }
+        if (ctx->overlay->case_sensitive) {
+            rc = ensure_dir_case_sensitive_w(target_res.upper_path_w);
+            if (rc != 0) {
+                RemoveDirectoryW(target_res.upper_path_w);
+                goto out_unlock;
+            }
         }
         /* If a lower directory of the same path existed before deletion/blocking, mark new upper
          * directory as opaque so old lower contents never reappear. */

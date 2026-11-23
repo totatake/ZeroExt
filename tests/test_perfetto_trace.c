@@ -180,6 +180,7 @@ static int test_trace_vfs_direct_standard_and_overlay(void) {
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
+    cfg.case_insensitive = 1;
     cfg.overlay_upper_dir = upper_dir;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using ZeroExt.Gui.Models;
 
 namespace ZeroExt.Gui.Services
@@ -25,6 +26,40 @@ namespace ZeroExt.Gui.Services
                 ? combined
                 : (string.IsNullOrEmpty(combined) ? eventMsg : eventMsg + "\n" + combined);
             int? code = errorEvent?.Code;
+
+            if (allText.Contains("NTFS case sensitivity", StringComparison.OrdinalIgnoreCase) ||
+                allText.Contains("FileCaseSensitiveInfo", StringComparison.OrdinalIgnoreCase))
+            {
+                if (ContainsWinErr(allText, 145) ||
+                    code == -41 /* -ENOTEMPTY */)
+                {
+                    return new TranslatedMountError
+                    {
+                        Title = LocalizationService.Get("Str_ErrUpperCsNotEmptyTitle"),
+                        Message = LocalizationService.Get("Str_ErrUpperCsNotEmptyMsg"),
+                        Suggestion = LocalizationService.Get("Str_ErrUpperCsNotEmptySug"),
+                        RawDetail = allText,
+                    };
+                }
+                if (ContainsWinErr(allText, 5) ||
+                    code == -13 /* -EACCES */)
+                {
+                    return new TranslatedMountError
+                    {
+                        Title = LocalizationService.Get("Str_ErrUpperCsAccessTitle"),
+                        Message = LocalizationService.Get("Str_ErrUpperCsAccessMsg"),
+                        Suggestion = LocalizationService.Get("Str_ErrUpperCsAccessSug"),
+                        RawDetail = allText,
+                    };
+                }
+                return new TranslatedMountError
+                {
+                    Title = LocalizationService.Get("Str_ErrUpperCsUnsupportedTitle"),
+                    Message = LocalizationService.Get("Str_ErrUpperCsUnsupportedMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrUpperCsUnsupportedSug"),
+                    RawDetail = allText,
+                };
+            }
 
             if (allText.Contains("belongs to a different lower ext4 filesystem", StringComparison.OrdinalIgnoreCase) ||
                 allText.Contains(".wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase))
@@ -115,6 +150,12 @@ namespace ZeroExt.Gui.Services
                 Suggestion = LocalizationService.Get("Str_ErrGenericMountSug"),
                 RawDetail = allText,
             };
+        }
+
+        private static bool ContainsWinErr(string text, int winErr)
+        {
+            return !string.IsNullOrEmpty(text) &&
+                   Regex.IsMatch(text, $@"\bwinerr={winErr}(?!\d)", RegexOptions.IgnoreCase);
         }
     }
 }

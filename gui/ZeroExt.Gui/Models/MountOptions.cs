@@ -38,6 +38,7 @@ namespace ZeroExt.Gui.Models
         public MountMode Mode { get; set; } = MountMode.ReadOnly;
         public string OverlayUpperDir { get; set; } = string.Empty;
         public bool EnableDirectIo { get; set; } = true;
+        public bool CaseSensitive { get; set; }
         public uint CacheBlocks { get; set; } = 2048;
         public bool RoFallbackOnDirty { get; set; } = true;
         public bool ForceDirty { get; set; }

@@ -133,6 +133,11 @@ namespace ZeroExt.Gui.Services
                     break;
             }
 
+            if (req.CaseSensitive)
+            {
+                args.Add("--case-sensitive");
+            }
+
             if (req.CacheBlocks > 0 && req.CacheBlocks != 2048)
             {
                 args.Add("--cache-blocks");

@@ -103,6 +103,8 @@
     <sys:String x:Key="Str_AdvancedExpanderHeader">Advanced Options &amp; CLI Command Preview</sys:String>
     <sys:String x:Key="Str_DirectIoCheck">Enable Direct Extent I/O (Default ON for RO / Overlay)</sys:String>
     <sys:String x:Key="Str_RwDirectIoNote">* Direct I/O is automatically disabled in Read-Write mode to preserve filesystem consistency.</sys:String>
+    <sys:String x:Key="Str_CaseSensitiveCheck">Case-sensitive filenames (--case-sensitive)</sys:String>
+    <sys:String x:Key="Str_CaseSensitiveOverlayNote">* In Overlay mode, enables NTFS per-directory case sensitivity on the Upperdir (fails on non-NTFS volumes or non-empty dirs without the attribute).</sys:String>
     <sys:String x:Key="Str_CacheBlocksLabel">LRU Block Cache Size:</sys:String>
     <sys:String x:Key="Str_CacheBlocksUnit">blocks (default 2048 = 8 MB @ 4KB)</sys:String>
     <sys:String x:Key="Str_DebugLogCheck">Enable WinFsp debug logging (--debug)</sys:String>
@@ -143,6 +145,8 @@
     <sys:String x:Key="Str_UpperValMatch">Existing Upperdir matching this ext4 volume (previous changes will be preserved).</sys:String>
     <sys:String x:Key="Str_UpperValNonEmptyUnmarked">Warning: Folder is not empty and has no Lower ID marker. Existing files will shadow lower ext4 entries.</sys:String>
     <sys:String x:Key="Str_UpperValEmptyReady">Empty folder verified. Lower ext4 remains completely protected.</sys:String>
+    <sys:String x:Key="Str_UpperValCsNonEmpty">This existing folder is not empty (hidden files may remain) and lacks the NTFS case-sensitivity flag. Delete the folder itself or specify a new folder name.</sys:String>
+    <sys:String x:Key="Str_UpperValCsModeMismatch">This Upperdir was created with a different case-sensitivity mode (.wh.__ext4_lower_id mismatch). Delete the folder or choose a separate Upperdir (e.g. ..._cs).</sys:String>
 
     <!-- Active Mounts Tab -->
     <sys:String x:Key="Str_ActiveMountsHeader">Active Mounts (Live I/O Statistics)</sys:String>
@@ -295,6 +299,15 @@
     <sys:String x:Key="Str_ErrOverlayMismatchTitle">Overlay Upperdir Identifier Mismatch</sys:String>
     <sys:String x:Key="Str_ErrOverlayMismatchMsg">The specified NTFS upperdir (.wh.__ext4_lower_id) was previously used with a different ext4 filesystem.</sys:String>
     <sys:String x:Key="Str_ErrOverlayMismatchSug">To prevent data corruption, choose a new empty folder or switch to the matching upperdir.</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsNotEmptyTitle">Upperdir Cannot Enable Case Sensitivity (Folder Not Empty)</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsNotEmptyMsg">Windows NTFS cannot enable per-directory case sensitivity on an existing non-empty folder. Hidden files created by ZeroExt (.wh.__ext4_lower_id, etc.) may still exist even if the folder looks empty in Explorer.</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsNotEmptySug">Delete the entire Upperdir folder itself and let ZeroExt recreate it, or specify a new folder name (e.g. D:\ext4_upper_cs).</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsAccessTitle">Insufficient Permissions for Case-Sensitive Upperdir</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsAccessMsg">Windows denied permission to set the NTFS case-sensitivity flag on the Upperdir folder.</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsAccessSug">Click "Restart as Admin" at the top right, or pre-enable the flag on an empty NTFS folder as Administrator via: fsutil file setCaseSensitiveInfo &lt;dir&gt; enable</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsUnsupportedTitle">Case-Sensitive Upperdir Not Supported on Target Volume</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsUnsupportedMsg">The target Upperdir volume does not support NTFS per-directory case sensitivity.</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsUnsupportedSug">Specify an empty folder on a local NTFS drive.</sys:String>
     <sys:String x:Key="Str_ErrDirtyRwTitle">Read-Write Mount Denied (Dirty Journal)</sys:String>
     <sys:String x:Key="Str_ErrDirtyRwMsg">An unreplayed JBD2 journal or filesystem error flag was detected on this ext4 volume, so RW mounting was blocked for safety.</sys:String>
     <sys:String x:Key="Str_ErrDirtyRwSug">Use "Read-Only (Recommended)" or "Overlay (Safe RW)" mode, or enable automatic Read-Only fallback on dirty volumes.</sys:String>

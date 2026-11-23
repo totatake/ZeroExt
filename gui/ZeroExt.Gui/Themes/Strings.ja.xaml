@@ -103,6 +103,8 @@
     <sys:String x:Key="Str_AdvancedExpanderHeader">詳細設定・CLI コマンドプレビュー</sys:String>
     <sys:String x:Key="Str_DirectIoCheck">ダイレクト・エクステント I/O (Direct I/O) を有効にする（RO / Overlay 時は既定 ON）</sys:String>
     <sys:String x:Key="Str_RwDirectIoNote">※ Read-Write モードでは整合性維持のため Direct I/O は自動的に無効化されます。</sys:String>
+    <sys:String x:Key="Str_CaseSensitiveCheck">ファイル名の大文字・小文字を区別する (--case-sensitive)</sys:String>
+    <sys:String x:Key="Str_CaseSensitiveOverlayNote">※ Overlay モードでは Upperdir に NTFS の大文字・小文字区別属性を設定します（未対応ボリュームや非空フォルダでは失敗します）。</sys:String>
     <sys:String x:Key="Str_CacheBlocksLabel">LRU ブロックキャッシュ数:</sys:String>
     <sys:String x:Key="Str_CacheBlocksUnit">ブロック（既定 2048 = 8 MB @ 4KB）</sys:String>
     <sys:String x:Key="Str_DebugLogCheck">WinFsp デバッグログを有効にする (--debug)</sys:String>
@@ -143,6 +145,8 @@
     <sys:String x:Key="Str_UpperValMatch">同一 ext4 ボリュームに紐付いた既存の Upperdir です（前回の変更を継続できます）。</sys:String>
     <sys:String x:Key="Str_UpperValNonEmptyUnmarked">警告: フォルダが空ではなく Lower ID マーカーがありません。既存ファイルが Lower 側を上書き表示します。</sys:String>
     <sys:String x:Key="Str_UpperValEmptyReady">空のフォルダを確認しました。Lower ext4 は完全に保護されたまま利用できます。</sys:String>
+    <sys:String x:Key="Str_UpperValCsNonEmpty">既存フォルダが空ではなく（隠しファイルが残っている場合があります）、NTFS 大文字・小文字区別属性が未設定のため使用できません。フォルダごと削除するか新しいフォルダ名を指定してください。</sys:String>
+    <sys:String x:Key="Str_UpperValCsModeMismatch">この Upperdir は異なる大文字・小文字モードで作成されています（隠しファイル .wh.__ext4_lower_id を含む）。フォルダごと削除して作り直すか、別のフォルダ名（例: ..._cs）を指定してください。</sys:String>
 
     <!-- Active Mounts Tab -->
     <sys:String x:Key="Str_ActiveMountsHeader">現在稼働中のマウント一覧（リアルタイム I/O 統計）</sys:String>
@@ -295,6 +299,15 @@
     <sys:String x:Key="Str_ErrOverlayMismatchTitle">Overlay Upperdir の識別子が一致しません</sys:String>
     <sys:String x:Key="Str_ErrOverlayMismatchMsg">指定された NTFS 書き込み先フォルダ (.wh.__ext4_lower_id) は、別の ext4 ファイルシステムで使用されたフォルダです。</sys:String>
     <sys:String x:Key="Str_ErrOverlayMismatchSug">データ混在を防ぐため、新しい空のフォルダを指定するか、該当の Upperdir を別の場所に切り替えてください。</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsNotEmptyTitle">Upperdir に大文字・小文字区別属性を設定できません（フォルダが空ではありません）</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsNotEmptyMsg">Windows NTFS の仕様により、中身が残っている既存フォルダには後から大文字・小文字区別属性を有効化できません。エクスプローラー上で空に見えても、ZeroExt が作成した隠しファイル（.wh.__ext4_lower_id 等）が残っている場合があります。</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsNotEmptySug">Upperdir のフォルダごと一度削除して再マウント（自動作成）するか、新しいフォルダ名（例: D:\ext4_upper_cs）を指定してください。</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsAccessTitle">Upperdir の大文字・小文字区別設定に必要な権限がありません</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsAccessMsg">Windows により Upperdir への NTFS 大文字・小文字区別属性の設定が拒否されました。</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsAccessSug">右上の「管理者権限で再起動」を行って再実行するか、管理者コマンドプロンプトから空の NTFS フォルダへ事前に fsutil file setCaseSensitiveInfo &lt;dir&gt; enable を実行してください。</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsUnsupportedTitle">指定されたドライブは大文字・小文字区別に対応していません</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsUnsupportedMsg">指定された Upperdir のボリュームは NTFS のフォルダ単位の大文字・小文字区別に非対応です。</sys:String>
+    <sys:String x:Key="Str_ErrUpperCsUnsupportedSug">ローカル NTFS ドライブ上の空フォルダを指定してください。</sys:String>
     <sys:String x:Key="Str_ErrDirtyRwTitle">未再生ジャーナル (Dirty) のため RW マウントを拒否しました</sys:String>
     <sys:String x:Key="Str_ErrDirtyRwMsg">対象の ext4 ボリュームに未再生の JBD2 ジャーナルまたはエラーフラグが検出されたため、データ破損防止のため書き込みマウントをブロックしました。</sys:String>
     <sys:String x:Key="Str_ErrDirtyRwSug">「Read-Only（推奨）」または「Overlay（非破壊書き込み）」モードを使用するか、詳細オプションの「Dirty 時は自動で Read-Only にフォールバック」を有効にしてください。</sys:String>

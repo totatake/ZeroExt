@@ -21,6 +21,53 @@ namespace ZeroExt.Gui.Services
         private static extern uint GetDriveTypeW(string lpRootPathName);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateFileW(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetFileInformationByHandleEx(
+            IntPtr hFile,
+            int FileInformationClass,
+            out uint lpFileInformation,
+            uint dwBufferSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        public static bool IsDirectoryCaseSensitive(string dirPath)
+        {
+            const uint FILE_READ_ATTRIBUTES = 0x0080;
+            const uint FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004;
+            const uint OPEN_EXISTING = 3;
+            const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+            const int FileCaseSensitiveInfo = 23;
+            const uint FILE_CS_FLAG_CASE_SENSITIVE_DIR = 1;
+
+            if (string.IsNullOrWhiteSpace(dirPath)) return false;
+            IntPtr h = CreateFileW(dirPath, FILE_READ_ATTRIBUTES, FILE_SHARE_ALL, IntPtr.Zero,
+                                   OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+            if (h == new IntPtr(-1)) return false;
+            try
+            {
+                if (GetFileInformationByHandleEx(h, FileCaseSensitiveInfo, out uint flags, sizeof(uint)))
+                {
+                    return (flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR) != 0;
+                }
+                return false;
+            }
+            finally
+            {
+                CloseHandle(h);
+            }
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool GetVolumeInformationW(
             string lpRootPathName,
             [Out] char[]? lpVolumeNameBuffer,
@@ -144,7 +191,7 @@ namespace ZeroExt.Gui.Services
             }
         }
 
-        public static UpperDirCheckResult CheckOverlayUpperDir(string? upperDir, string? expectedLowerId)
+        public static UpperDirCheckResult CheckOverlayUpperDir(string? upperDir, string? expectedLowerId, bool caseSensitive = false)
         {
             if (string.IsNullOrWhiteSpace(upperDir))
             {
@@ -224,13 +271,22 @@ namespace ZeroExt.Gui.Services
                     // Ignore read error and let engine check
                 }
 
-                if (!string.IsNullOrWhiteSpace(expectedLowerId) &&
-                    !string.Equals(stored, expectedLowerId, StringComparison.Ordinal))
+                string effectiveExpected = (!string.IsNullOrWhiteSpace(expectedLowerId) && caseSensitive)
+                    ? expectedLowerId + ":cs"
+                    : (expectedLowerId ?? string.Empty);
+
+                if (!string.IsNullOrWhiteSpace(effectiveExpected) &&
+                    !string.Equals(stored, effectiveExpected, StringComparison.Ordinal))
                 {
+                    bool modeMismatchOnly = !string.IsNullOrWhiteSpace(expectedLowerId) &&
+                        (string.Equals(stored, expectedLowerId, StringComparison.Ordinal) ||
+                         string.Equals(stored, expectedLowerId + ":cs", StringComparison.Ordinal));
                     return new UpperDirCheckResult
                     {
                         Status = UpperDirCheckStatus.MismatchedLower,
-                        Message = LocalizationService.Get("Str_UpperValMismatch"),
+                        Message = LocalizationService.Get(modeMismatchOnly
+                            ? "Str_UpperValCsModeMismatch"
+                            : "Str_UpperValMismatch"),
                         CanMount = false,
                     };
                 }
@@ -247,6 +303,15 @@ namespace ZeroExt.Gui.Services
             {
                 if (Directory.EnumerateFileSystemEntries(full).Any())
                 {
+                    if (caseSensitive && !IsDirectoryCaseSensitive(full))
+                    {
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.InvalidPath,
+                            Message = LocalizationService.Get("Str_UpperValCsNonEmpty"),
+                            CanMount = false,
+                        };
+                    }
                     return new UpperDirCheckResult
                     {
                         Status = UpperDirCheckStatus.NonEmptyUnmarked,

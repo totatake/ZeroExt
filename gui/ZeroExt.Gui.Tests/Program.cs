@@ -215,8 +215,10 @@ namespace ZeroExt.Gui.Tests
             Assert(!preview.Contains("--json-events"), "preview should omit internal --json-events");
 
             roReq.EnableDirectIo = false;
+            roReq.CaseSensitive = true;
             List<string> roNoDirect = ZeroExtArgBuilder.BuildMountArgs(roReq);
             Assert(roNoDirect.Contains("--no-direct-io"), "RO with DirectIO off must pass --no-direct-io");
+            Assert(roNoDirect.Contains("--case-sensitive"), "CaseSensitive must pass --case-sensitive");
 
             var ovReq = new MountRequest
             {
@@ -297,12 +299,30 @@ namespace ZeroExt.Gui.Tests
                 AssertEqual(UpperDirCheckStatus.MismatchedLower, r4.Status, "mismatched upper");
                 Assert(!r4.CanMount, "MismatchedLower must block mount");
 
+                UpperDirCheckResult r4cs = DriveLetterService.CheckOverlayUpperDir(matchUpper, "uuid1:100:4096", caseSensitive: true);
+                AssertEqual(UpperDirCheckStatus.MismatchedLower, r4cs.Status, "non-cs upper must mismatch cs mode");
+                Assert(!r4cs.CanMount, "non-cs upper must block cs mount");
+
+                string csMatchUpper = Path.Combine(rootDir, "upper_match_cs");
+                Directory.CreateDirectory(csMatchUpper);
+                File.WriteAllText(Path.Combine(csMatchUpper, ".wh.__ext4_lower_id"), "uuid1:100:4096:cs");
+                UpperDirCheckResult r4csOk = DriveLetterService.CheckOverlayUpperDir(csMatchUpper, "uuid1:100:4096", caseSensitive: true);
+                AssertEqual(UpperDirCheckStatus.MatchingExisting, r4csOk.Status, "cs upper matches cs mode");
+                Assert(r4csOk.CanMount, "cs upper allows cs mount");
+
+                UpperDirCheckResult r4csToCi = DriveLetterService.CheckOverlayUpperDir(csMatchUpper, "uuid1:100:4096", caseSensitive: false);
+                AssertEqual(UpperDirCheckStatus.MismatchedLower, r4csToCi.Status, "cs upper must mismatch non-cs mode");
+                Assert(!r4csToCi.CanMount, "cs upper must block non-cs mount");
+
                 string unmarkedUpper = Path.Combine(rootDir, "upper_unmarked");
                 Directory.CreateDirectory(unmarkedUpper);
                 File.WriteAllText(Path.Combine(unmarkedUpper, "existing.txt"), "hi");
                 UpperDirCheckResult r5 = DriveLetterService.CheckOverlayUpperDir(unmarkedUpper, "uuid1:100:4096");
                 AssertEqual(UpperDirCheckStatus.NonEmptyUnmarked, r5.Status, "non-empty unmarked");
                 Assert(r5.CanMount, "NonEmptyUnmarked warns but allows mount");
+
+                UpperDirCheckResult r5cs = DriveLetterService.CheckOverlayUpperDir(unmarkedUpper, "uuid1:100:4096", caseSensitive: true);
+                Assert(!r5cs.CanMount, "non-empty non-CS folder must be blocked in case-sensitive mode");
 
                 UpperDirCheckResult r6 = DriveLetterService.CheckOverlayUpperDir("C:\\", "uuid1:100:4096");
                 AssertEqual(UpperDirCheckStatus.InvalidPath, r6.Status, "drive root rejected");
@@ -393,6 +413,39 @@ namespace ZeroExt.Gui.Tests
                 new MountEventMessage { Event = "error", Code = -5, Message = "FspFileSystemSetMountPoint failed: NTSTATUS=0xC0000022" },
                 Array.Empty<string>());
             Assert(e4En.Title.Contains("Unavailable"), "0xC0000022 error translated (en)");
+
+            LocalizationService.ApplyLanguage(null, "ja");
+            var eCsNotEmptyJa = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -41, Message = "Failed to mount" },
+                new[] { "[zeroext:ERROR] Failed to enable NTFS case sensitivity on 'D:\\u' (winerr=145)." });
+            Assert(eCsNotEmptyJa.Title.Contains("空ではありません"), "cs winerr=145 translated (ja)");
+            Assert(eCsNotEmptyJa.Suggestion.Contains("削除"), "cs winerr=145 suggestion mentions delete (ja)");
+
+            var eCsAccessJa = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -13, Message = "Failed to mount" },
+                new[] { "[zeroext:ERROR] Failed to enable NTFS case sensitivity on 'D:\\u' (winerr=5)." });
+            Assert(eCsAccessJa.Title.Contains("権限"), "cs winerr=5 translated (ja)");
+
+            var eCsUnsupJa = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -95, Message = "Failed to mount" },
+                new[] { "[zeroext:ERROR] Failed to enable NTFS case sensitivity on 'D:\\u' (winerr=50)." });
+            Assert(eCsUnsupJa.Title.Contains("対応していません"), "cs winerr=50 translated (ja)");
+
+            LocalizationService.ApplyLanguage(null, "en");
+            var eCsNotEmptyEn = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -41, Message = "Failed" },
+                new[] { "[zeroext:ERROR] Failed to enable NTFS case sensitivity on 'D:\\u' (winerr=145)." });
+            Assert(eCsNotEmptyEn.Title.Contains("Not Empty"), "cs winerr=145 translated (en)");
+
+            var eCsAccessEn = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -13, Message = "Failed" },
+                new[] { "[zeroext:ERROR] Failed to enable NTFS case sensitivity on 'D:\\u' (winerr=5)." });
+            Assert(eCsAccessEn.Title.Contains("Permissions"), "cs winerr=5 translated (en)");
+
+            var eCsUnsupEn = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -95, Message = "Failed" },
+                new[] { "[zeroext:ERROR] Failed to enable NTFS case sensitivity on 'D:\\u' (winerr=50)." });
+            Assert(eCsUnsupEn.Title.Contains("Not Supported"), "cs winerr=50 translated (en)");
         }
 
         private static void Test_SettingsService_RoundTrip()
