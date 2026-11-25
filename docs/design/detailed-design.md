@@ -1,10 +1,12 @@
-# 詳細設計書 (`ZeroExt` / `zeroext`)
+# 詳細設計書
 
 本書は、`ZeroExt` のディレクトリ構造、CMake ビルド定義、互換レイヤー、`win32_io`、ディスク・ジャーナル検査、VFS (`op_*`)、エラー変換、および WinFsp ドライバインターフェースの詳細仕様を記述する。
 
 ---
 
 ## 1. ディレクトリ構成とビルドターゲット
+
+### 1.1 ディレクトリ構成
 
 ```text
 ZeroExt\
@@ -22,12 +24,12 @@ ZeroExt\
 │   ├── overview.md                       # 開発背景・技術比較・ユースケース
 │   ├── requirements.md                   # 要件定義書
 │   ├── architecture.md                   # アーキテクチャ設計書
-│   ├── testing.md                        # テスト仕様・CTest / GUI / Sanitizer 検証ガイド
+│   ├── testing.md                        # テスト・検証ガイド (CTest / GUI / Sanitizer)
 │   ├── roadmap.md                        # 完了済みマイルストーン & 今後のロードマップ
 │   ├── adr/                              # 設計判断記録 (0001〜0013)
-│   ├── design/                           # 詳細設計書 (detailed-design.md)
-│   ├── guides/                           # 利用・ビルド・CLI/GUI 運用ガイド (usage.md)
-│   ├── reports/                          # 性能評価・Perfetto トレース解析レポート
+│   ├── design/                           # 詳細設計ドキュメント (detailed-design.md)
+│   ├── guides/                           # ガイド一覧 (usage.md / development.md)
+│   ├── reports/                          # 評価・解析レポート (performance-evaluation / perfetto)
 │   └── assets/                           # 図表・スクリーンショット配置用
 ├── scripts/
 │   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> ext2_err.h/c, ext2_types.h, crc32c_table.h
@@ -58,7 +60,7 @@ ZeroExt\
 └── gui/                                  # ZeroExt.sln (.NET 10 WPF ZeroExt.Gui + ZeroExt.Gui.Tests)
 ```
 
-### CMake ターゲット構成
+### 1.2 CMake ターゲット構成
 1. **`generate_e2fsprogs_headers`（カスタムターゲット＋configure 時生成）**:
    - Python 3 実行ファイルを `%LOCALAPPDATA%\Python\bin\python.exe` 優先で検出し、`scripts/generate_e2fsprogs_headers.py` を実行して `${CMAKE_BINARY_DIR}/generated/ext2fs/ext2_err.h`, `${CMAKE_BINARY_DIR}/generated/ext2_err.c`, `${CMAKE_BINARY_DIR}/generated/ext2fs/ext2_types.h`, `${CMAKE_BINARY_DIR}/generated/ext2fs/crc32c_table.h` を生成する。
 2. **`ext2fs`（静的ライブラリ）**:
@@ -137,6 +139,7 @@ errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
 1. **ハンドルオープン**: `ext4_utf8_to_wide` で UTF-16 変換後、`CreateFileW` を実行。
    - `read_only != 0`: `GENERIC_READ`, `FILE_SHARE_READ | FILE_SHARE_WRITE`
    - `read_only == 0`: `GENERIC_READ | GENERIC_WRITE`, `FILE_SHARE_READ | FILE_SHARE_WRITE`
+   - 全ハンドルに `FILE_FLAG_OVERLAPPED` と `SetFileCompletionNotificationModes(..., FILE_SKIP_SET_EVENT_ON_HANDLE)` を適用し、FLS (`FlsAlloc`) でスレッドごとに再利用する `ManualReset` イベントにより `FileObject->Lock` 直列化を排除した真の並列非同期 I/O を行う。
    - 物理デバイス（`\\.\` 始まり）では `FILE_FLAG_NO_BUFFERING`、イメージファイルでは `FILE_FLAG_RANDOM_ACCESS` を付与し、`IOCTL_DISK_GET_LENGTH_INFO` / `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`（または `GetFileSizeEx`）でデバイスサイズ・セクタサイズを取得する。
    - マルチスレッドでのマウント安全性を保つため、`win32_io_set_next_config` は `__declspec(thread)` スレッドローカル変数へ設定を保持する。
 2. **パーティション境界ガード**:
@@ -145,8 +148,8 @@ errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
 3. **セクタ境界・メモリアライメント ＆ Read-Modify-Write (RMW)**:
    - `(phys_off % sector_size) == 0 && (len % sector_size) == 0 && ((uintptr_t)buf % sector_size) == 0` の場合のみゼロコピー直接 `OVERLAPPED` Read/Write を実行。
    - それ以外は `_aligned_malloc(..., sector_size)` バッファを用いて `[aligned_start, aligned_end)` 単位で Read-Modify-Write を行う（書き込み RMW 発生時は `rmw_operations` をインクリメント）。
-4. **スレッドセーフ LRU ブロックキャッシュ**:
-   - `SRWLOCK cache_lock` で保護されたハッシュ表（2048 バケット）＋双方向リストによる LRU キャッシュ。
+4. **32 シャード・CLOCK ブロックキャッシュ**:
+   - 64B キャッシュライン整列の 32 シャード（各 `SRWLOCK` で保護）＋ CLOCK インプレース置換キャッシュにより、ロック内ヒープ確保を排除してスレッド間競合を低減（キャッシュヒット参照は `SRWLOCK` Shared モード）。
    - 単一ブロック Read 時（`count == 1`）にキャッシュ参照/格納を行い、Write 時は Write-Through で対象ブロック更新または範囲無効化を実施する。`set_blksize` 変更時はキャッシュを自動クリアする。
 
 ---
@@ -228,8 +231,8 @@ typedef struct ext4_vfs_ctx {
   - 従来型間接ブロック: `ext2fs_block_iterate3(..., BLOCK_FLAG_READ_ONLY, ...)` で物理ブロックを結合。
 - **参照・読み取り (`ext4_extent_resolve`, `ext4_extent_pread`)**:
   - 論理オフセットで昇順ソートされた `runs[]` を `O(log N)` 二分探索。スパースホールや `is_uninit` 領域は I/O 発行せず `memset(0)`、実ブロック領域は `win32_io_pread_direct` へ渡す。
-- **キャッシュ (`ext4_extent_cache_t`)**:
-  - 最大 4096 エントリの LRU ＋ 4096 バケットハッシュ表。各 `ext4_extent_map_t` は `InterlockedIncrement` / `InterlockedDecrement` による `ref_count` 管理を行い、evict と並列 Read の競合を防止する。
+- **キャッシュ (`ext4_extent_cache_t` ＋ オープンハンドルキャッシュ)**:
+  - 16 シャード（各 `SRWLOCK` Shared 参照対応）によるキャッシュ管理に加え、WinFsp 経由のオープンファイルハンドル (`ext4_file_handle_t.cached_extents`) にマップを直接保持することで、2 回目以降の Read におけるキャッシュロック・`ref_count` 操作をゼロ化している。各 `ext4_extent_map_t` は `InterlockedIncrement` / `InterlockedDecrement` による `ref_count` 管理を行い、evict と並列 Read の競合を防止する。
 
 ### 6.2 `src/overlay/overlay_vfs.h` / `.c`
 - **基本原則 & Lower-ID 照合**: `cfg.overlay_upper_dir` 指定時、Lower (`ctx->fs`) は強制的に Read-Only でオープンし、すべての更新系操作は NTFS 上の `upper_dir` に向ける。`overlay_vfs_create` 時に `<upper_dir>\.wh.__ext4_lower_id`（UUID・総ブロック数・ブロックサイズ）を検査／記録し、異なる Lower ボリュームへの誤流用を `-EINVAL` でブロックする（未マーカーの非空ディレクトリに対しては警告ログを出力）。

@@ -1,6 +1,6 @@
-# Perfetto トレース定量解析・性能改善計画
+# Perfetto トレース解析・最適化レポート
 
-本書は、Perfetto トレース出力機能（commit `aa37709`）を用いて取得したインプロセス VFS ベンチマークトレース（`zeroext_bench_trace.json`）およびライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）を全件定量解析し、[性能評価報告書](performance-evaluation.md) で課題として挙がっていた **8 スレッド時の Direct I/O 逆転現象（0.63x〜0.79x）・`ReadFile` 待機・ロック競合・Warm キャッシュ効力不足・メタデータ応答遅延** の根本原因と改善ロードマップをまとめたものである。
+本書は、Perfetto トレース出力機能（ベースライン commit `aa37709`）を用いて取得したインプロセス VFS ベンチマークトレース（`zeroext_bench_trace.json`）およびライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）を定量解析し、初期に観測された **8 スレッド時の Direct I/O 逆転現象（0.63x〜0.79x）・`ReadFile` 待機・ロック競合・Warm キャッシュ効力不足・メタデータ応答遅延** の根本原因と、Step 1〜4 最適化による改善結果をまとめたレポートである（`e2fsprogs 1.47.4` 更新後の最新総合比較は [性能評価レポート](performance-evaluation.md) を参照）。
 
 ---
 
@@ -21,7 +21,7 @@
    - `enable_direct_io=1` 時の `1T Rnd 4KB` の `ReadFile` 平均遅延は **`3.65 µs`** だが、`8T Rnd 4KB` では **`49.11 µs`（13.5 倍悪化）**、`8T Seq 64KB` では **`79.12 µs`（最大 `37,955.5 µs` = 37.96 ms）** へ急増していた。
    - [src/io/win32_io.c](../../src/io/win32_io.c#L493-L495) の `CreateFileW` に `FILE_FLAG_OVERLAPPED` が指定されていないため、`OVERLAPPED.Offset` を渡しても Windows カーネル（`NtReadFile`）が **`FileObject->Lock` で全スレッドの `ReadFile` を完全に直列化**し、さらにスレッド間で激しい **Lock Convoy（最大 36.32 ms もの単一スレッド飢餓）** を引き起こしていた。
    - ユーザー空間の `extent_cache.lock` の待ち時間は合計 `0.4〜6.6 ms`（総時間の `0.04%〜0.13%`）にすぎず、真のボトルネックは **Windows カーネル側 I/O ハンドルの同期モード**にあった。
-   - [性能評価報告書 §3.2](performance-evaluation.md#32-小ブロック4-kbランダム読込における挙動とトレードオフ) で観察されていた `8T Rnd 4KB` での逆転（0.63x）も、標準経路が 8 MB LRU キャッシュヒット（74.7%〜86.3%）によって `FileObject->Lock` への突入回数を約 1/2〜1/4 に減らせていたことが大きく寄与している。
+   - [性能評価レポート §3.2](performance-evaluation.md#32-小ブロック4-kbランダム読込における挙動とトレードオフ) で観察されていた `8T Rnd 4KB` での逆転（0.63x）も、標準経路が 8 MB LRU キャッシュヒット（74.7%〜86.3%）によって `FileObject->Lock` への突入回数を約 1/2〜1/4 に減らせていたことが大きく寄与している。
 2. **実マウント Warm 性能の頭打ち原因は `FileInfoTimeout = 1000` による WinFsp キャッシュマネージャ無効化**:
    - [src/driver/winfsp_driver.c](../../src/driver/winfsp_driver.c#L786) で有限値（`1000 ms`）が設定されているため Windows NT Cache Manager（`CcCopyRead`）が有効にならず、2 回目以降の読込でも毎回ユーザー空間へフォールバックしている。
 3. **非同期 OVERLAPPED 化後に顕在化するユーザー空間側の 3 大ボトルネックも特定**:
@@ -81,9 +81,9 @@
 
 ---
 
-## 3. 性能改善ポイント詳細（優先度順）
+## 3. 特定されたボトルネックと最適化方針
 
-### 3.1 【Priority 1 / 最優先・影響極大】`win32_io.c` の `FILE_FLAG_OVERLAPPED` 化によるカーネル `FileObject->Lock` 直列化の解消
+### 3.1 Priority 1：`FILE_FLAG_OVERLAPPED` 化によるカーネル `FileObject->Lock` 直列化の解消
 
 **トレースで観測された Lock Convoy と飢餓の実態**
 - 8 スレッドが同時稼働するコア区間における `ReadFile` 完了順の時系列解析から、OS ページキャッシュ上の単純読込であるにもかかわらず **厳密な直列実行と極端なスレッド占有（Lock Convoy）** が発生していることが判明した。
@@ -115,10 +115,10 @@
 
 ---
 
-### 3.2 【Priority 2 / 高・実マウント Warm 性能極大化】WinFsp `FileInfoTimeout = INFINITE` による OS キャッシュ有効化
+### 3.2 Priority 2：RO 時 `FileInfoTimeout = INFINITE` による OS キャッシュ有効化
 
 **現状と原因**
-- [性能評価報告書 §2.3・§3.3](performance-evaluation.md#L105-L113) で計測した通り、実物理 SSD 上での Warm 読込性能は `Native NTFS`（`10,953.9 MB/s` / 4KB Rnd `986.2 MB/s`）に対し、`ZeroExt DIO` は Cold 時（`1,490.9 MB/s`）と同一水準（`1,490.5 MB/s` / 4KB Rnd `36.8 MB/s`）で頭打ちになっている。
+- [性能評価レポート §2.3](performance-evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext--wsl---mount---vhd)（改善前計測当時）で観測した通り、実物理 SSD 上での Warm 読込性能は `Native NTFS`（`10,953.9 MB/s` / 4KB Rnd `986.2 MB/s`）に対し、`ZeroExt DIO` は Cold 時（`1,490.9 MB/s`）と同一水準（`1,490.5 MB/s` / 4KB Rnd `36.8 MB/s`）で頭打ちになっていた。
 - 原因は [winfsp_driver.c#L786](../../src/driver/winfsp_driver.c#L786) にある `out_params->FileInfoTimeout = 1000;` である。WinFsp カーネルドライバは `FileInfoTimeout = (UINT32)-1`（`INFINITE`）のときのみ Windows NT Cache Manager（`CcCopyRead`）によるファイルデータ／メタデータキャッシュを有効化する仕様となっている。
 
 **改善方針**
@@ -128,7 +128,7 @@
 
 ---
 
-### 3.3 【Priority 3 / 中〜高・Priority 1 修正後のユーザー空間ボトルネック対策】ロック粒度縮小とロック内ヒープ確保の排除
+### 3.3 Priority 3：ロック粒度縮小とロック内ヒープ確保の排除
 
 Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の陰に隠れていたユーザー空間ロックとアトミック操作のオーバーヘッドが支配的になる。
 
@@ -154,14 +154,14 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 ---
 
-### 3.4 【Priority 4 / 中】標準経路（`--no-direct-io` / `--rw`）の毎回 `ext2fs_file_open/close`・4 KB 分割 I/O の解消
+### 3.4 Priority 4：標準経路（`--no-direct-io` / `--rw`）の I/O 分割と冗長更新の解消
 
 **トレースから見た定量差（`/model.gguf` vs `/frag.bin`）**
 - 連続ファイル `/model.gguf`（`runs=1`）と断片化ファイル `/frag.bin`（`runs=65`, depth 1 extent tree）を `M0_8T_Rnd_4KB` で比較すると：
   - `win32_io.cache_lock` 取得回数: `2.47 回/op`（`145,414 / 58,779`）→ **`4.57 回/op`**（`179,740 / 39,363`）へ増加。
   - `ReadFile`・`cache_lock` を差し引いた **純 VFS CPU 時間**: `1.24 µs/op`（総時間の `6.7%`）→ **`9.89 µs/op`（総時間の `38.1%` / `389.3 ms`）へ約 8 倍増加**。
 - **コード上の原因**:
-  - [ext4_vfs_lower_read](../../src/vfs/op_read.c#L48-L60) の標準フォールバック経路は、read 1 回ごとに `ext2fs_file_open`（ヒープ確保＋inode 読込）→ `ext2fs_file_llseek` → `ext2fs_file_read`（4 KB ブロック単位ループ）→ `ext2fs_file_close` を毎回やり直している。このため `64 KB` 読込であっても常に 4 KB × 16 回の `ReadFile` に分割され、実ディスク（`FILE_FLAG_NO_BUFFERING`）で `52.1 MB/s` まで低下する直接原因になっている（[性能評価報告書 §3.3](performance-evaluation.md#L184-L186)）。
+  - [ext4_vfs_lower_read](../../src/vfs/op_read.c#L48-L60) の標準フォールバック経路は、read 1 回ごとに `ext2fs_file_open`（ヒープ確保＋inode 読込）→ `ext2fs_file_llseek` → `ext2fs_file_read`（4 KB ブロック単位ループ）→ `ext2fs_file_close` を毎回やり直している。このため `64 KB` 読込であっても常に 4 KB × 16 回の `ReadFile` に分割され、実ディスク（`FILE_FLAG_NO_BUFFERING`）でスループットが低下する直接原因になっている（[性能評価レポート §3.3](performance-evaluation.md#33-同一-ssd-5-方式比較から得られた技術的知見step-14-の効果)）。
   - また書込側 [ext4_vfs_write](../../src/vfs/op_write.c#L28-L58) も `ext2fs_file_open/close` 完了直後に、改めて `ext2fs_read_inode_full` ＋ `ext2fs_write_inode_full` を実行しており、inode 更新が重複している。
 
 **改善方針**
@@ -170,7 +170,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 ---
 
-### 3.5 【Priority 5 / 中・Explorer 操作レスポンス改善】メタデータ経路と `ctx->rwlock` 長時間保持の短縮
+### 3.5 Priority 5：メタデータ経路と `ctx->rwlock` 長時間保持の短縮
 
 ライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）より、Explorer やシェル操作の体感速度は以下のメタデータ処理で決まっていることが判明した。
 
@@ -188,9 +188,9 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 ---
 
-## 4. 実装ロードマップと再計測チェックリスト
+## 4. 実施した最適化ステップと再計測手順
 
-### 4.1 実装ステップ案（費用対効果順）
+### 4.1 実施ステップ一覧（Step 1〜4）
 
 | ステップ | 対象ファイル・箇所 | 変更規模 | 主な期待効果 |
 | :---: | :--- | :---: | :--- |
@@ -209,10 +209,10 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 ---
 
-## 5. 改善効果トラッキング（Before / After 記録欄）
+## 5. ステップ別改善効果の実測結果
 
 > [!NOTE]
-> 各ステップの実装完了後、`zeroext_bench.exe --trace ... --trace-events 524288` および `scripts/bench_compare_ssd.ps1` を再実行し、本表へ改善後実測値を追記する。
+> Step 1〜4 の実装後に `zeroext_bench.exe --trace ... --trace-events 524288` 等で再計測した Before / After の実績値を以下にまとめる（`e2fsprogs 1.47.4` 反映後の総合評価は [性能評価レポート](performance-evaluation.md) を参照）。
 
 | 指標 | Before (`aa37709`) | Step 1 後 (`OVERLAPPED`) | Step 2 後 (`INFINITE` Timeout) | Step 3 後 (`Cache Shard`) | Step 4 後 (`Metadata / Write Opt`) |
 | :--- | ---: | ---: | ---: | ---: | ---: |

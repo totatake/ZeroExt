@@ -1,11 +1,11 @@
-# 性能評価報告書 (Direct I/O 比較 / Windows NTFS・WSL2 同一 SSD 比較)
+# 性能評価レポート
 
 本書は、Read-Only / `--overlay` モードで動作するダイレクト・エクステント I/O 経路（ロックレス extent ベース並列 `pread`、現在は既定で有効・`--no-direct-io` で標準経路へ切替可）の有無による読み取り性能の違いに加え、**同一物理 NVMe SSD 上での Windows Native (NTFS)・`ZeroExt` (`zeroext.exe`)・`wsl --mount --vhd` 横並び比較** の実測結果をまとめたものである。
 
 - 対象プロジェクト: **`ZeroExt`**（コマンド名: `zeroext.exe`、ベンチマークバイナリ: `zeroext_bench.exe`、評価リビジョン: `78cd744` / Step 1〜4 最適化・`e2fsprogs 1.47.4` 反映後）
 - ベンチマーク実装: [tests/bench_direct_io.c](../../tests/bench_direct_io.c)（ビルド成果物: `build/zeroext_bench.exe`）
 - 同一 SSD 比較スクリプト: [scripts/bench_compare_ssd.ps1](../../scripts/bench_compare_ssd.ps1)（管理者権限 PowerShell 実行）
-- 最適化の経緯と詳細トレース解析: [Perfetto トレース定量解析・性能改善計画](perfetto-trace-analysis.md)
+- 最適化の経緯と詳細トレース解析: [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md)
 - 注記: 本書内の「`--no-direct-io` / `Std`」は標準 `ext2fs_file_read` 経路、「`--direct-io` ON / `DIO`」は RO / `--overlay` 時の既定動作に対応する。また Step 2 (`8bd61df`) 以降、RO マウント時は `FileInfoTimeout = INFINITE` (`(UINT32)-1`) が既定となり Windows NT Cache Manager が有効化されている。
 
 ---
@@ -200,7 +200,7 @@
   - 外部プロセスからイメージを同時更新するような特殊用途でカーネルキャッシュを抑制したい場合は `--file-info-timeout 1000`（`--rw` および書き込み可能 `--overlay` は既定で `1000 ms` かつ Direct I/O 無効）。
 
 > [!NOTE]
-> Step 1〜4 の各段階における Perfetto トレース定量的効果およびメタデータ最適化（`FspGetSecurityByName` **11.97x**、`FspOpen` **27.62x**、`FspReadDirectory` **14.51x**）の詳細は [Perfetto トレース定量解析・性能改善計画](perfetto-trace-analysis.md) を参照。
+> Step 1〜4 の各段階における Perfetto トレース定量的効果およびメタデータ最適化（`FspGetSecurityByName` **11.97x**、`FspOpen` **27.62x**、`FspReadDirectory` **14.51x**）の詳細は [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md) を参照。
 
 ---
 

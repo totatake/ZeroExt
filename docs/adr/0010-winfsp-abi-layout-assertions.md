@@ -12,7 +12,7 @@ ZeroExt はビルド環境に WinFsp SDK の事前インストールを要求し
 
 ### 案 A: WinFsp SDK インストールを必須化しヘッダ取り込みを廃止
 - **メリット**: 手動で ABI 定義を維持しなくて済む。
-- **デメリット / リスク**: ローカル環境や GitHub Actions CI (`windows-latest`) で外部 MSI 事前導入が必要になり、ビルド可搬性（`NFR-04`）とインプロセス検証性が低下する。
+- **デメリット / リスク**: ローカル環境や GitHub Actions CI (`windows-latest`) で外部 MSI 事前導入が必要になり、ビルド可搬性（`REQ-NF-004`）とインプロセス検証性が低下する。
 
 ### 案 B: 自前ヘッダを公式 WinFsp 2.x ABI と照合し、`FSP_ABI_ASSERT` でコンパイル時固定（採用）
 - **メリット**: `FSP_FSCTL_VOLUME_PARAMS` (`504 bytes`)、`FSP_FSCTL_FILE_INFO` (`72 bytes`)、`FSP_FSCTL_DIR_INFO` (`FileNameBuf` @ `0x68`) を公式 WinFsp 2.x ABI 仕様と厳密照合し、コンパイル時静的アサーション (`FSP_ABI_ASSERT`) で構造体サイズ・主要フィールドオフセットの退行をビルド時に即検知できる。

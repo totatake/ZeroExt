@@ -1,9 +1,9 @@
-# テスト仕様・検証ガイド (`ZeroExt` / `zeroext`)
+# テスト・検証ガイド
 
-本書は **ZeroExt** の自動テストスイート（C/C++ `CTest`・`.NET` GUI テスト）、メモリ安全性／静的解析（ASan・CRT リーク検出・`/analyze`）、および実機動作検証の基準をまとめた検証仕様書です。
+本書は **ZeroExt** の自動テストスイート（C/C++ `CTest`・`.NET` GUI テスト）、メモリ安全性／静的解析（ASan・CRT リーク検出・`/analyze`）、および実機動作検証の基準をまとめた検証ガイドです。
 
-- ビルド・インストール・日常の CLI/GUI 操作手順は [利用ガイド](guides/usage.md) を参照してください。
-- 性能ベンチマーク測定および Perfetto トレース解析結果は [評価レポート一覧](reports/README.md) を参照してください。
+- インストール・日常の CLI/GUI 操作手順は [利用ガイド](guides/usage.md)、ビルド・保守手順は [開発・ビルド・保守ガイド](guides/development.md) を参照してください。
+- 性能ベンチマーク測定および Perfetto トレース解析結果は [評価・解析レポート](reports/README.md) を参照してください。
 
 ---
 

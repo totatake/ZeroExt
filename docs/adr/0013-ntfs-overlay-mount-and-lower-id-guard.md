@@ -27,5 +27,5 @@
 ## 4. 結果と影響 (Consequences)
 
 - **良い影響**: AI モデル共有や `.img` 検証において ext4 非破壊性と実用的な読み書き運用を両立できた。
-- **受け入れるトレードオフ / 今後の制約**: 非空・未マーカー Upperdir の扱いやクローン `.img` 識別のさらなる厳格化は [ロードマップ §4.2](../roadmap.md#42-overlay-upperdir-安全性lower-識別子ガードの強化) で段階的に強化する。
+- **受け入れるトレードオフ / 今後の制約**: 非空・未マーカー Upperdir の扱いやクローン `.img` 識別のさらなる厳格化は [ロードマップ §4.1](../roadmap.md#41-overlay-upperdir-安全性lower-識別子ガードの強化) で段階的に強化する。
 - **関連する変更箇所**: [src/overlay/overlay_vfs.h](../../src/overlay/overlay_vfs.h), [src/overlay/overlay_vfs.c](../../src/overlay/overlay_vfs.c), [tests/test_extent_and_overlay.c](../../tests/test_extent_and_overlay.c)

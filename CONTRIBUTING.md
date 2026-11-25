@@ -28,7 +28,7 @@ Thank you for considering contributing to **ZeroExt**!
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1
    ```
-   See [`docs/testing.md`](docs/testing.md) and [`docs/guides/usage.md`](docs/guides/usage.md) for details on suites and options.
+   See [`docs/guides/development.md`](docs/guides/development.md), [`docs/testing.md`](docs/testing.md), and [`docs/guides/usage.md`](docs/guides/usage.md) for details on build prerequisites, suites, and options.
 
 ## Architectural & Licensing Rules
 

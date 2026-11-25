@@ -1,9 +1,6 @@
-# ロードマップ (`ZeroExt` / `zeroext`)
+# ロードマップ
 
-本書は **ZeroExt**（`v0.8.0` 時点：`zeroext.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExtGui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
-
-> [!NOTE]
-> Phase 0 基盤（GUI アプリケーション `ZeroExtGui.exe`・Perfetto トレース出力 `--trace`）に加え、**Phase 1.1（GUI 英語 / 日本語 i18n）は `v0.5.0` で実装完了** し、`v0.6.0` で安全アンマウント保護、`v0.8.0` で `--case-sensitive` マウント＆NTFS Upperdir 対応および GUI テーマ／レイアウト改善を追加済みである。
+本書は **ZeroExt**（`v0.8.1` 時点：`zeroext.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExtGui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
 
 ---
 
@@ -19,6 +16,7 @@
 | `v0.6.0` | 2026-11-21 | CLI `unmount` および GUI 残留ドライブ解除における `QueryDosDeviceW` / `GetVolumeInformationW` ターゲット安全性検証と単体／GUI テスト追加 |
 | `v0.7.0` | 2026-11-22 | OSS リポジトリ構造標準化（`CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `AGENTS.md`）、`docs/` の kebab-case 再編、`ADR-0001`〜`ADR-0013` 抽出、CI / Release ワークフロー分離 |
 | `v0.8.0` | 2026-11-23 | `--case-sensitive` モード実装（NTFS Upperdir `FileCaseSensitiveInfo`・`:cs` マーカーガード・事前検証／エラー翻訳・`_cs` 推奨パス）、`L:` 優先統一、Dark モード `ComboBox` 修正・GUI ヘッダー見切れ解消 |
+| `v0.8.1` | 2026-11-25 | ドキュメント体系整理（H1 タイトル・章番号・リンク名統一、`docs/guides/development.md`・`guides/README.md` 分離、要件 ID の `REQ-F-*`/`REQ-NF-*` 移行、`README`/`overview.md` 実測値同期・重複整理） |
 
 ---
 
@@ -40,30 +38,22 @@
 
 ---
 
-## 3. ロードマップ全体像
+## 3. 今後のフェーズ全体像
 
 | Phase | テーマ | 主な対象・成果物 | 状況 / 優先度 |
 | :--- | :--- | :--- | :---: |
-| **Phase 1**<br>（短期） | **GUI 多言語化と安全性・診断の強化** | `ZeroExtGui.exe` i18n（**`v0.5.0` 完了**）、`unmount` 安全検証（**`v0.6.0` 完了**）、非空レガシー Upperdir の既定拒否＆Lower ID 強化、`inspect` 診断拡充・`zeroext doctor` | **進行中（高）** |
+| **Phase 1**<br>（短期） | **安全性・診断の強化** | 非空レガシー Upperdir の既定拒否＆Lower ID 強化、`inspect` 診断拡充・`zeroext doctor`（GUI i18n は `v0.5.0`、安全 `unmount` 検証は `v0.6.0`、`--case-sensitive` は `v0.8.0` で完了） | **進行中（高）** |
 | **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export`、ハッシュ化による inode/path マップ高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **中〜高** |
 | **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出、非破壊診断 `zeroext fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、`--rw` 標準 `libext2fs` 経路の最適化 | **中** |
 | **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／ポータブル配布評価、停止済み WSL2 `ext4.vhdx` 連携ワークフロー強化 | **低〜中** |
 
 ---
 
-## 4. Phase 1：GUI 多言語化（完了）と安全性・診断の強化
+## 4. Phase 1：安全性・診断の強化
 
-### 4.1 GUI アプリケーションの多言語化（i18n：英語 / 日本語）— **実装済み (`v0.5.0`)**
+### 4.1 Overlay Upperdir 安全性・Lower 識別子ガードの強化
 
-`v0.5.0`（commit `c576f6a`）にて `Strings.en.xaml` / `Strings.ja.xaml`・`LocalizationService`・`MountErrorTranslator` の多言語リソース化と即時切替 UI、および `Localization_CompletenessAndSwitching` 自動テストを実装済みである。
-
-- **UI 文字列リソース & 言語切替**:
-  - `ResourceDictionary` により全画面 XAML・ダイアログ・ViewModel・トレイメニュー・エラー翻訳を一元管理し、`GuiSettings.Language`（`"auto"` / `"en"` / `"ja"`）およびヘッダー切替 UI で再起動なし切り替えに対応。
-- **今後の保守**: 新機能追加時は `Strings.en.xaml` と `Strings.ja.xaml` の両方を更新し、`ZeroExt.Gui.Tests` でキー網羅性を継続検証する。
-
-### 4.2 Overlay Upperdir 安全性・Lower 識別子ガードの強化
-
-現在 `src/overlay/overlay_vfs.c`（`overlay_validate_lower_id`）は Upperdir 直下の `.wh.__ext4_lower_id` に `<lower_uuid>:<blocks_count>:<block_size>` を保存し、別ボリュームとの不一致時はエラーを返している。残る安全ギャップを以下の通り解消する。
+現在 `src/overlay/overlay_vfs.c`（`overlay_validate_lower_id`）は Upperdir 直下の `.wh.__ext4_lower_id` に `<lower_uuid>:<blocks_count>:<block_size>`（`--case-sensitive` 時は末尾 `:cs` 付き）を保存し、別ボリュームやモード不一致時はエラーを返している。残る安全ギャップを以下の通り解消する。
 
 - **非空かつマーカー無し Upperdir の既定拒否**:
   - 現状は Upperdir に既存ファイルがあるにも関わらず `.wh.__ext4_lower_id` が存在しない場合、警告ログ（`EXT4_LOG_WARN`）を出してそのままマウント＋新規マーカー書き込みへ進むため、関係のない既存フォルダ誤指定時に Lower ファイルを意図せず上書きシャドウイングするリスクがある。
@@ -75,7 +65,7 @@
   - 選択されたボリュームが `NEEDS_RECOVERY` / `HAS_ERRORS` の場合、GUI 上で Read-Write 選択を自動抑止して Read-Only または Overlay（Lower RO 保持）を推奨表示する。
   - マウント開始前に選択済み Upperdir と対象 Lower の整合性を事前チェックし、不一致時は即座に警告・別 Upperdir 指定を促す。
 
-### 4.3 `inspect` 診断出力の拡充と `zeroext doctor` コマンド
+### 4.2 `inspect` 診断出力の拡充と `zeroext doctor` コマンド
 
 - **`zeroext inspect --json` の拡張**:
   - 現在の数値ビットフラグ（`feature_compat` / `feature_incompat` / `feature_ro_compat` / `journal_state` / `journal_start` 等）に加え、可読な機能フラグ名配列、Partition UUID・開始セクタ・セクタ数、`last_mount_time` / `last_fsck_time` / `fsck_error_count`、チェックサム状態、および推奨マウント可否サマリー（`mount_advice`: Read-Only / Overlay / Read-Write 可否と理由）を出力する。
@@ -158,26 +148,3 @@
 ### 7.2 WSL2 `ext4.vhdx` 連携ワークフロー強化
 
 - 停止済み WSL2 仮想ディスク（`ext4.vhdx`）の安全な Read-Only 検査・高速参照手順について、WSL 稼働中の二重アクセス衝突を防ぐプリチェックや GUI/CLI 補助ガイドを拡充する。
-
----
-
-## 8. 完了済み基盤（Implemented Foundations）
-
-以下は初期構想（旧 Phase 0 および初期リリース群）から既に実装・統合され、実運用および自動テストに組み込まれている基盤機能である。
-
-### A. デスクトップ GUI アプリケーション (`ZeroExtGui.exe`) — **実装済み (`v0.2.0` / `v0.5.0` / `v0.6.0` / `v0.8.0`)**
-
-- **実装場所**: `gui/ZeroExt.Gui/`（WPF / `.NET 10`）、テスト：`gui/ZeroExt.Gui.Tests/`（11 件自動テスト + `--self-test`）。
-- **実現済み機能**:
-  - 物理ディスク・`.img` ファイル（ドラッグ＆ドロップ対応）の自動一覧と GPT / MBR / EBR・ラベル・UUID・使用率・JBD2 ジャーナル状態（`CLEAN` / `NEEDS_RECOVERY` / `HAS_ERRORS`）可視化
-  - Read-Only（既定・Direct I/O ON）／Overlay（`.wh.__ext4_lower_id` 検証付き）／Read-Write（Dirty 時自動 RO フォールバック）の切替、英語／日本語 i18n 即時切替、詳細オプション、CLI プレビュー
-  - リアルタイム転送統計・システムトレイ常駐・ワンクリック安全アンマウント・WinFsp/ext4 ターゲット保護付き残留ドライブ解除・WinFsp 導入ガイド・非管理者時の UAC 再起動導線・WinFsp 不要のオフラインファイルブラウザ／`mkfs`
-- **アーキテクチャ境界**: [ADR-0002](adr/0002-standalone-project-boundary.md) に沿い、GPLv2 の `zeroext_core` / `libext2fs` を直接リンクせず `zeroext.exe` を `--json` / `--json-events` / `--stop-event` によるサブプロセス疎結合で制御する構成を維持している。詳細は [利用ガイド](guides/usage.md) および [テスト仕様・検証ガイド](testing.md) を参照。
-
-### B. 性能解析用 Perfetto トレース出力機能 (`--trace`) — **実装済み (`v0.3.0`)**
-
-- **実装場所**: `src/trace/perfetto_trace.h` / `src/trace/perfetto_trace.c`（テスト：`tests/test_perfetto_trace.c`）。
-- **実現済み機能**:
-  - 非指定時は単一分岐によるゼロオーバーヘッドを維持し、`zeroext mount --trace <path>`・`zeroext_bench.exe --trace <path>`・GUI 詳細設定から有効化可能
-  - スレッドローカルリングバッファ（ロックレス記録・`QueryPerformanceCounter` 精度）へ WinFsp コールバック、`SRWLOCK` 待ち／保持時間、Extent／LRU キャッシュ、Direct I/O、`ReadFile`/`WriteFile`、Overlay Copy-up/Whiteout を記録し Chrome Trace Event JSON を出力（[Perfetto UI](https://ui.perfetto.dev/) 対応）
-- **活用実績**: 実測トレースに基づく定量ボトルネック分析と Step 1〜4 最適化（最大 +153%〜1,294% 改善）については [Perfetto トレース定量解析・性能改善計画](reports/perfetto-trace-analysis.md) および [性能評価報告書](reports/performance-evaluation.md) を参照。

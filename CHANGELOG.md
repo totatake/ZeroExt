@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-25
+
+### Added
+- Added [`docs/guides/README.md`](docs/guides/README.md) hub and [`docs/guides/development.md`](docs/guides/development.md) to separate developer build, `e2fsprogs` upstream sync, benchmark, and Perfetto tracing procedures from end-user instructions.
+
+### Changed
+- Standardized H1 titles, `## N.` / `### N.M` section numbering, and 1:1 index link labels across `docs/` and root hubs (`docs/README.md`, `docs/adr/README.md`, `docs/design/README.md`, `docs/reports/README.md`).
+- Migrated requirement IDs in `docs/requirements.md` (and `ADR-0010`) from `FR-*` / `NFR-*` to `REQ-F-001..011` / `REQ-NF-001..004`, reflecting `ZeroExtGui.exe`, `--case-sensitive`, and safe `unmount`.
+- Streamlined `README.md` and `README.ja.md` with strict 1:1 section/link parity and synchronized benchmark figures in `README.md`, `README.ja.md`, and `docs/overview.md` to the `78cd744` (`e2fsprogs 1.47.4`) evaluation.
+- Updated `docs/architecture.md` (added `ZeroExtGui.exe` IPC boundary and `src/trace/`), `docs/design/detailed-design.md` (32-shard CLOCK / 16-shard `extent_cache` / `cached_extents`), `docs/roadmap.md` (removed duplicated completed sections and updated `ADR-0013` anchor), and `docs/reports/perfetto-trace-analysis.md` (reframed as a completed optimization report).
+
 ## [0.8.0] - 2026-11-23
 
 ### Added
@@ -77,7 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/totatake/ZeroExt/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/totatake/ZeroExt/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/totatake/ZeroExt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/totatake/ZeroExt/compare/v0.5.0...v0.6.0

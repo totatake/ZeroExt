@@ -1,15 +1,16 @@
-# アーキテクチャ設計書 (`ZeroExt` / `zeroext`)
+# アーキテクチャ設計書
 
 ## 1. システムアーキテクチャ概要
 
-本システムは、カーネルプロキシとしての **WinFsp (`winfsp-x64.sys` / `winfsp-x64.dll`)**、WinFsp コールバックブリッジ層（`src/driver/`）、NTFS Overlay ルーティング層（`src/overlay/`）、モジュラー VFS 操作層（`src/vfs/op_*.c`）、エクステント直結 I/O エンジン（`src/extent/`）、ディスク・パーティション・ジャーナル検査層（`src/disk/`）、本家 `e2fsprogs` (`third_party/e2fsprogs/` + `compat/`)、および Windows ネイティブ I/O マネージャ（`src/io/win32_io.c`）で構成される。
+本システムは、カーネルプロキシとしての **WinFsp (`winfsp-x64.sys` / `winfsp-x64.dll`)**、疎結合デスクトップ GUI（`gui/ZeroExt.Gui/` / `ZeroExtGui.exe`）、WinFsp コールバックブリッジ層（`src/driver/`）、NTFS Overlay ルーティング層（`src/overlay/`）、モジュラー VFS 操作層（`src/vfs/op_*.c`）、エクステント直結 I/O エンジン（`src/extent/`）、ディスク・パーティション・ジャーナル検査層（`src/disk/`）、組み込み Perfetto トレーサ（`src/trace/`）、本家 `e2fsprogs` (`third_party/e2fsprogs/` + `compat/`)、および Windows ネイティブ I/O マネージャ（`src/io/win32_io.c`）で構成される。
 
 ### 1.1 コンポーネント構成図
 
 ```mermaid
 flowchart TD
-    subgraph UserApps["Windows アプリケーション層"]
+    subgraph UserApps["Windows アプリケーション層 (非GPLv2 / IPC 境界)"]
         Exp["Windows Explorer / Win32 Apps / mmap (GGUF 等)"]
+        GuiApp["ZeroExtGui.exe (.NET 10 WPF)\n--json / --json-events / --stop-event 経由で疎結合制御"]
         CliUser["管理者ターミナル (CLI)"]
     end
 
@@ -17,16 +18,17 @@ flowchart TD
         WinFspSys["winfsp-x64.sys\n(MS署名済 FSD + Cc/Mm キャッシュ連携)"]
     end
 
-    subgraph DriverExe["ZeroExt / zeroext.exe (ユーザー空間)"]
-        CLI["src/cli/main.c\n(list / inspect / extents / mount 等)"]
+    subgraph DriverExe["ZeroExt / zeroext.exe (ユーザー空間・GPLv2)"]
+        CLI["src/cli/main.c\n(list / inspect / extents / mount / unmount 等)"]
         WinFspDrv["src/driver/winfsp_driver.c\n(FSP_FILE_SYSTEM_INTERFACE + UACセッション対応)"]
         Overlay["src/overlay/overlay_vfs.c\n(--overlay 時: Upper NTFS + Copy-up + Whiteout)"]
-        VFS["src/vfs/op_*.c\n(モジュラーVFS + 2階層SRWLOCK)"]
-        Extent["src/extent/extent_map.c\n(エクステント抽出/LRUキャッシュ + 二分探索ロックレスRead)"]
+        VFS["src/vfs/op_*.c\n(モジュラーVFS + 2階層SRWLOCK + Dentryキャッシュ)"]
+        Extent["src/extent/extent_map.c\n(エクステント抽出 / 16シャードキャッシュ + 二分探索Read)"]
         Disk["src/disk/\n(partition_table / superblock_probe / disk_scanner)"]
+        Trace["src/trace/perfetto_trace.c\n(--trace 時: ロックレス TLS リングバッファ)"]
         LibExt2["third_party/e2fsprogs/lib/ext2fs\n(64bit / Extents / CRC32C / 256B Inode)"]
         Compat["compat/ (msvc_compat.h + include/)\n+ scripts/generate_e2fsprogs_headers.py"]
-        Win32IO["src/io/win32_io.c\n(OVERLAPPED + 直読API + 4KB RMW + LRU + 境界ガード)"]
+        Win32IO["src/io/win32_io.c\n(OVERLAPPED + 直読API + 4KB RMW + 32シャードCLOCK + 境界ガード)"]
     end
 
     subgraph Storage["ストレージデバイス / Upperdir"]
@@ -36,6 +38,7 @@ flowchart TD
 
     Exp --> WinFspSys
     WinFspSys <-->|"FSP_FILE_SYSTEM_INTERFACE"| WinFspDrv
+    GuiApp -.->|"サブプロセス起動 / JSON IPC\n(libext2fs 直接リンク禁止)"| CLI
     CliUser --> CLI
     CLI --> Disk
     CLI --> VFS
@@ -44,13 +47,16 @@ flowchart TD
     VFS -->|"--overlay 時"| Overlay
     Overlay -->|"書込 / Upper参照 / Copy-up"| NtfsUpper
     Overlay -->|"Lower 参照 (RO)"| Extent
-    VFS -->|"通常Read (キャッシュヒット時ロックレス)"| Extent
+    VFS -->|"通常Read (ハンドル/キャッシュヒット時ロックレス)"| Extent
     VFS --> Disk
     VFS --> LibExt2
-    Compat -.->|"Zero-Patch /FI 適用"| LibExt2
+    Compat -.->|"CMake /FI 非侵襲シム"| LibExt2
     Extent -->|"win32_io_pread_direct"| Win32IO
     LibExt2 -->|"io_manager"| Win32IO
     Disk --> Win32IO
+    WinFspDrv -.->|"スパン・カウンタ記録"| Trace
+    VFS -.->|"ロック・Dentry記録"| Trace
+    Win32IO -.->|"I/O・キャッシュ記録"| Trace
     Win32IO -->|"CreateFileW / OVERLAPPED"| Phys
 ```
 
@@ -92,13 +98,13 @@ sequenceDiagram
 
 ## 2. `e2fsprogs` バージョンアップ追従アーキテクチャ
 
-上流の `e2fsprogs` 更新時にマージコンフリクトなく追従するため、以下の **Zero-Patch 分離構成** を採用する。
+上流の `e2fsprogs` 更新時に手作業のマージコンフリクトなく追従するため、以下の **Zero-Patch 分離構成** を採用する（技術背景は [ADR-0005](adr/0005-zero-patch-e2fsprogs-compat-layer.md)、実装仕様は [詳細設計書 §2](design/detailed-design.md#2-e2fsprogs-互換レイヤー詳細-compat--scripts) を参照）。
 
-1. **ソースツリーの完全分離**: `third_party/e2fsprogs/` 配下には `#ifdef _MSC_VER` や `#ifdef _WIN32` 等の Windows 固有記述を一切含めない。
-2. **CMake `/FI` 強制インクルードと `compat/include/`**: `CMakeLists.txt` で `ext2fs` ターゲットにのみ `/FI.../compat/msvc_compat.h` と `compat/include/` を適用し、`__attribute__` や `<unistd.h>` 等の GCC/POSIX 依存を非侵襲で吸収する。
-3. **ビルド時ヘッダ・エラーテーブル自動生成**: `scripts/generate_e2fsprogs_headers.py` が `ext2_err.et.in` と `ext2_types.h.in` から `ext2fs/ext2_err.h`, `ext2_err.c`, `ext2fs/ext2_types.h` を CMake ビルド時に生成する。
-4. **I/O 抽象化境界の徹底**: OS 依存の `unix_io.c` 等はビルド対象から外し、公開 ABI である `struct struct_io_manager` を実装した `src/io/win32_io.c` を注入する。
-5. **更新検証自動化**: `scripts/update_e2fsprogs.ps1` により、新バージョンの同期・ビルド・`ctest` 検証を一貫実行する。
+1. **ソースツリーへの手動パッチ禁止**: `third_party/e2fsprogs/` 配下へ手書きの `#ifdef _MSC_VER` / `#ifdef _WIN32` 改変を加えず、GCC/POSIX 互換シムはすべて `compat/` へ隔離する。
+2. **CMake `/FI` の `PRIVATE` / `INTERFACE` 分離**: `ext2fs` ターゲットには `compat/msvc_compat.h`（警告抑制含む）と `compat/include/` を `PRIVATE` で適用し、呼び出し側ターゲットには最小公開シム `compat/msvc_public_compat.h` のみを `INTERFACE` で伝播させる。
+3. **ビルド時ヘッダ・テーブル自動生成**: `scripts/generate_e2fsprogs_headers.py` が `ext2_err.h`, `ext2_err.c`, `ext2_types.h`, `crc32c_table.h` を CMake configure/build 時に生成する。
+4. **I/O 抽象化境界の徹底**: OS 依存の `unix_io.c` 等を除外し、公開 ABI である `struct struct_io_manager` を実装した `src/io/win32_io.c` を注入する。
+5. **再現可能な自動更新フロー**: MSVC C11 構文制約に対する最小限の上流調整も含め [開発・ビルド・保守ガイド §2](guides/development.md#2-e2fsprogs-アップストリーム更新手順)（`scripts/update_e2fsprogs.ps1`）で再現可能に自動化する。
 
 ---
 
