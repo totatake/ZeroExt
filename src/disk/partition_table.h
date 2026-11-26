@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_PARTITION_TABLE_H
-#define ZEROEXT_PARTITION_TABLE_H
+#ifndef ZEROEXT4_PARTITION_TABLE_H
+#define ZEROEXT4_PARTITION_TABLE_H
 
 #include <stdint.h>
 #include "superblock_probe.h"
@@ -38,4 +38,4 @@ int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
 }
 #endif
 
-#endif /* ZEROEXT_PARTITION_TABLE_H */
+#endif /* ZEROEXT4_PARTITION_TABLE_H */

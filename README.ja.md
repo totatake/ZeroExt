@@ -1,8 +1,8 @@
-# ZeroExt
+# ZeroExt4
 
 **Language:** [English](README.md) | 日本語
 
-Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高速 ext2 / ext3 / ext4 ユーザー空間ファイルシステムドライバ、管理 CLI ツール（`zeroext.exe`）、およびデスクトップ GUI マウントマネージャー（`ZeroExtGui.exe`）です。
+Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高速 ext2 / ext3 / ext4 ユーザー空間ファイルシステムドライバ、管理 CLI ツール（`zeroext4.exe`）、およびデスクトップ GUI マウントマネージャー（`ZeroExt4Gui.exe`）です。
 
 > **なぜ作ったのか**: Linux パーティション上に置いた巨大な AI モデル（GGUF / Safetensors 等）や開発データを **複製せず・ext4 を壊さず・BSOD リスクゼロのユーザー空間動作のまま、Windows Native NTFS 並みの速度で共有する** ために設計されています。
 
@@ -10,8 +10,8 @@ Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高�
 
 | 方式 | マウント形態 | Warm 読取 (`1MB` / `4KB Rnd`) | Cold 実 SSD (`1MB`) | 現代 ext4 対応 | BSOD リスク | 非破壊書込 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt` (既定 RO / DIO)** | **◎ (`L:` 等)** | **`10,543` / `991 MB/s`**<br><sub>(`Native NTFS` 比 `1.00x〜1.08x`)</sub> | **`1,564 MB/s`** | **◎ (`libext2fs`)** | **ゼロ** | **◎ (`--overlay`)** |
-| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost`) | `196` / `17.9 MB/s`<br><sub>(`ZeroExt` 比 `1/54〜1/72`)</sub> | `161 MB/s` | ◎ | 低（VM 要） | × |
+| **`ZeroExt4` (既定 RO / DIO)** | **◎ (`L:` 等)** | **`10,543` / `991 MB/s`**<br><sub>(`Native NTFS` 比 `1.00x〜1.08x`)</sub> | **`1,564 MB/s`** | **◎ (`libext2fs`)** | **ゼロ** | **◎ (`--overlay`)** |
+| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost`) | `196` / `17.9 MB/s`<br><sub>(`ZeroExt4` 比 `1/54〜1/72`)</sub> | `161 MB/s` | ◎ | 低（VM 要） | × |
 | **旧来のカーネル FSD (`Ext2Fsd` 等)** | ◎ | 高速 | 高速 | △〜× | **高** | × |
 | **商用ドライバ / 読取ビューア** | ◎ / × | 高速 / 複製要 | 高速 / 複製要 | ◎ / ○ | 中 / ゼロ | × |
 
@@ -70,21 +70,21 @@ Chocolatey / 公式 `.msi` による導入や確認コマンドは [利用ガイ
 
 ### 3. GUI 起動または CLI マウント
 
-- **デスクトップ GUI (`.\build\gui\ZeroExtGui.exe`)**: 物理ディスク／`.img` の自動検出と JBD2 状態確認、RO / Overlay / RW マウント切替（`L:` 優先、`--case-sensitive`、日英切替、ライト／ダークテーマ）、トレイ常駐に対応し、GPLv2 コードを直接リンクせず `zeroext.exe` を JSON / Named Event IPC で制御します。
+- **デスクトップ GUI (`.\build\gui\ZeroExt4Gui.exe`)**: 物理ディスク／`.img` の自動検出と JBD2 状態確認、RO / Overlay / RW マウント切替（`L:` 優先、`--case-sensitive`、日英切替、ライト／ダークテーマ）、トレイ常駐に対応し、GPLv2 コードを直接リンクせず `zeroext4.exe` を JSON / Named Event IPC で制御します。
 - **CLI 使用例**:
 
 ```powershell
 # ディスク / イメージ検査と Read-Only + Direct Extent I/O マウント（既定）
-zeroext.exe list
-zeroext.exe inspect test.img
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
+zeroext4.exe list
+zeroext4.exe inspect test.img
+zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
 
 # 非破壊 Overlay マウント（Lower ext4 は RO 保護・変更だけ NTFS フォルダへ保存）
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
+zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 
 # Direct Read-Write マウントと安全なアンマウント
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
-zeroext.exe unmount L:
+zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
+zeroext4.exe unmount L:
 ```
 
 GUI 詳細・オフライン操作（`mkfs` / `ls` / `cat` / `write`）・全 CLI オプションは [利用ガイド](docs/guides/usage.md) を参照してください。

@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_PERFETTO_TRACE_H
-#define ZEROEXT_PERFETTO_TRACE_H
+#ifndef ZEROEXT4_PERFETTO_TRACE_H
+#define ZEROEXT4_PERFETTO_TRACE_H
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -38,10 +38,10 @@ typedef struct ztrace_summary {
     uint64_t qpc_freq;
 } ztrace_summary_t;
 
-extern volatile LONG g_zeroext_trace_enabled;
+extern volatile LONG g_zeroext4_trace_enabled;
 
 static __inline int ztrace_is_enabled(void) {
-    return g_zeroext_trace_enabled != 0;
+    return g_zeroext4_trace_enabled != 0;
 }
 
 static __inline uint64_t ztrace_now_qpc(void) {
@@ -178,4 +178,4 @@ static __inline void ztrace_srw_release_exclusive(SRWLOCK *lock, const ztrace_lo
 }
 #endif
 
-#endif /* ZEROEXT_PERFETTO_TRACE_H */
+#endif /* ZEROEXT4_PERFETTO_TRACE_H */

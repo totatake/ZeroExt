@@ -2,7 +2,7 @@
 
 ## 1. システムアーキテクチャ概要
 
-本システムは、カーネルプロキシとしての **WinFsp (`winfsp-x64.sys` / `winfsp-x64.dll`)**、疎結合デスクトップ GUI（`gui/ZeroExt.Gui/` / `ZeroExtGui.exe`）、WinFsp コールバックブリッジ層（`src/driver/`）、NTFS Overlay ルーティング層（`src/overlay/`）、モジュラー VFS 操作層（`src/vfs/op_*.c`）、エクステント直結 I/O エンジン（`src/extent/`）、ディスク・パーティション・ジャーナル検査層（`src/disk/`）、組み込み Perfetto トレーサ（`src/trace/`）、本家 `e2fsprogs` (`third_party/e2fsprogs/` + `compat/`)、および Windows ネイティブ I/O マネージャ（`src/io/win32_io.c`）で構成される。
+本システムは、カーネルプロキシとしての **WinFsp (`winfsp-x64.sys` / `winfsp-x64.dll`)**、疎結合デスクトップ GUI（`gui/ZeroExt4.Gui/` / `ZeroExt4Gui.exe`）、WinFsp コールバックブリッジ層（`src/driver/`）、NTFS Overlay ルーティング層（`src/overlay/`）、モジュラー VFS 操作層（`src/vfs/op_*.c`）、エクステント直結 I/O エンジン（`src/extent/`）、ディスク・パーティション・ジャーナル検査層（`src/disk/`）、組み込み Perfetto トレーサ（`src/trace/`）、本家 `e2fsprogs` (`third_party/e2fsprogs/` + `compat/`)、および Windows ネイティブ I/O マネージャ（`src/io/win32_io.c`）で構成される。
 
 ### 1.1 コンポーネント構成図
 
@@ -10,7 +10,7 @@
 flowchart TD
     subgraph UserApps["Windows アプリケーション層 (非GPLv2 / IPC 境界)"]
         Exp["Windows Explorer / Win32 Apps / mmap (GGUF 等)"]
-        GuiApp["ZeroExtGui.exe (.NET 10 WPF)\n--json / --json-events / --stop-event 経由で疎結合制御"]
+        GuiApp["ZeroExt4Gui.exe (.NET 10 WPF)\n--json / --json-events / --stop-event 経由で疎結合制御"]
         CliUser["管理者ターミナル (CLI)"]
     end
 
@@ -18,7 +18,7 @@ flowchart TD
         WinFspSys["winfsp-x64.sys\n(MS署名済 FSD + Cc/Mm キャッシュ連携)"]
     end
 
-    subgraph DriverExe["ZeroExt / zeroext.exe (ユーザー空間・GPLv2)"]
+    subgraph DriverExe["ZeroExt4 / zeroext4.exe (ユーザー空間・GPLv2)"]
         CLI["src/cli/main.c\n(list / inspect / extents / mount / unmount 等)"]
         WinFspDrv["src/driver/winfsp_driver.c\n(FSP_FILE_SYSTEM_INTERFACE + UACセッション対応)"]
         Overlay["src/overlay/overlay_vfs.c\n(--overlay 時: Upper NTFS + Copy-up + Whiteout)"]
@@ -65,14 +65,14 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     actor User as ユーザー
-    participant CLI as zeroext.exe (CLI / Driver)
+    participant CLI as zeroext4.exe (CLI / Driver)
     participant Disk as partition_table & superblock_probe
     participant VFS as ext4_vfs / overlay_vfs
     participant Ext as extent_map (LRUキャッシュ + 二分探索)
     participant IO as win32_io_manager
     participant Dev as PhysicalDrive / .img
 
-    User->>CLI: zeroext mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: [--overlay C:\upper]
+    User->>CLI: zeroext4 mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: [--overlay C:\upper]
     CLI->>Disk: パーティション位置解決 (GPT/MBR/EBR) & ext4_probe_partition
     Disk-->>CLI: OffsetBytes, SizeBytes, Journal状態
     CLI->>VFS: ext4_vfs_mount(cfg) (Overlay時はLowerを厳密ROオープン)

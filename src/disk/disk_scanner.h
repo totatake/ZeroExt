@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_DISK_SCANNER_H
-#define ZEROEXT_DISK_SCANNER_H
+#ifndef ZEROEXT4_DISK_SCANNER_H
+#define ZEROEXT4_DISK_SCANNER_H
 
 #include "partition_table.h"
 
@@ -22,4 +22,4 @@ int disk_scanner_scan_physical_drives(scanned_disk_t *out_disks, uint32_t max_di
 }
 #endif
 
-#endif /* ZEROEXT_DISK_SCANNER_H */
+#endif /* ZEROEXT4_DISK_SCANNER_H */

@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_SUPERBLOCK_PROBE_H
-#define ZEROEXT_SUPERBLOCK_PROBE_H
+#ifndef ZEROEXT4_SUPERBLOCK_PROBE_H
+#define ZEROEXT4_SUPERBLOCK_PROBE_H
 
 #include <stdint.h>
 
@@ -56,4 +56,4 @@ const char *ext4_journal_state_name(ext4_journal_state_t state);
 }
 #endif
 
-#endif /* ZEROEXT_SUPERBLOCK_PROBE_H */
+#endif /* ZEROEXT4_SUPERBLOCK_PROBE_H */

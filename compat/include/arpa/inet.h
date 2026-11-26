@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_COMPAT_ARPA_INET_H
-#define ZEROEXT_COMPAT_ARPA_INET_H
+#ifndef ZEROEXT4_COMPAT_ARPA_INET_H
+#define ZEROEXT4_COMPAT_ARPA_INET_H
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -20,4 +20,4 @@ static __inline uint16_t ntohs(uint16_t x) {
     return (uint16_t)_byteswap_ushort((unsigned short)x);
 }
 
-#endif /* ZEROEXT_COMPAT_ARPA_INET_H */
+#endif /* ZEROEXT4_COMPAT_ARPA_INET_H */

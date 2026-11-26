@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_WINFSP_DRIVER_H
-#define ZEROEXT_WINFSP_DRIVER_H
+#ifndef ZEROEXT4_WINFSP_DRIVER_H
+#define ZEROEXT4_WINFSP_DRIVER_H
 
 #include "../vfs/ext4_vfs.h"
 #include <winfsp/winfsp.h>
@@ -30,7 +30,7 @@ int winfsp_driver_is_safe_unmount_target(const wchar_t *dos_target,
 
 /* Remove a stale drive letter left behind by an abnormally terminated mount process
  * (Mount Manager mount point + DOS device in current and desktop-user sessions).
- * Refuses with -EACCES if the drive belongs to a non-ZeroExt/WinFsp volume. */
+ * Refuses with -EACCES if the drive belongs to a non-ZeroExt4/WinFsp volume. */
 int winfsp_driver_force_unmount(const wchar_t *drive);
 
 /* Runtime capability helpers */
@@ -41,4 +41,4 @@ int winfsp_driver_is_process_elevated(void);
 }
 #endif
 
-#endif /* ZEROEXT_WINFSP_DRIVER_H */
+#endif /* ZEROEXT4_WINFSP_DRIVER_H */

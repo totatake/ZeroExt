@@ -1,6 +1,6 @@
 # 詳細設計書
 
-本書は、`ZeroExt` のディレクトリ構造、CMake ビルド定義、互換レイヤー、`win32_io`、ディスク・ジャーナル検査、VFS (`op_*`)、エラー変換、および WinFsp ドライバインターフェースの詳細仕様を記述する。
+本書は、`ZeroExt4` のディレクトリ構造、CMake ビルド定義、互換レイヤー、`win32_io`、ディスク・ジャーナル検査、VFS (`op_*`)、エラー変換、および WinFsp ドライバインターフェースの詳細仕様を記述する。
 
 ---
 
@@ -9,7 +9,7 @@
 ### 1.1 ディレクトリ構成
 
 ```text
-ZeroExt\
+ZeroExt4\
 ├── CMakeLists.txt
 ├── LICENSE                               # GPLv2
 ├── THIRD_PARTY_NOTICES.md                # サードパーティ権利表記 (e2fsprogs / WinFsp)
@@ -38,7 +38,7 @@ ZeroExt\
 │   ├── build_gui.ps1                     # .NET 10 WPF GUI ビルド＆テストスクリプト
 │   ├── find_vs.ps1                       # Visual Studio ツールチェーン自動検出ヘルパー
 │   ├── run_sanitizers.ps1                # ASan / Debug CRT リーク / /analyze 検証スクリプト
-│   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ZeroExt/WSL2)
+│   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ZeroExt4/WSL2)
 ├── compat/
 │   ├── msvc_compat.h                     # ext2fs PRIVATE /FI 強制インクルード用互換シム
 │   ├── msvc_public_compat.h              # ext2fs INTERFACE /FI 用最小公開シム (mode_t, __attribute__)
@@ -55,9 +55,9 @@ ZeroExt\
 │   ├── overlay/                          # overlay_vfs.h / .c (NTFS Upperdir OverlayFS)
 │   ├── vfs/                              # ext4_vfs.h, op_*.c
 │   ├── driver/                           # winfsp_driver.h / .c
-│   └── cli/                              # main.c (zeroext.exe)
+│   └── cli/                              # main.c (zeroext4.exe)
 ├── tests/                                # test_main.c + 単体・結合テスト群 + bench_direct_io.c
-└── gui/                                  # ZeroExt.sln (.NET 10 WPF ZeroExt.Gui + ZeroExt.Gui.Tests)
+└── gui/                                  # ZeroExt4.sln (.NET 10 WPF ZeroExt4.Gui + ZeroExt4.Gui.Tests)
 ```
 
 ### 1.2 CMake ターゲット構成
@@ -67,18 +67,18 @@ ZeroExt\
    - ソース: `third_party/e2fsprogs/lib/et/*.c`（`com_err.c`, `error_message.c`, `et_name.c`, `init_et.c`, `com_right.c`）, 生成された `ext2_err.c`, `third_party/e2fsprogs/lib/ext2fs/*.c`（OS 依存の `unix_io.c` 等は除外した 59 ファイル）
    - コンパイルオプション (MSVC): `PRIVATE` `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_compat.h` `/W3`、`INTERFACE` `/FI${CMAKE_CURRENT_SOURCE_DIR}/compat/msvc_public_compat.h`
    - デバッグ形式 (`CMP0141`): `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT = "Embedded"`（`/Z7` により `mspdbsrv.exe` 非依存でビルド）
-3. **`zeroext_core`（静的ライブラリ）**:
+3. **`zeroext4_core`（静的ライブラリ）**:
    - ソース: `src/common/*.c`, `src/trace/*.c`, `src/io/*.c`, `src/disk/*.c`, `src/extent/*.c`, `src/overlay/*.c`, `src/vfs/*.c`, `src/driver/*.c`
    - リンク: `ext2fs`, `advapi32`, `shell32`, `user32`
-4. **`zeroext`（実行ファイル）**:
+4. **`zeroext4`（実行ファイル）**:
    - ソース: `src/cli/main.c`
-   - リンク: `zeroext_core`, `ext2fs`, `dbghelp`
-5. **`zeroext_tests`（実行ファイル / CTest 登録）**:
+   - リンク: `zeroext4_core`, `ext2fs`, `dbghelp`
+5. **`zeroext4_tests`（実行ファイル / CTest 登録）**:
    - ソース: `tests/test_*.c`
    - CTest スイート: `win32_io`, `partition_and_probe`, `vfs_operations`, `winfsp_callbacks`, `extent_and_overlay`, `perfetto_trace`
-6. **`zeroext_bench`（実行ファイル / Direct I/O ベンチマーク）**:
+6. **`zeroext4_bench`（実行ファイル / Direct I/O ベンチマーク）**:
    - ソース: `tests/bench_direct_io.c`
-   - リンク: `zeroext_core`, `ext2fs`
+   - リンク: `zeroext4_core`, `ext2fs`
 
 ---
 

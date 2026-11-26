@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_EXTENT_MAP_H
-#define ZEROEXT_EXTENT_MAP_H
+#ifndef ZEROEXT4_EXTENT_MAP_H
+#define ZEROEXT4_EXTENT_MAP_H
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -71,4 +71,4 @@ void ext4_extent_cache_clear(ext4_extent_cache_t *cache);
 }
 #endif
 
-#endif /* ZEROEXT_EXTENT_MAP_H */
+#endif /* ZEROEXT4_EXTENT_MAP_H */

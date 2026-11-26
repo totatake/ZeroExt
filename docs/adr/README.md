@@ -1,13 +1,13 @@
 # Architecture Decision Records (ADR)
 
-本ディレクトリは **ZeroExt** における主要なアーキテクチャ設計判断、検討した代替案、根拠、およびトレードオフを記録する ADR 一覧です。システム全体図とモジュール関係は [アーキテクチャ設計書](../architecture.md) を参照してください。
+本ディレクトリは **ZeroExt4** における主要なアーキテクチャ設計判断、検討した代替案、根拠、およびトレードオフを記録する ADR 一覧です。システム全体図とモジュール関係は [アーキテクチャ設計書](../architecture.md) を参照してください。
 
 ## ADR 一覧
 
 | ID | タイトル | ステータス | 日付 | ドキュメント |
 | :--- | :--- | :---: | :---: | :--- |
 | `ADR-0001` | 純粋カーネルドライバ (`.sys`) ではなく `WinFsp + libext2fs` を採用する | Accepted | 2026-11-17 | [0001-winfsp-and-libext2fs-userspace-driver.md](0001-winfsp-and-libext2fs-userspace-driver.md) |
-| `ADR-0002` | 独立プロジェクト (`ZeroExt`) として分離開発する | Accepted | 2026-11-17 | [0002-standalone-project-boundary.md](0002-standalone-project-boundary.md) |
+| `ADR-0002` | 独立プロジェクト (`ZeroExt4`) として分離開発する | Accepted | 2026-11-17 | [0002-standalone-project-boundary.md](0002-standalone-project-boundary.md) |
 | `ADR-0003` | `lwext4` ではなく本家 `e2fsprogs` (`libext2fs`) を採用する | Accepted | 2026-11-17 | [0003-upstream-libext2fs-over-lwext4.md](0003-upstream-libext2fs-over-lwext4.md) |
 | `ADR-0004` | `fuse-ext2` 型モジュラー構造 × 64bit API × WinFsp ネイティブのハイブリッド設計 | Accepted | 2026-11-17 | [0004-modular-vfs-64bit-api-and-native-winfsp.md](0004-modular-vfs-64bit-api-and-native-winfsp.md) |
 | `ADR-0005` | `e2fsprogs` 追従性を担保する Zero-Patch 互換レイヤー設計 | Accepted | 2026-11-17 | [0005-zero-patch-e2fsprogs-compat-layer.md](0005-zero-patch-e2fsprogs-compat-layer.md) |

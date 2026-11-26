@@ -27,7 +27,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Build and test (Release + CTest + ZeroExtGui)
+      - name: Build and test (Release + CTest + ZeroExt4Gui)
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
 

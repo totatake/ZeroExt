@@ -1,6 +1,6 @@
 # Perfetto トレース解析・最適化レポート
 
-本書は、Perfetto トレース出力機能（ベースライン commit `aa37709`）を用いて取得したインプロセス VFS ベンチマークトレース（`zeroext_bench_trace.json`）およびライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）を定量解析し、初期に観測された **8 スレッド時の Direct I/O 逆転現象（0.63x〜0.79x）・`ReadFile` 待機・ロック競合・Warm キャッシュ効力不足・メタデータ応答遅延** の根本原因と、Step 1〜4 最適化による改善結果をまとめたレポートである（`e2fsprogs 1.47.4` 更新後の最新総合比較は [性能評価レポート](performance-evaluation.md) を参照）。
+本書は、Perfetto トレース出力機能（ベースライン commit `aa37709`）を用いて取得したインプロセス VFS ベンチマークトレース（`zeroext4_bench_trace.json`）およびライブ WinFsp マウントトレース（`build/gui/zeroext4_trace.json`）を定量解析し、初期に観測された **8 スレッド時の Direct I/O 逆転現象（0.63x〜0.79x）・`ReadFile` 待機・ロック競合・Warm キャッシュ効力不足・メタデータ応答遅延** の根本原因と、Step 1〜4 最適化による改善結果をまとめたレポートである（`e2fsprogs 1.47.4` 更新後の最新総合比較は [性能評価レポート](performance-evaluation.md) を参照）。
 
 ---
 
@@ -10,8 +10,8 @@
 
 | 項目 | VFS インプロセスベンチマークトレース | ライブ WinFsp マウントトレース |
 | :--- | :--- | :--- |
-| ファイル | `zeroext_bench_trace.json`（ベースライン `aa37709` 相当） | `build/gui/zeroext_trace.json`（比較参考: GUI 実マウント） |
-| 取得コマンド / 経路 | `zeroext_bench.exe --trace zeroext_bench_trace.json` | `ZeroExtGui.exe` → `zeroext.exe mount --trace ...` |
+| ファイル | `zeroext4_bench_trace.json`（ベースライン `aa37709` 相当） | `build/gui/zeroext4_trace.json`（比較参考: GUI 実マウント） |
+| 取得コマンド / 経路 | `zeroext4_bench.exe --trace zeroext4_bench_trace.json` | `ZeroExt4Gui.exe` → `zeroext4.exe mount --trace ...` |
 | サイズ / イベント数 | 約 417.5 MiB (`437,753,465 bytes`) / `2,851,378` JSON オブジェクト | 約 16.7 MiB (`17,558,468 bytes`) |
 | カバー範囲の注記 | 既定のスレッド別リングバッファ（`65,536` events/thread）により先頭フェーズ（`enable_direct_io=0` 側の 1T 系と先頭 8T Seq の前半、および `enable_direct_io=1` 側の 1T Seq と 1T Rnd の前半）は折り返し。**全 6 種の 8 スレッドワークロード**（うち `M1_8T_Seq_64KB_model` は全 32,768 ops 欠損なし）および **`M1_1T_Rnd_4KB_model`** 終盤を解析対象とした。 | マウント直後から Explorer 閲覧・ファイルアクセスの一連の WinFsp コールバック（`FspGetSecurityByName`, `FspOpen`, `FspReadDirectory` 等）を記録。 |
 
@@ -68,7 +68,7 @@
 
 ※ `/model.gguf`・`/frag.bin` のランダム 4 KB でヒット率が 74.7%〜86.3% と高いのは、8 MB LRU キャッシュへのデータブロック残存に加え、毎回の `ext2fs_file_open()` が同一の inode ブロックおよび extent ブロックを毎回参照してヒット数を押し上げていることも影響している。
 
-### 2.4 ライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）
+### 2.4 ライブ WinFsp マウントトレース（`build/gui/zeroext4_trace.json`）
 
 | 計測対象 | 回数 | 合計時間 | 平均 | p95 | 最大 | 補足 |
 | :--- | ---: | ---: | ---: | ---: | ---: | :--- |
@@ -118,7 +118,7 @@
 ### 3.2 Priority 2：RO 時 `FileInfoTimeout = INFINITE` による OS キャッシュ有効化
 
 **現状と原因**
-- [性能評価レポート §2.3](performance-evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext--wsl---mount---vhd)（改善前計測当時）で観測した通り、実物理 SSD 上での Warm 読込性能は `Native NTFS`（`10,953.9 MB/s` / 4KB Rnd `986.2 MB/s`）に対し、`ZeroExt DIO` は Cold 時（`1,490.9 MB/s`）と同一水準（`1,490.5 MB/s` / 4KB Rnd `36.8 MB/s`）で頭打ちになっていた。
+- [性能評価レポート §2.3](performance-evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext4--wsl---mount---vhd)（改善前計測当時）で観測した通り、実物理 SSD 上での Warm 読込性能は `Native NTFS`（`10,953.9 MB/s` / 4KB Rnd `986.2 MB/s`）に対し、`ZeroExt4 DIO` は Cold 時（`1,490.9 MB/s`）と同一水準（`1,490.5 MB/s` / 4KB Rnd `36.8 MB/s`）で頭打ちになっていた。
 - 原因は [winfsp_driver.c#L786](../../src/driver/winfsp_driver.c#L786) にある `out_params->FileInfoTimeout = 1000;` である。WinFsp カーネルドライバは `FileInfoTimeout = (UINT32)-1`（`INFINITE`）のときのみ Windows NT Cache Manager（`CcCopyRead`）によるファイルデータ／メタデータキャッシュを有効化する仕様となっている。
 
 **改善方針**
@@ -172,7 +172,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 ### 3.5 Priority 5：メタデータ経路と `ctx->rwlock` 長時間保持の短縮
 
-ライブ WinFsp マウントトレース（`build/gui/zeroext_trace.json`）より、Explorer やシェル操作の体感速度は以下のメタデータ処理で決まっていることが判明した。
+ライブ WinFsp マウントトレース（`build/gui/zeroext4_trace.json`）より、Explorer やシェル操作の体感速度は以下のメタデータ処理で決まっていることが判明した。
 
 1. **存在しないファイル（負のルックアップ）の 37.9% が毎回ディレクトリ全件線形走査を誘発**:
    - `FspGetSecurityByName` 全 `1,858` 回のうち **`704` 回（`37.9%`）が `STATUS_OBJECT_NAME_NOT_FOUND` (`0xC0000034`)** を返している（Windows Explorer の `desktop.ini`, `.lnk`, `autorun.inf` 等のプローブ）。
@@ -203,7 +203,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 - **リングバッファ容量**: 全 14 フェーズ（`enable_direct_io=0` 側 7 種＋`1` 側 7 種）を先頭から欠損なしで記録するには、1 スレッドあたりイベント数を増やして実行する：
   ```powershell
-  .\build\zeroext_bench.exe --trace zeroext_bench_trace_after.json --trace-events 524288
+  .\build\zeroext4_bench.exe --trace zeroext4_bench_trace_after.json --trace-events 524288
   ```
 - **ベンチマーク側スレッド名補足**: [tests/bench_direct_io.c](../../tests/bench_direct_io.c#L46-L48) では `threads == 1` 実行時もメインスレッドで `bench_worker` を直接呼ぶため、メインスレッド名が `"Bench-Main"` から `"Bench-Worker"` に上書きされる。改善時は `threads > 1`（別スレッド起動時）のみ `ztrace_set_thread_name("Bench-Worker")` すると Perfetto UI 上の視認性が向上する。
 
@@ -212,7 +212,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 ## 5. ステップ別改善効果の実測結果
 
 > [!NOTE]
-> Step 1〜4 の実装後に `zeroext_bench.exe --trace ... --trace-events 524288` 等で再計測した Before / After の実績値を以下にまとめる（`e2fsprogs 1.47.4` 反映後の総合評価は [性能評価レポート](performance-evaluation.md) を参照）。
+> Step 1〜4 の実装後に `zeroext4_bench.exe --trace ... --trace-events 524288` 等で再計測した Before / After の実績値を以下にまとめる（`e2fsprogs 1.47.4` 反映後の総合評価は [性能評価レポート](performance-evaluation.md) を参照）。
 
 | 指標 | Before (`aa37709`) | Step 1 後 (`OVERLAPPED`) | Step 2 後 (`INFINITE` Timeout) | Step 3 後 (`Cache Shard`) | Step 4 後 (`Metadata / Write Opt`) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
@@ -228,7 +228,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 ### 5.1 Step 1 (`FILE_FLAG_OVERLAPPED`) 効果検証結果
 
-1. **無計測ベンチマーク（`zeroext_bench.exe`）の変化**:
+1. **無計測ベンチマーク（`zeroext4_bench.exe`）の変化**:
    - **Direct I/O (`enable_direct_io=1`)**:
      - `8T Seq 64KB /model.gguf (2048MB)`: `5,404.1 MB/s` (`0.379 s`) → **`31,835.1 MB/s` (`0.064 s` / `509,361 IOPS`)**（**5.89x**、約 31.8 GB/s）
      - `8T Rnd 4KB /model.gguf (131K ops)`: `632.4 MB/s` → **`1,155.4 MB/s` (`295,791 IOPS`)**（**1.83x**）
@@ -247,7 +247,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
 
 ### 5.2 Step 2 (RO 時 `FileInfoTimeout = INFINITE`) 効果検証結果
 
-128 MB の作業用 ext4 イメージ（64 MB 非ゼロ `/model.gguf`）を実 WinFsp ドライブ（`Z:`、RO 既定 Direct I/O + `--trace` 有効）としてマウントし、`--file-info-timeout 1000`（従来相当）と既定 `INFINITE`（Step 2）で同一測定（`zeroext_bench.exe --read` 4 種連続）を比較した。
+128 MB の作業用 ext4 イメージ（64 MB 非ゼロ `/model.gguf`）を実 WinFsp ドライブ（`Z:`、RO 既定 Direct I/O + `--trace` 有効）としてマウントし、`--file-info-timeout 1000`（従来相当）と既定 `INFINITE`（Step 2）で同一測定（`zeroext4_bench.exe --read` 4 種連続）を比較した。
 
 1. **実 WinFsp マウント A/B ベンチマーク比較（64 MB `/model.gguf`）**:
    | ワークロード | Timeout = `1000 ms` | Timeout = `INFINITE` (Step 2 既定) | 速度比 |
@@ -262,11 +262,11 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
      - `1000 ms`: **`17,736` 回** / `448.1 MB` / 合計 `243.03 ms`（ウォーム時も全読込がユーザー空間へ到達）
      - `INFINITE`: **`131` 回** / `128.0 MB` / 合計 `43.86 ms`（**`FspRead` 回数を 99.3% 削減**。初回 64 MB ウォームアップ＋明示 `UNBUF` 64 MB の 128 MB のみがユーザー空間を通過し、3 種の `CACHED-WARM` 計測中はカーネル `CcCopyRead` で完結）
    - **メタデータ照会回数**: `FspGetSecurityByName` が `10` → `8` 回、`FspOpen` が `10` → `8` 回へ減少。
-   - **CLI オーバーライド**: 外部変更を即座に追従したい用途向けに `zeroext mount --file-info-timeout <ms|infinite>` を追加した（RW および書き込み可能 Overlay は引き続き既定 `1000 ms` を維持）。
+   - **CLI オーバーライド**: 外部変更を即座に追従したい用途向けに `zeroext4 mount --file-info-timeout <ms|infinite>` を追加した（RW および書き込み可能 Overlay は引き続き既定 `1000 ms` を維持）。
 
 ### 5.3 Step 3 (キャッシュシャーディング・Shared ロック化・ハンドルキャッシュ) 効果検証結果
 
-1. **無計測ベンチマーク（`zeroext_bench.exe`）の変化（Step 1 比）**:
+1. **無計測ベンチマーク（`zeroext4_bench.exe`）の変化（Step 1 比）**:
    - **標準経路 (`enable_direct_io=0`)**: `win32_io.cache_lock` の 32 シャード＋Shared 参照＋インプレース eviction により大きく伸長：
      - `8T Seq 64KB /model.gguf (2048MB)`: `4,968.9 MB/s` (`0.412 s`) → **`5,715.4 MB/s`** (`0.358 s`, **+15.0%**、Baseline 比 **2.02x**)
      - `8T Rnd 4KB /model.gguf (131K ops)`: `1,318.5 MB/s` → **`1,651.7 MB/s`** (`422,833 IOPS`, **+25.3%**、Baseline 比 **1.65x**)
@@ -296,7 +296,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
    - **単一ロック・単一 inode 読込の統合 Open+Stat / Lookup+Stat**（[op_open.c](../../src/vfs/op_open.c), [op_getattr.c](../../src/vfs/op_getattr.c), [winfsp_driver.c](../../src/driver/winfsp_driver.c)）: `ext4_vfs_open_stat` により `FspOpen` / `FspCreate` 直後の 2 回目の `ext4_vfs_stat_ino` を廃止。
    - **早期 Marker スキップ＋`FspGetDirInfoByName` 実装**（[op_readdir.c](../../src/vfs/op_readdir.c), [winfsp_driver.c](../../src/driver/winfsp_driver.c)）: `ext4_vfs_readdir_from` で `ext2fs_read_inode_full` より前に Marker 照合を行い既処理エントリの inode 読込を回避。さらに `FspGetDirInfoByName` を実装し、`winfsp_driver_build_volume_params` で `PassQueryDirectoryFileName = 1` を設定して WinFsp が単一ファイル検索を `FspReadDirectory` にフォールバックしないようにした。
    - **書込時冗長 inode I/O 削減**（[op_write.c](../../src/vfs/op_write.c), [winfsp_driver.c](../../src/driver/winfsp_driver.c)）: `ext4_vfs_write_stat` により 1 回の `ctx->rwlock (X)`＋1 回の `ext2fs_read_inode_full`＋`ext2fs_file_open2` で 256B 拡張時刻と `FileInfo` を同時に返し、`FspWrite` 後の `ext4_vfs_stat_ino` と二重 inode 読込を削減。
-   - **付随バグ修正（[closefs.c](../../third_party/e2fsprogs/lib/ext2fs/closefs.c)）**: 無計測 160 MB `zeroext_bench.exe` 検証時に `write_backup_super_and_bgd` が 4 KB ブロック環境でも `sizeof(*sb_copy)` (1,024 B) しか確保せず `io_channel_write_blk64` に渡していたため、ヒープページ境界で `win32_aligned_write` が `0xC0000005`（読み出し範囲外）を起こし得る既存バグを発見・修正し、140 MB マルチグループ回帰テスト（`test_multi_group_backup_superblock_flush`）を追加した。
+   - **付随バグ修正（[closefs.c](../../third_party/e2fsprogs/lib/ext2fs/closefs.c)）**: 無計測 160 MB `zeroext4_bench.exe` 検証時に `write_backup_super_and_bgd` が 4 KB ブロック環境でも `sizeof(*sb_copy)` (1,024 B) しか確保せず `io_channel_write_blk64` に渡していたため、ヒープページ境界で `win32_aligned_write` が `0xC0000005`（読み出し範囲外）を起こし得る既存バグを発見・修正し、140 MB マルチグループ回帰テスト（`test_multi_group_backup_superblock_flush`）を追加した。
 
 2. **ライブ WinFsp ワークロード計測比較（`--file-info-timeout 0`）**:
    | ワークロード（Win32 API） | Before (`cd5e279`) | Step 4 後 (`PassQueryDirectoryFileName=1`) | 速度比 |
@@ -320,5 +320,5 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
    - **RW 4KB 書込トレース（`1,000` 回 `FspWrite`）**:
      - `lock|ctx->rwlock hold (S)` が `1,023` 回（`1.017 ms`）→ **`20` 回**（`0.220 ms`, **-98.0%**）へ激減し、`win32_io.cache_lock hold (S)` も `7,097` → **`5,082` 回**（`-28.4%`）に減少した（壁時計時間の約 65.6% [`18.967 ms` / `28.897 ms`] は同期 `WriteFile` ディスク I/O が支配）。
 
-4. **無計測 `zeroext_bench.exe` 回帰チェック（3 回連続実行）**:
+4. **無計測 `zeroext4_bench.exe` 回帰チェック（3 回連続実行）**:
    - 全 3 回とも `EXIT=0` で完了。Mode 1 (`enable_direct_io=1`) の 3 回中央値は `8T Seq 64KB` **`33,066.3 MB/s`**（最大 `33,225.9 MB/s` / `531,615 IOPS`）、`8T Rnd 4KB /model.gguf` **`1,237.7 MB/s`**、`/frag.bin` **`1,245.3 MB/s`**、Mode 0 `8T Rnd 4KB /model.gguf` **`1,660.8 MB/s`**（最大 `1,725.9 MB/s`）・`/frag.bin` **`1,368.9 MB/s`** となり、Step 3 比で性能回帰がないことを確認した。

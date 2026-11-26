@@ -28,4 +28,4 @@ gui/**/obj/
 
 # Trace outputs
 *.pftrace
-zeroext_bench_trace.json
+zeroext4_bench_trace.json

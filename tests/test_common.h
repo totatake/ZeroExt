@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_TEST_COMMON_H
-#define ZEROEXT_TEST_COMMON_H
+#ifndef ZEROEXT4_TEST_COMMON_H
+#define ZEROEXT4_TEST_COMMON_H
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -50,7 +50,7 @@ static __inline void test_make_temp_path(char *out, size_t out_sz, const char *f
     if (n == 0 || n >= sizeof(tmp_dir)) {
         snprintf(out, out_sz, "%s", filename);
     } else {
-        snprintf(out, out_sz, "%szeroext_%u_%s", tmp_dir, (unsigned)GetCurrentProcessId(), filename);
+        snprintf(out, out_sz, "%szeroext4_%u_%s", tmp_dir, (unsigned)GetCurrentProcessId(), filename);
     }
 }
 
@@ -61,4 +61,4 @@ int run_suite_winfsp_callbacks(void);
 int run_suite_extent_and_overlay(void);
 int run_suite_perfetto_trace(void);
 
-#endif /* ZEROEXT_TEST_COMMON_H */
+#endif /* ZEROEXT4_TEST_COMMON_H */

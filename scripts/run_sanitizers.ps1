@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 
 . (Join-Path $PSScriptRoot "find_vs.ps1")
-$Toolchain = Resolve-ZeroExtVsToolchain
+$Toolchain = Resolve-ZeroExt4VsToolchain
 $Vcvars = $Toolchain.Vcvars
 $Cmake  = $Toolchain.Cmake
 $Ctest  = $Toolchain.Ctest
@@ -70,7 +70,7 @@ if ($Mode -eq "all" -or $Mode -eq "asan") {
         -Title "1. AddressSanitizer (/fsanitize=address, RelWithDebInfo)" `
         -DirName "build_asan" `
         -BuildType "RelWithDebInfo" `
-        -CmakeExtraArgs @("-DZEROEXT_ENABLE_ASAN=ON") `
+        -CmakeExtraArgs @("-DZEROEXT4_ENABLE_ASAN=ON") `
         -RunTests $true `
         -CopyAsanRuntime $true
 }
@@ -80,7 +80,7 @@ if ($Mode -eq "all" -or $Mode -eq "leak") {
         -Title "2. MSVC CRT Debug Heap Leak Check (Debug)" `
         -DirName "build_leak" `
         -BuildType "Debug" `
-        -CmakeExtraArgs @("-DZEROEXT_ENABLE_LEAK_CHECK=ON") `
+        -CmakeExtraArgs @("-DZEROEXT4_ENABLE_LEAK_CHECK=ON") `
         -RunTests $true `
         -CopyAsanRuntime $false
 }
@@ -90,7 +90,7 @@ if ($Mode -eq "all" -or $Mode -eq "analyze") {
         -Title "3. MSVC Static Code Analysis (/analyze, RelWithDebInfo)" `
         -DirName "build_analyze" `
         -BuildType "RelWithDebInfo" `
-        -CmakeExtraArgs @("-DZEROEXT_ENABLE_ANALYZE=ON") `
+        -CmakeExtraArgs @("-DZEROEXT4_ENABLE_ANALYZE=ON") `
         -RunTests $false `
         -CopyAsanRuntime $false
 }

@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_OVERLAY_VFS_H
-#define ZEROEXT_OVERLAY_VFS_H
+#ifndef ZEROEXT4_OVERLAY_VFS_H
+#define ZEROEXT4_OVERLAY_VFS_H
 
 #include "../vfs/ext4_vfs.h"
 
@@ -37,4 +37,4 @@ int overlay_vfs_flush(ext4_vfs_ctx_t *ctx);
 }
 #endif
 
-#endif /* ZEROEXT_OVERLAY_VFS_H */
+#endif /* ZEROEXT4_OVERLAY_VFS_H */

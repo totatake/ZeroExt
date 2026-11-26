@@ -1,5 +1,5 @@
 param(
-    [string]$WorkDir = "$env:LOCALAPPDATA\Temp\zeroext_ssd_bench",
+    [string]$WorkDir = "$env:LOCALAPPDATA\Temp\zeroext4_ssd_bench",
     [int]$FileSizeMB = 512,
     [int]$VhdSizeMB = 1024,
     [string]$MountDrive = "W:",
@@ -23,11 +23,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 # ---- 2. Pre-flight validation ----
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$ExeCli   = Join-Path $RepoRoot "build\zeroext.exe"
-$ExeBench = Join-Path $RepoRoot "build\zeroext_bench.exe"
+$ExeCli   = Join-Path $RepoRoot "build\zeroext4.exe"
+$ExeBench = Join-Path $RepoRoot "build\zeroext4_bench.exe"
 
-if (-not (Test-Path $ExeCli))   { throw "zeroext.exe not found: $ExeCli (run scripts\build_and_test.ps1 first)" }
-if (-not (Test-Path $ExeBench)) { throw "zeroext_bench.exe not found: $ExeBench (run scripts\build_and_test.ps1 first)" }
+if (-not (Test-Path $ExeCli))   { throw "zeroext4.exe not found: $ExeCli (run scripts\build_and_test.ps1 first)" }
+if (-not (Test-Path $ExeBench)) { throw "zeroext4_bench.exe not found: $ExeBench (run scripts\build_and_test.ps1 first)" }
 
 if ($VhdSizeMB -lt ($FileSizeMB + 128)) {
     throw "VhdSizeMB ($VhdSizeMB) must be at least FileSizeMB ($FileSizeMB) + 128 MB."
@@ -75,12 +75,12 @@ $NativeFile = Join-Path $WorkDir "native_model.gguf"
 $VhdxPath   = Join-Path $WorkDir "bench_ext4.vhdx"
 $InitShWin  = Join-Path $WorkDir "init_vhdx.sh"
 $WslCWin    = Join-Path $WorkDir "wsl_ext4_bench.c"
-$MountOut   = Join-Path $WorkDir "zeroext_mount.out.log"
-$MountErr   = Join-Path $WorkDir "zeroext_mount.err.log"
+$MountOut   = Join-Path $WorkDir "zeroext4_mount.out.log"
+$MountErr   = Join-Path $WorkDir "zeroext4_mount.err.log"
 
 $WslVhdxMounted = $false
 $HyperVVhdMounted = $false
-$ZeroExtProc = $null
+$ZeroExt4Proc = $null
 
 $Results = New-Object System.Collections.Generic.List[object]
 
@@ -129,34 +129,34 @@ function Invoke-WslDropCaches {
     }
 }
 
-function Stop-ZeroExtMount {
-    if ($script:ZeroExtProc -and -not $script:ZeroExtProc.HasExited) {
+function Stop-ZeroExt4Mount {
+    if ($script:ZeroExt4Proc -and -not $script:ZeroExt4Proc.HasExited) {
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try { & $ExeCli unmount $MountDrive 2>$null | Out-Null } catch {}
         $ErrorActionPreference = $prevEap
-        if (-not $script:ZeroExtProc.WaitForExit(5000)) {
-            try { Stop-Process -Id $script:ZeroExtProc.Id -Force -ErrorAction SilentlyContinue } catch {}
-            $script:ZeroExtProc.WaitForExit(3000) | Out-Null
+        if (-not $script:ZeroExt4Proc.WaitForExit(5000)) {
+            try { Stop-Process -Id $script:ZeroExt4Proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            $script:ZeroExt4Proc.WaitForExit(3000) | Out-Null
         }
     }
-    $script:ZeroExtProc = $null
+    $script:ZeroExt4Proc = $null
 }
 
-function Start-ZeroExtMount {
+function Start-ZeroExt4Mount {
     param([string]$PhysPath, [bool]$DirectIo)
     Remove-Item -Force -ErrorAction SilentlyContinue $MountOut, $MountErr
     $argList = @("mount", "--source", $PhysPath, "--partition", "1", "--mountpoint", $MountDrive)
     if (-not $DirectIo) { $argList += "--no-direct-io" }
 
-    $script:ZeroExtProc = Start-Process -FilePath $ExeCli -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardOutput $MountOut -RedirectStandardError $MountErr
+    $script:ZeroExt4Proc = Start-Process -FilePath $ExeCli -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardOutput $MountOut -RedirectStandardError $MountErr
     $mountedFile = "$MountDrive\model.gguf"
     $ready = $false
     for ($i = 0; $i -lt 50; $i++) {
-        if ($script:ZeroExtProc.HasExited) {
+        if ($script:ZeroExt4Proc.HasExited) {
             $errText = if (Test-Path $MountErr) { Get-Content $MountErr -Raw } else { "" }
             $outText = if (Test-Path $MountOut) { Get-Content $MountOut -Raw } else { "" }
-            throw "zeroext mount exited unexpectedly (code=$($script:ZeroExtProc.ExitCode))`nSTDOUT: $outText`nSTDERR: $errText"
+            throw "zeroext4 mount exited unexpectedly (code=$($script:ZeroExt4Proc.ExitCode))`nSTDOUT: $outText`nSTDERR: $errText"
         }
         if (Test-Path $mountedFile) {
             $ready = $true
@@ -165,7 +165,7 @@ function Start-ZeroExtMount {
         Start-Sleep -Milliseconds 200
     }
     if (-not $ready) {
-        Stop-ZeroExtMount
+        Stop-ZeroExt4Mount
         throw "Timed out waiting for $mountedFile (10s)"
     }
 }
@@ -197,7 +197,7 @@ try {
     $WslVersion = if ($wslVerRaw -match '(\d+\.\d+\.\d+\.\d+)') { $Matches[1] } else { "unknown" }
 
     Write-Log "========================================================================"
-    Write-Log "  Same-SSD Benchmark (Windows NTFS / ZeroExt / WSL2)"
+    Write-Log "  Same-SSD Benchmark (Windows NTFS / ZeroExt4 / WSL2)"
     Write-Log "========================================================================"
     Write-Log "Timestamp    : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
     Write-Log "CPU          : $cpuName"
@@ -350,7 +350,7 @@ echo "Initialized GPT + ext4 on $PART ($FILE_MB MB /model.gguf)"
     }
     Write-Log ""
 
-    # ---- Phase 2 & 3: ZeroExt via Mount-VHD (PhysicalDriveN, unbuffered device handle) ----
+    # ---- Phase 2 & 3: ZeroExt4 via Mount-VHD (PhysicalDriveN, unbuffered device handle) ----
     $vhdObj = Mount-VHD -Path $VhdxPath -ReadOnly -NoDriveLetter -PassThru
     $HyperVVhdMounted = $true
     if ($null -eq $vhdObj.DiskNumber) {
@@ -358,7 +358,7 @@ echo "Initialized GPT + ext4 on $PART ($FILE_MB MB /model.gguf)"
     }
     Start-Sleep -Milliseconds 300
     $physPath = "\\.\PhysicalDrive$($vhdObj.DiskNumber)"
-    Write-Log "=== VHD attached for ZeroExt: $physPath (Partition 1 / extent check) ==="
+    Write-Log "=== VHD attached for ZeroExt4: $physPath (Partition 1 / extent check) ==="
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $extOut = & $ExeCli extents $physPath /model.gguf --partition 1 2>&1
@@ -366,20 +366,20 @@ echo "Initialized GPT + ext4 on $PART ($FILE_MB MB /model.gguf)"
     foreach ($l in $extOut) { Write-Log "  $($l.ToString().TrimEnd())" }
     Write-Log ""
 
-    Write-Log "=== [2/5] ZeroExt (Standard: --no-direct-io, $physPath -> $MountDrive) ==="
-    Start-ZeroExtMount -PhysPath $physPath -DirectIo $false
+    Write-Log "=== [2/5] ZeroExt4 (Standard: --no-direct-io, $physPath -> $MountDrive) ==="
+    Start-ZeroExt4Mount -PhysPath $physPath -DirectIo $false
     foreach ($t in $suite) {
-        Invoke-WinBench -Backend "ZeroExt (Standard)" -TargetPath "$MountDrive\model.gguf" -ChunkKB $t.KB -CacheMode $t.Cache -AccessPattern $t.Pat -WarmMode $t.Warm -WorkloadLabel $t.Label
+        Invoke-WinBench -Backend "ZeroExt4 (Standard)" -TargetPath "$MountDrive\model.gguf" -ChunkKB $t.KB -CacheMode $t.Cache -AccessPattern $t.Pat -WarmMode $t.Warm -WorkloadLabel $t.Label
     }
-    Stop-ZeroExtMount
+    Stop-ZeroExt4Mount
     Write-Log ""
 
-    Write-Log "=== [3/5] ZeroExt (Default: Direct I/O ON, $physPath -> $MountDrive) ==="
-    Start-ZeroExtMount -PhysPath $physPath -DirectIo $true
+    Write-Log "=== [3/5] ZeroExt4 (Default: Direct I/O ON, $physPath -> $MountDrive) ==="
+    Start-ZeroExt4Mount -PhysPath $physPath -DirectIo $true
     foreach ($t in $suite) {
-        Invoke-WinBench -Backend "ZeroExt (Default DIO)" -TargetPath "$MountDrive\model.gguf" -ChunkKB $t.KB -CacheMode $t.Cache -AccessPattern $t.Pat -WarmMode $t.Warm -WorkloadLabel $t.Label
+        Invoke-WinBench -Backend "ZeroExt4 (Default DIO)" -TargetPath "$MountDrive\model.gguf" -ChunkKB $t.KB -CacheMode $t.Cache -AccessPattern $t.Pat -WarmMode $t.Warm -WorkloadLabel $t.Label
     }
-    Stop-ZeroExtMount
+    Stop-ZeroExt4Mount
     Write-Log ""
 
     Dismount-VHD -Path $VhdxPath
@@ -553,8 +553,8 @@ int main(int argc, char **argv) {
     # ---- 6. Comparison Summary Table ----
     $backends = @(
         "Native NTFS",
-        "ZeroExt (Standard)",
-        "ZeroExt (Default DIO)",
+        "ZeroExt4 (Standard)",
+        "ZeroExt4 (Default DIO)",
         "WSL2 9P (\\wsl.localhost)",
         "WSL2 Linux Kernel (Ref)"
     )
@@ -563,7 +563,7 @@ int main(int argc, char **argv) {
     Write-Log "  Summary Comparison (MB/s)"
     Write-Log "========================================================================"
     $hdr = "{0,-23} | {1,11} | {2,11} | {3,11} | {4,11} | {5,11}" -f `
-        "Workload", "Native NTFS", "ZeroExt Std", "ZeroExt DIO", "WSL2 9P", "WSL2 Kernel"
+        "Workload", "Native NTFS", "ZeroExt4 Std", "ZeroExt4 DIO", "WSL2 9P", "WSL2 Kernel"
     Write-Log $hdr
     Write-Log ("-" * $hdr.Length)
 
@@ -578,7 +578,7 @@ int main(int argc, char **argv) {
     Write-Log "Saved results to: $OutFile"
 }
 finally {
-    Stop-ZeroExtMount
+    Stop-ZeroExt4Mount
     if ($HyperVVhdMounted) {
         try { Dismount-VHD -Path $VhdxPath -ErrorAction SilentlyContinue } catch {}
     }

@@ -48,7 +48,7 @@ typedef struct ztrace_global_state {
     wchar_t              output_path_w[1024];
 } ztrace_global_state_t;
 
-volatile LONG g_zeroext_trace_enabled = 0;
+volatile LONG g_zeroext4_trace_enabled = 0;
 
 static ztrace_global_state_t g_state = {
     SRWLOCK_INIT,
@@ -190,7 +190,7 @@ int ztrace_init(const char *output_path_utf8, uint32_t events_per_thread) {
     g_state.initialized = 1;
     wcscpy_s(g_state.output_path_w, _countof(g_state.output_path_w), wpath);
 
-    InterlockedExchange(&g_zeroext_trace_enabled, 1);
+    InterlockedExchange(&g_zeroext4_trace_enabled, 1);
     ReleaseSRWLockExclusive(&g_state.registry_lock);
     return 0;
 }
@@ -332,7 +332,7 @@ int ztrace_shutdown(ztrace_summary_t *out_summary) {
         memset(out_summary, 0, sizeof(*out_summary));
     }
 
-    InterlockedExchange(&g_zeroext_trace_enabled, 0);
+    InterlockedExchange(&g_zeroext4_trace_enabled, 0);
 
     AcquireSRWLockExclusive(&g_state.registry_lock);
     if (!g_state.initialized) {
@@ -370,7 +370,7 @@ int ztrace_shutdown(ztrace_summary_t *out_summary) {
         fputs("{\"displayTimeUnit\":\"ns\",\"traceEvents\":[\n", fp);
 
         /* Process metadata */
-        fprintf(fp, "{\"ph\":\"M\",\"pid\":%lu,\"tid\":0,\"name\":\"process_name\",\"args\":{\"name\":\"ZeroExt\"}}",
+        fprintf(fp, "{\"ph\":\"M\",\"pid\":%lu,\"tid\":0,\"name\":\"process_name\",\"args\":{\"name\":\"ZeroExt4\"}}",
                 (unsigned long)pid);
         first_item = 0;
 

@@ -28,7 +28,7 @@ void ext4_log(int level, const char *fmt, ...) {
     case EXT4_LOG_DEBUG: tag = "DEBUG"; break;
     default: break;
     }
-    fprintf(stderr, "[zeroext:%s] ", tag);
+    fprintf(stderr, "[zeroext4:%s] ", tag);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **ZeroExt** will be documented in this file.
+All notable changes to **ZeroExt4** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -14,14 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Standardized H1 titles, `## N.` / `### N.M` section numbering, and 1:1 index link labels across `docs/` and root hubs (`docs/README.md`, `docs/adr/README.md`, `docs/design/README.md`, `docs/reports/README.md`).
-- Migrated requirement IDs in `docs/requirements.md` (and `ADR-0010`) from `FR-*` / `NFR-*` to `REQ-F-001..011` / `REQ-NF-001..004`, reflecting `ZeroExtGui.exe`, `--case-sensitive`, and safe `unmount`.
+- Migrated requirement IDs in `docs/requirements.md` (and `ADR-0010`) from `FR-*` / `NFR-*` to `REQ-F-001..011` / `REQ-NF-001..004`, reflecting `ZeroExt4Gui.exe`, `--case-sensitive`, and safe `unmount`.
 - Streamlined `README.md` and `README.ja.md` with strict 1:1 section/link parity and synchronized benchmark figures in `README.md`, `README.ja.md`, and `docs/overview.md` to the `78cd744` (`e2fsprogs 1.47.4`) evaluation.
-- Updated `docs/architecture.md` (added `ZeroExtGui.exe` IPC boundary and `src/trace/`), `docs/design/detailed-design.md` (32-shard CLOCK / 16-shard `extent_cache` / `cached_extents`), `docs/roadmap.md` (removed duplicated completed sections and updated `ADR-0013` anchor), and `docs/reports/perfetto-trace-analysis.md` (reframed as a completed optimization report).
+- Updated `docs/architecture.md` (added `ZeroExt4Gui.exe` IPC boundary and `src/trace/`), `docs/design/detailed-design.md` (32-shard CLOCK / 16-shard `extent_cache` / `cached_extents`), `docs/roadmap.md` (removed duplicated completed sections and updated `ADR-0013` anchor), and `docs/reports/perfetto-trace-analysis.md` (reframed as a completed optimization report).
 
 ## [0.8.0] - 2026-11-23
 
 ### Added
-- Added `--case-sensitive` mount mode in CLI (`zeroext mount`) and `ZeroExtGui.exe` Advanced Options, enabling NTFS per-directory `FileCaseSensitiveInfo` on `--overlay` upperdirs and its subdirectories.
+- Added `--case-sensitive` mount mode in CLI (`zeroext4 mount`) and `ZeroExt4Gui.exe` Advanced Options, enabling NTFS per-directory `FileCaseSensitiveInfo` on `--overlay` upperdirs and its subdirectories.
 - Added `:cs` suffix to `.wh.__ext4_lower_id` markers in case-sensitive overlay upperdirs to block accidental mixing with case-insensitive mounts.
 - Added pre-mount upperdir validation (`IsDirectoryCaseSensitive`), `_cs` suffix in suggested overlay paths, and translated GUI error diagnostics (`winerr=145`, `winerr=5`, unsupported volumes) in `MountErrorTranslator`.
 - Added native unit tests (`test_case_sensitive_coexistence`, `test_overlay_case_sensitive_upperdir`) and GUI tests for `--case-sensitive` arg building, `:cs` upperdir validation, and error translations.
@@ -46,18 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.0] - 2026-11-21
 
 ### Fixed
-- Added WinFsp/ext4 target verification (`QueryDosDeviceW` / `GetVolumeInformationW`) in CLI `zeroext unmount` and `ZeroExtGui` residual-drive cleanup to prevent accidental detachment of non-ZeroExt volumes.
-- Expanded `winfsp_callbacks` and `ZeroExt.Gui.Tests` coverage with safe-unmount target validation tests.
+- Added WinFsp/ext4 target verification (`QueryDosDeviceW` / `GetVolumeInformationW`) in CLI `zeroext4 unmount` and `ZeroExt4Gui` residual-drive cleanup to prevent accidental detachment of non-ZeroExt4 volumes.
+- Expanded `winfsp_callbacks` and `ZeroExt4.Gui.Tests` coverage with safe-unmount target validation tests.
 
 ## [0.5.0] - 2026-11-21
 
 ### Changed
-- Upgraded bundled upstream `e2fsprogs` (`libext2fs`) from `1.47.2` to `1.47.4` (`scripts/update_e2fsprogs.ps1`), adding `fs_lock` serialization around shared `fs->icache` state and re-evaluating same-SSD NTFS / ZeroExt / WSL2 benchmarks.
-- Excluded `zeroext_bench.exe` from GitHub Release archives.
+- Upgraded bundled upstream `e2fsprogs` (`libext2fs`) from `1.47.2` to `1.47.4` (`scripts/update_e2fsprogs.ps1`), adding `fs_lock` serialization around shared `fs->icache` state and re-evaluating same-SSD NTFS / ZeroExt4 / WSL2 benchmarks.
+- Excluded `zeroext4_bench.exe` from GitHub Release archives.
 - Updated the multi-phase project roadmap covering safety guards, Overlay diff management, `fsck-lite`, and distribution.
 
 ### Added
-- Added live English/Japanese localization (`i18n`) switching in `ZeroExtGui.exe` (`Strings.en.xaml`, `Strings.ja.xaml`, `LocalizationService`) and localization completeness tests.
+- Added live English/Japanese localization (`i18n`) switching in `ZeroExt4Gui.exe` (`Strings.en.xaml`, `Strings.ja.xaml`, `LocalizationService`) and localization completeness tests.
 
 ## [0.4.0] - 2026-11-21
 
@@ -70,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added lockless thread-local Perfetto Chrome Trace Event profiling (`--trace`, `--trace-events`, `src/trace/perfetto_trace.c`) and quantitative bottleneck analysis report.
-- Added AddressSanitizer (`ZEROEXT_ENABLE_ASAN`), MSVC Debug CRT heap leak check (`ZEROEXT_ENABLE_LEAK_CHECK`), `/analyze` static code analysis (`ZEROEXT_ENABLE_ANALYZE`), orchestrated by `scripts/run_sanitizers.ps1`, plus concurrent RW and dentry-invalidation stress tests.
+- Added AddressSanitizer (`ZEROEXT4_ENABLE_ASAN`), MSVC Debug CRT heap leak check (`ZEROEXT4_ENABLE_LEAK_CHECK`), `/analyze` static code analysis (`ZEROEXT4_ENABLE_ANALYZE`), orchestrated by `scripts/run_sanitizers.ps1`, plus concurrent RW and dentry-invalidation stress tests.
 
 ### Changed
 - Completed Step 1–4 I/O and metadata performance optimizations: `FILE_FLAG_OVERLAPPED` + FLS events eliminating kernel `FileObject->Lock` serialization, `FileInfoTimeout = INFINITE` default on Read-Only mounts for NT Cache Manager (`CcCopyRead`) cooperation, 32-shard CLOCK `win32_io` cache, 16-shard `extent_cache` + open-handle extent caching, 16-shard positive/negative dentry cache, `FspGetDirInfoByName` fast lookup, and single-pass `ext4_vfs_open_stat` / `ext4_vfs_write_stat`.
@@ -78,23 +78,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-11-19
 
 ### Added
-- Added desktop GUI mount manager `ZeroExtGui.exe` (`gui/ZeroExt.Gui/`, .NET 10 WPF) and `ZeroExt.Gui.Tests` with zero external NuGet dependencies.
-- Added loosely coupled JSON / Named Event IPC modes (`--json`, `--json-events`, `--stop-event`, `--stats-interval`) on `zeroext.exe` so the WPF GUI never links GPLv2 `libext2fs` directly.
+- Added desktop GUI mount manager `ZeroExt4Gui.exe` (`gui/ZeroExt4.Gui/`, .NET 10 WPF) and `ZeroExt4.Gui.Tests` with zero external NuGet dependencies.
+- Added loosely coupled JSON / Named Event IPC modes (`--json`, `--json-events`, `--stop-event`, `--stats-interval`) on `zeroext4.exe` so the WPF GUI never links GPLv2 `libext2fs` directly.
 
 ## [0.1.0] - 2026-11-19
 
 ### Added
-- Initial **ZeroExt** (`zeroext.exe`) release built on upstream `e2fsprogs` (`libext2fs`) + `WinFsp`.
+- Initial **ZeroExt4** (`zeroext4.exe`) release built on upstream `e2fsprogs` (`libext2fs`) + `WinFsp`.
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
-- Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
+- Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt4 / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt/compare/v0.8.1...HEAD
-[0.8.1]: https://github.com/totatake/ZeroExt/compare/v0.8.0...v0.8.1
-[0.8.0]: https://github.com/totatake/ZeroExt/compare/v0.7.0...v0.8.0
-[0.7.0]: https://github.com/totatake/ZeroExt/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/totatake/ZeroExt/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/totatake/ZeroExt/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/totatake/ZeroExt/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/totatake/ZeroExt/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/totatake/ZeroExt/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/totatake/ZeroExt/releases/tag/v0.1.0
+[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/totatake/ZeroExt4/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/totatake/ZeroExt4/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/totatake/ZeroExt4/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/totatake/ZeroExt4/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/totatake/ZeroExt4/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/totatake/ZeroExt4/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/totatake/ZeroExt4/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/totatake/ZeroExt4/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/totatake/ZeroExt4/releases/tag/v0.1.0

@@ -1,6 +1,6 @@
 #include "test_common.h"
 
-#if defined(_MSC_VER) && defined(_DEBUG) && defined(ZEROEXT_ENABLE_LEAK_CHECK)
+#if defined(_MSC_VER) && defined(_DEBUG) && defined(ZEROEXT4_ENABLE_LEAK_CHECK)
 #include <crtdbg.h>
 #endif
 
@@ -11,7 +11,7 @@ int main(int argc, char **argv) {
     const char *suite = NULL;
     int failures = 0;
 
-#if defined(_MSC_VER) && defined(_DEBUG) && defined(ZEROEXT_ENABLE_LEAK_CHECK)
+#if defined(_MSC_VER) && defined(_DEBUG) && defined(ZEROEXT4_ENABLE_LEAK_CHECK)
     _CrtMemState mem_start;
     _CrtMemState mem_end;
     _CrtMemState mem_diff;
@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
         failures += run_suite_perfetto_trace();
     }
 
-#if defined(_MSC_VER) && defined(_DEBUG) && defined(ZEROEXT_ENABLE_LEAK_CHECK)
+#if defined(_MSC_VER) && defined(_DEBUG) && defined(ZEROEXT4_ENABLE_LEAK_CHECK)
     _CrtMemCheckpoint(&mem_end);
     if (_CrtMemDifference(&mem_diff, &mem_start, &mem_end)) {
         fprintf(stderr, "\n[LEAK CHECK FAILED] Memory leak detected in suite '%s':\n",

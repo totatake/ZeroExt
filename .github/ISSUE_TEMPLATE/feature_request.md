@@ -11,7 +11,7 @@ Describe the workflow, ext4 feature, performance bottleneck, or safety gap you a
 
 ## Proposed Solution
 
-Describe how you would like `zeroext.exe` or `ZeroExtGui.exe` to behave.
+Describe how you would like `zeroext4.exe` or `ZeroExt4Gui.exe` to behave.
 
 ## Alternatives Considered
 

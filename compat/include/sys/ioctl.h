@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_COMPAT_SYS_IOCTL_H
-#define ZEROEXT_COMPAT_SYS_IOCTL_H
+#ifndef ZEROEXT4_COMPAT_SYS_IOCTL_H
+#define ZEROEXT4_COMPAT_SYS_IOCTL_H
 
 #ifdef _MSC_VER
 static __inline int ioctl(int fd, unsigned long request, ...) {
@@ -9,4 +9,4 @@ static __inline int ioctl(int fd, unsigned long request, ...) {
 }
 #endif
 
-#endif /* ZEROEXT_COMPAT_SYS_IOCTL_H */
+#endif /* ZEROEXT4_COMPAT_SYS_IOCTL_H */

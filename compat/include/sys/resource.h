@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_COMPAT_SYS_RESOURCE_H
-#define ZEROEXT_COMPAT_SYS_RESOURCE_H
+#ifndef ZEROEXT4_COMPAT_SYS_RESOURCE_H
+#define ZEROEXT4_COMPAT_SYS_RESOURCE_H
 
 #ifdef _MSC_VER
 struct rlimit {
@@ -17,4 +17,4 @@ static __inline int getrlimit(int resource, struct rlimit *rlim) {
 }
 #endif
 
-#endif /* ZEROEXT_COMPAT_SYS_RESOURCE_H */
+#endif /* ZEROEXT4_COMPAT_SYS_RESOURCE_H */

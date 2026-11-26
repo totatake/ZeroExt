@@ -1101,13 +1101,13 @@ int winfsp_driver_force_unmount(const wchar_t *drive) {
 
     if (cur_probe.has_target &&
         !winfsp_driver_is_safe_unmount_target(cur_probe.target, cur_probe.volume_alive, cur_probe.fs_name)) {
-        fprintf(stderr, "Refusing to unmount %ls: target '%ls' (%ls) is not a ZeroExt/WinFsp volume.\n",
+        fprintf(stderr, "Refusing to unmount %ls: target '%ls' (%ls) is not a ZeroExt4/WinFsp volume.\n",
                 drive, cur_probe.target, cur_probe.fs_name[0] ? cur_probe.fs_name : L"unknown");
         return -EACCES;
     }
     if (desk_probe.has_target &&
         !winfsp_driver_is_safe_unmount_target(desk_probe.target, desk_probe.volume_alive, desk_probe.fs_name)) {
-        fprintf(stderr, "Refusing to unmount %ls: target '%ls' (%ls) in desktop session is not a ZeroExt/WinFsp volume.\n",
+        fprintf(stderr, "Refusing to unmount %ls: target '%ls' (%ls) in desktop session is not a ZeroExt4/WinFsp volume.\n",
                 drive, desk_probe.target, desk_probe.fs_name[0] ? desk_probe.fs_name : L"unknown");
         return -EACCES;
     }

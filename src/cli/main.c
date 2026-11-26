@@ -31,7 +31,7 @@ static void write_minidump(EXCEPTION_POINTERS *ep) {
     HANDLE f;
     while (n > 0 && path[n - 1] != L'\\') n--;
     path[n] = 0;
-    wcscat_s(path, MAX_PATH, L"zeroext_crash.dmp");
+    wcscat_s(path, MAX_PATH, L"zeroext4_crash.dmp");
     f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION mei;
@@ -87,24 +87,24 @@ static void install_crash_handlers(void) {
 
 static void print_usage(void) {
     printf(
-        "ZeroExt (zeroext) - libext2fs + WinFsp ext2/ext3/ext4 User-Space Driver & CLI\n\n"
+        "ZeroExt4 (zeroext4) - libext2fs + WinFsp ext2/ext3/ext4 User-Space Driver & CLI\n\n"
         "Usage:\n"
-        "  zeroext list [<image_or_disk>] [--json]\n"
-        "  zeroext inspect <image_or_disk> [--partition <N>] [--json]\n"
-        "  zeroext mkfs <image_path> --size-mb <N> [--label <label>]\n"
-        "  zeroext ls <image_path> [<ext4_path>] [--partition <N>] [--json]\n"
-        "  zeroext stat <image_path> <ext4_path> [--partition <N>]\n"
-        "  zeroext cat <image_path> <ext4_path> [--partition <N>]\n"
-        "  zeroext write <image_path> <ext4_path> <text_or_host_file> [--from-file] [--partition <N>]\n"
-        "  zeroext mkdir <image_path> <ext4_path> [--partition <N>]\n"
-        "  zeroext rm <image_path> <ext4_path> [--partition <N>]\n"
-        "  zeroext mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
-        "  zeroext extents <image_or_disk> <ext4_path> [--partition <N>]\n"
-        "  zeroext mount --source <image_or_disk> --mountpoint <L:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
+        "  zeroext4 list [<image_or_disk>] [--json]\n"
+        "  zeroext4 inspect <image_or_disk> [--partition <N>] [--json]\n"
+        "  zeroext4 mkfs <image_path> --size-mb <N> [--label <label>]\n"
+        "  zeroext4 ls <image_path> [<ext4_path>] [--partition <N>] [--json]\n"
+        "  zeroext4 stat <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext4 cat <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext4 write <image_path> <ext4_path> <text_or_host_file> [--from-file] [--partition <N>]\n"
+        "  zeroext4 mkdir <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext4 rm <image_path> <ext4_path> [--partition <N>]\n"
+        "  zeroext4 mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
+        "  zeroext4 extents <image_or_disk> <ext4_path> [--partition <N>]\n"
+        "  zeroext4 mount --source <image_or_disk> --mountpoint <L:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
         "                [--case-sensitive] [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>]\n"
         "                [--ro-fallback] [--force-dirty] [--cache-blocks <N>] [--debug] [--stop-event <name>]\n"
         "                [--json-events] [--stats-interval <ms>] [--trace <output_json>] [--trace-events <N>]\n"
-        "  zeroext unmount <L:>     (remove a stale drive letter left by a terminated mount)\n"
+        "  zeroext4 unmount <L:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
         "  Default mount mode is Read-Only with Direct Extent I/O enabled.\n"
         "  A mount stays active while the 'mount' process runs; press Ctrl+C in that console to unmount.\n"
@@ -368,7 +368,7 @@ static int cmd_mkfs(int argc, char **argv) {
     }
     const char *img = argv[2];
     uint32_t size_mb = parse_u32_opt(argc, argv, "--size-mb", 16);
-    const char *label = parse_str_opt(argc, argv, "--label", "ZEROEXT");
+    const char *label = parse_str_opt(argc, argv, "--label", "ZEROEXT4");
     int rc = ext4_vfs_mkfs(img, (uint64_t)size_mb * 1024ULL * 1024ULL, label);
     if (rc != 0) {
         fprintf(stderr, "mkfs failed: %d\n", rc);
@@ -1075,7 +1075,7 @@ static int cmd_unmount(int argc, char **argv) {
     int rc = winfsp_driver_force_unmount(wdrive);
     if (rc != 0) {
         if (rc == -EACCES || rc == -EPERM) {
-            fprintf(stderr, "Aborted: %s does not appear to be a ZeroExt/WinFsp stale drive.\n", argv[2]);
+            fprintf(stderr, "Aborted: %s does not appear to be a ZeroExt4/WinFsp stale drive.\n", argv[2]);
         } else {
             fprintf(stderr, "No mount found for %s (run from the same elevation level that mounted it).\n", argv[2]);
         }

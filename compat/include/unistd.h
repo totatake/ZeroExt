@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_COMPAT_UNISTD_H
-#define ZEROEXT_COMPAT_UNISTD_H
+#ifndef ZEROEXT4_COMPAT_UNISTD_H
+#define ZEROEXT4_COMPAT_UNISTD_H
 
 #ifdef _MSC_VER
 #include <io.h>
@@ -29,4 +29,4 @@ static __inline int getgid(void) { return 0; }
 static __inline int getegid(void) { return 0; }
 #endif
 
-#endif /* ZEROEXT_COMPAT_UNISTD_H */
+#endif /* ZEROEXT4_COMPAT_UNISTD_H */

@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_WIN32_IO_H
-#define ZEROEXT_WIN32_IO_H
+#ifndef ZEROEXT4_WIN32_IO_H
+#define ZEROEXT4_WIN32_IO_H
 
 #include <stdint.h>
 #include <et/com_err.h>
@@ -50,4 +50,4 @@ errcode_t win32_io_pread_direct(io_channel channel, uint64_t part_rel_offset,
 }
 #endif
 
-#endif /* ZEROEXT_WIN32_IO_H */
+#endif /* ZEROEXT4_WIN32_IO_H */

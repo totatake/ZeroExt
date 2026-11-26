@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_CONFIG_H
-#define ZEROEXT_CONFIG_H
+#ifndef ZEROEXT4_CONFIG_H
+#define ZEROEXT4_CONFIG_H
 
 #define PACKAGE "e2fsprogs"
 #define PACKAGE_NAME "e2fsprogs"
@@ -44,4 +44,4 @@
 #define SIZEOF_VOID_P 4
 #endif
 
-#endif /* ZEROEXT_CONFIG_H */
+#endif /* ZEROEXT4_CONFIG_H */

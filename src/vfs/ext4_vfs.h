@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_EXT4_VFS_H
-#define ZEROEXT_EXT4_VFS_H
+#ifndef ZEROEXT4_EXT4_VFS_H
+#define ZEROEXT4_EXT4_VFS_H
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -190,4 +190,4 @@ int ext4_vfs_get_extents(ext4_vfs_ctx_t *ctx, const char *path, struct ext4_exte
 }
 #endif
 
-#endif /* ZEROEXT_EXT4_VFS_H */
+#endif /* ZEROEXT4_EXT4_VFS_H */

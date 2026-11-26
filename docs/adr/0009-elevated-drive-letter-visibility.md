@@ -27,6 +27,6 @@ Windows で物理ディスク（`\\.\PhysicalDriveN`）を開くには昇格済�
 
 ## 4. 結果と影響 (Consequences)
 
-- **良い影響**: 管理者権限ターミナルや昇格版 `ZeroExtGui.exe` から物理ディスクをマウントした場合でも、非昇格 Explorer や通常アプリから即座にドライブを参照できる。
+- **良い影響**: 管理者権限ターミナルや昇格版 `ZeroExt4Gui.exe` から物理ディスクをマウントした場合でも、非昇格 Explorer や通常アプリから即座にドライブを参照できる。
 - **受け入れるトレードオフ / 今後の制約**: トークン偽装対象やアンマウント時削除の安全境界（[WinFsp ターゲット検証](../../src/driver/winfsp_driver.c)）を慎重に維持する。
 - **関連する変更箇所**: [src/driver/winfsp_driver.c](../../src/driver/winfsp_driver.c)

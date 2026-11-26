@@ -1,6 +1,6 @@
 # テスト・検証ガイド
 
-本書は **ZeroExt** の自動テストスイート（C/C++ `CTest`・`.NET` GUI テスト）、メモリ安全性／静的解析（ASan・CRT リーク検出・`/analyze`）、および実機動作検証の基準をまとめた検証ガイドです。
+本書は **ZeroExt4** の自動テストスイート（C/C++ `CTest`・`.NET` GUI テスト）、メモリ安全性／静的解析（ASan・CRT リーク検出・`/analyze`）、および実機動作検証の基準をまとめた検証ガイドです。
 
 - インストール・日常の CLI/GUI 操作手順は [利用ガイド](guides/usage.md)、ビルド・保守手順は [開発・ビルド・保守ガイド](guides/development.md) を参照してください。
 - 性能ベンチマーク測定および Perfetto トレース解析結果は [評価・解析レポート](reports/README.md) を参照してください。
@@ -29,9 +29,9 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ---
 
-## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext_tests.exe`)
+## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **32 テスト関数**）が登録されています。`zeroext_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **32 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -74,7 +74,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_winfsp_interface_e2e` | `FSP_FILE_SYSTEM_INTERFACE` 全主要コールバック（`GetVolumeInfo`, `SetVolumeLabel`, `GetSecurityByName`, `Create`, `Open`, `Overwrite`, `Read`/`EOF`, `Write`, `Flush`, `SetBasicInfo`, `SetFileSize`, `CanDelete`, `SetDelete`, `Rename`, `ReadDirectory` Marker ページング, `Cleanup`, `Close`） |
 | `test_winfsp_volume_params_ro_cache_timeout` | RO マウント時 `FileInfoTimeout = INFINITE` と RW/Overlay 時有限タイムアウト設定の検証 |
 | `test_winfsp_get_dir_info_by_name_and_large_readdir` | `PassQueryDirectoryFileName = 1` ＋ `FspGetDirInfoByName` 単一検索および多件数ディレクトリページネーション検証 |
-| `test_winfsp_safe_unmount_target` | `zeroext unmount` 時のターゲット対象検証（非 ZeroExt / 非 WinFsp ドライブの誤解除抑止） |
+| `test_winfsp_safe_unmount_target` | `zeroext4 unmount` 時のターゲット対象検証（非 ZeroExt4 / 非 WinFsp ドライブの誤解除抑止） |
 
 ### 2.5 `extent_and_overlay` ([tests/test_extent_and_overlay.c](../tests/test_extent_and_overlay.c))
 
@@ -97,15 +97,15 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ---
 
-## 3. GUI 自動テスト (`ZeroExt.Gui.Tests` / `--self-test`)
+## 3. GUI 自動テスト (`ZeroExt4.Gui.Tests` / `--self-test`)
 
-[gui/ZeroExt.Gui.Tests/Program.cs](../gui/ZeroExt.Gui.Tests/Program.cs) に **11 件** の自動テストが実装されており、`scripts/build_gui.ps1` ではテスト実行に加えて実バイナリの `ZeroExtGui.exe --self-test` も検証します。
+[gui/ZeroExt4.Gui.Tests/Program.cs](../gui/ZeroExt4.Gui.Tests/Program.cs) に **11 件** の自動テストが実装されており、`scripts/build_gui.ps1` ではテスト実行に加えて実バイナリの `ZeroExt4Gui.exe --self-test` も検証します。
 
 | テスト名 | 主な検証内容 |
 | :--- | :--- |
-| `JsonParsing_ScanResponse` | `zeroext list --json` 出力（物理ディスク・GPT/MBR・JBD2 状態）のデシリアライズ検証 |
+| `JsonParsing_ScanResponse` | `zeroext4 list --json` 出力（物理ディスク・GPT/MBR・JBD2 状態）のデシリアライズ検証 |
 | `JsonParsing_LsAndMountEvents` | `ls --json` および `--json-events` リアルタイム統計イベントパース検証 |
-| `ArgBuilder_MountVariantsAndPreview` | Read-Only / `--overlay` / `--rw` / `--trace` 等に応じた `zeroext.exe` 引数組み立て検証 |
+| `ArgBuilder_MountVariantsAndPreview` | Read-Only / `--overlay` / `--rw` / `--trace` 等に応じた `zeroext4.exe` 引数組み立て検証 |
 | `DriveLetterAndOverlayValidation` | ドライブレター空き判定・Upperdir 指定バリデーション検証 |
 | `DriveLetter_SafeUnmountTarget` | GUI 側「残留ドライブ解除」における対象ボリューム判定（システムドライブ保護）検証 |
 | `Localization_CompletenessAndSwitching` | `Strings.en.xaml` / `Strings.ja.xaml` 間のリソースキー網羅性および即時言語切替検証 |
@@ -113,7 +113,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `SettingsService_RoundTrip` | `gui_settings.json` の設定・プリセット保存／復元往復検証 |
 | `MainViewModel_ValidationAndPreview` | マウント前入力検証・状態遷移・CLI プレビュー更新検証 |
 | `TrayIconService_MountUnmountMenuRebuild` | マウント／アンマウントに伴うシステムトレイメニュー再構築検証 |
-| `LiveCoreCli_InspectAndBrowseIntegration` | 実 `zeroext.exe` サブプロセス起動による `inspect` / `ls --json` 疎結合統合検証 |
+| `LiveCoreCli_InspectAndBrowseIntegration` | 実 `zeroext4.exe` サブプロセス起動による `inspect` / `ls --json` 疎結合統合検証 |
 
 ---
 
@@ -133,9 +133,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1 -Mode anal
 
 | チェック種別 | CMake オプション / ツール | 検出対象 | 補足 |
 | :--- | :--- | :--- | :--- |
-| **AddressSanitizer (ASan)** | `-DZEROEXT_ENABLE_ASAN=ON`<br>(`RelWithDebInfo` + `/fsanitize=address`) | ヒープ・スタック・グローバル境界外読み書き、Use-After-Free、二重解放 | `test_concurrent_rw_and_dentry_invalidation_stress` 等のマルチスレッドストレスを含む CTest 全 6 スイートを実行。 |
-| **メモリリーク検出** | `-DZEROEXT_ENABLE_LEAK_CHECK=ON`<br>(`Debug` + `_CrtMemCheckpoint` / `_CrtMemDifference`) | テスト終了時に未解放のヒープブロック（1 バイト単位） | Windows MSVC 環境の ASan は LeakSanitizer 非対応のため、Debug CRT ヒープスナップショット比較でリーク時に CTest を失敗させます。 |
-| **静的コード解析** | `-DZEROEXT_ENABLE_ANALYZE=ON`<br>(`cl.exe /analyze`) | NULL 逆参照、バッファ範囲外アクセス、未初期化変数、リソース・ロック不整合 | 自前 C ソース（`src/`・`tests/`）に対してビルド時に静的解析を実行します。 |
+| **AddressSanitizer (ASan)** | `-DZEROEXT4_ENABLE_ASAN=ON`<br>(`RelWithDebInfo` + `/fsanitize=address`) | ヒープ・スタック・グローバル境界外読み書き、Use-After-Free、二重解放 | `test_concurrent_rw_and_dentry_invalidation_stress` 等のマルチスレッドストレスを含む CTest 全 6 スイートを実行。 |
+| **メモリリーク検出** | `-DZEROEXT4_ENABLE_LEAK_CHECK=ON`<br>(`Debug` + `_CrtMemCheckpoint` / `_CrtMemDifference`) | テスト終了時に未解放のヒープブロック（1 バイト単位） | Windows MSVC 環境の ASan は LeakSanitizer 非対応のため、Debug CRT ヒープスナップショット比較でリーク時に CTest を失敗させます。 |
+| **静的コード解析** | `-DZEROEXT4_ENABLE_ANALYZE=ON`<br>(`cl.exe /analyze`) | NULL 逆参照、バッファ範囲外アクセス、未初期化変数、リソース・ロック不整合 | 自前 C ソース（`src/`・`tests/`）に対してビルド時に静的解析を実行します。 |
 
 > [!NOTE]
 > Windows x64 環境では GCC / Clang の ThreadSanitizer (`-fsanitize=thread`) が公式サポートされていないため、排他安全性については **ASan 有効下でのマルチスレッド競合ストレステスト**（`win32_io` シャードキャッシュ / `dentry_cache` 世代無効化 / RW 同時アクセス）および **`/analyze` 静的解析** により実効的な検証を行っています。
@@ -144,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1 -Mode anal
 
 ## 5. 実機 CLI / WinFsp 確認チェックリスト
 
-1. **オフライン CLI 操作**: `zeroext.exe` で `mkfs` → `inspect` → `mkdir` → `write` → `cat` → `extents` → `mv` → `ls` → `rm` の一連操作を確認。
+1. **オフライン CLI 操作**: `zeroext4.exe` で `mkfs` → `inspect` → `mkdir` → `write` → `cat` → `extents` → `mv` → `ls` → `rm` の一連操作を確認。
 2. **WinFsp ドライブマウント & 並列負荷**: テストイメージへの WinFsp 経由 RO/RW マウント＋マルチスレッド並列アクセス、昇格環境で Explorer にドライブが表示されること（[ADR-0009](adr/0009-elevated-drive-letter-visibility.md)）、および `unmount` が非 WinFsp ドライブを誤解除しないことを確認。
 3. **WinFsp Overlay マウント (`--overlay`)**: Lower ファイル読取・Upper 新規作成・Copy-up 書込後に Lower イメージが 1 バイトも変更されていないこと、および別 UUID イメージに対する `.wh.__ext4_lower_id` 拒否を確認。
 4. **Upstream Zero-Patch 分離検証**: `third_party/e2fsprogs/` 配下に `_MSC_VER` / `_WIN32` / `windows.h` 等の Windows 固有記述が混入していないことを確認（[ADR-0005](adr/0005-zero-patch-e2fsprogs-compat-layer.md)）。

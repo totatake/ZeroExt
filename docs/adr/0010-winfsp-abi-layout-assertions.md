@@ -6,7 +6,7 @@
 
 ## 1. 背景と課題 (Context)
 
-ZeroExt はビルド環境に WinFsp SDK の事前インストールを要求しないため、WinFsp 2.x の FSD ABI 定義を自前ヘッダ `third_party/winfsp/include/winfsp/winfsp.h` に保持し、実行時に `winfsp-x64.dll` を動的ロードしている。初期定義では `AllowOpenInKernelMode` 以降のビットフィールド位置と `FSP_FSCTL_VOLUME_PARAMS` 末尾サイズ（512 bytes vs 公式 504 bytes）が公式 WinFsp ABI と食い違っており、`Version` に誤ったサイズを渡す問題が発生した。
+ZeroExt4 はビルド環境に WinFsp SDK の事前インストールを要求しないため、WinFsp 2.x の FSD ABI 定義を自前ヘッダ `third_party/winfsp/include/winfsp/winfsp.h` に保持し、実行時に `winfsp-x64.dll` を動的ロードしている。初期定義では `AllowOpenInKernelMode` 以降のビットフィールド位置と `FSP_FSCTL_VOLUME_PARAMS` 末尾サイズ（512 bytes vs 公式 504 bytes）が公式 WinFsp ABI と食い違っており、`Version` に誤ったサイズを渡す問題が発生した。
 
 ## 2. 検討した選択肢 (Alternatives Considered)
 

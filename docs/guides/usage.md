@@ -1,6 +1,6 @@
 # 利用ガイド
 
-本書は **ZeroExt**（`ZeroExtGui.exe` デスクトップアプリおよび `zeroext.exe` CLI／WinFsp マウントドライバ）を日常的に利用するための、WinFsp ランタイム導入、GUI 操作、および CLI コマンドリファレンスをまとめたガイドです。
+本書は **ZeroExt4**（`ZeroExt4Gui.exe` デスクトップアプリおよび `zeroext4.exe` CLI／WinFsp マウントドライバ）を日常的に利用するための、WinFsp ランタイム導入、GUI 操作、および CLI コマンドリファレンスをまとめたガイドです。
 
 - ソースコードからのビルド手順・`e2fsprogs` 更新・Perfetto トレース取得については [開発・ビルド・保守ガイド](development.md) を参照してください。
 - 自動テスト体系・Sanitizer・静的解析仕様については [テスト・検証ガイド](../testing.md) を参照してください。
@@ -10,8 +10,8 @@
 ## 1. WinFsp ランタイムのインストール
 
 > [!IMPORTANT]
-> 実機のドライブレター（例: `L:`）や NTFS 空フォルダへマウントするには、事前に **WinFsp ランタイム** がインストールされている必要があります（`zeroext.exe` が実行時に `winfsp-x64.dll` を自動検出・ロードします）。
-> なお、`ZeroExtGui.exe` の「ファイルブラウザ」タブや CLI のオフラインコマンド（`list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等）は WinFsp なしでも動作します。
+> 実機のドライブレター（例: `L:`）や NTFS 空フォルダへマウントするには、事前に **WinFsp ランタイム** がインストールされている必要があります（`zeroext4.exe` が実行時に `winfsp-x64.dll` を自動検出・ロードします）。
+> なお、`ZeroExt4Gui.exe` の「ファイルブラウザ」タブや CLI のオフラインコマンド（`list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等）は WinFsp なしでも動作します。
 
 ### 1.1 インストール方法
 
@@ -40,9 +40,9 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 ---
 
-## 2. GUI アプリケーション（`ZeroExtGui.exe`）の使い方
+## 2. GUI アプリケーション（`ZeroExt4Gui.exe`）の使い方
 
-`.\build\gui\ZeroExtGui.exe` を起動すると、CLI コマンドを意識せずに ext2 / ext3 / ext4 ボリュームの検査・マウント・管理を行えます。
+`.\build\gui\ZeroExt4Gui.exe` を起動すると、CLI コマンドを意識せずに ext2 / ext3 / ext4 ボリュームの検査・マウント・管理を行えます。
 
 - **表示言語（英語 / 日本語）切替**:
   - 既定では OS ロケールに応じて自動選択され、ヘッダーの言語メニュー（`🌐 Auto (JA)` / `🌐 Auto (EN)` / `🌐 English` / `🌐 日本語`）から再起動なしで即時切り替えできます。
@@ -55,11 +55,11 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 - **アクティブマウントタブ & システムトレイ**:
   - 稼働中のマウントごとの読取／書込スループット（MB/s）および累計転送量をリアルタイム表示し、「エクスプローラーで開く」や安全なアンマウントを実行できます。
   - マウント中にウィンドウを閉じた場合はシステムトレイへ最小化してマウントを維持できます（トレイメニューから再表示・開く・一括アンマウント終了が可能）。
-  - 異常終了などで残留したドライブレターがある場合は **「残留ドライブ解除」** からクリーンアップできます（`QueryDosDeviceW` / `GetVolumeInformationW` により ZeroExt/WinFsp 残留ドライブまたは `ext4` マウントのみを自動検出し、`C:` や通常の NTFS/exFAT ドライブ等は誤って解除されないよう保護されています）。
+  - 異常終了などで残留したドライブレターがある場合は **「残留ドライブ解除」** からクリーンアップできます（`QueryDosDeviceW` / `GetVolumeInformationW` により ZeroExt4/WinFsp 残留ドライブまたは `ext4` マウントのみを自動検出し、`C:` や通常の NTFS/exFAT ドライブ等は誤って解除されないよう保護されています）。
 - **ファイルブラウザタブ（WinFsp 不要）**:
-  - WinFsp が未導入の環境でも、`zeroext ls --json` を通じて ext2 / ext3 / ext4 内のディレクトリ・ファイル一覧を非破壊で閲覧できます。
+  - WinFsp が未導入の環境でも、`zeroext4 ls --json` を通じて ext2 / ext3 / ext4 内のディレクトリ・ファイル一覧を非破壊で閲覧できます。
 - **ライト／ダークテーマ切替**:
-  - 右上のテーマボタンから即座に切り替え可能です（設定およびボリュームごとのマウントプリセットは `%LOCALAPPDATA%\ZeroExt\gui_settings.json` に保存されます）。
+  - 右上のテーマボタンから即座に切り替え可能です（設定およびボリュームごとのマウントプリセットは `%LOCALAPPDATA%\ZeroExt4\gui_settings.json` に保存されます）。
 
 ---
 
@@ -69,22 +69,22 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 ```powershell
 # 物理ドライブ一覧またはイメージファイルのパーティション解析（管理者権限で物理ディスクアクセス可）
-.\build\zeroext.exe list
-.\build\zeroext.exe inspect <image_or_disk> [--partition <N>]
+.\build\zeroext4.exe list
+.\build\zeroext4.exe inspect <image_or_disk> [--partition <N>]
 
 # ext4 イメージ新規作成（4KB ブロック・256B iノード・extents・64bit・metadata_csum 有効）
-.\build\zeroext.exe mkfs test.img --size-mb 64 --label MYEXT4
+.\build\zeroext4.exe mkfs test.img --size-mb 64 --label MYEXT4
 
 # ファイル操作（イメージまたは物理パーティションに対して直接実行）
-.\build\zeroext.exe mkdir test.img /data [--partition <N>]
-.\build\zeroext.exe write test.img /data/hello.txt "Hello ext4!" [--partition <N>]
-.\build\zeroext.exe write test.img /data/model.bin C:\path\to\local.bin --from-file [--partition <N>]
-.\build\zeroext.exe ls      test.img /data [--partition <N>]
-.\build\zeroext.exe stat    test.img /data/hello.txt [--partition <N>]
-.\build\zeroext.exe cat     test.img /data/hello.txt [--partition <N>]
-.\build\zeroext.exe extents test.img /data/model.bin [--partition <N>]
-.\build\zeroext.exe mv      test.img /data/hello.txt /data/renamed.txt [--partition <N>]
-.\build\zeroext.exe rm      test.img /data/renamed.txt [--partition <N>]
+.\build\zeroext4.exe mkdir test.img /data [--partition <N>]
+.\build\zeroext4.exe write test.img /data/hello.txt "Hello ext4!" [--partition <N>]
+.\build\zeroext4.exe write test.img /data/model.bin C:\path\to\local.bin --from-file [--partition <N>]
+.\build\zeroext4.exe ls      test.img /data [--partition <N>]
+.\build\zeroext4.exe stat    test.img /data/hello.txt [--partition <N>]
+.\build\zeroext4.exe cat     test.img /data/hello.txt [--partition <N>]
+.\build\zeroext4.exe extents test.img /data/model.bin [--partition <N>]
+.\build\zeroext4.exe mv      test.img /data/hello.txt /data/renamed.txt [--partition <N>]
+.\build\zeroext4.exe rm      test.img /data/renamed.txt [--partition <N>]
 ```
 
 ### 3.2 ドライブマウントとオプション一覧
@@ -94,21 +94,21 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 ```powershell
 # Read-Only + Direct Extent I/O マウント（既定動作：フラグ不要・GGUF 等も高速かつ安全に読取可）
-.\build\zeroext.exe mount --source test.img --mountpoint L:
+.\build\zeroext4.exe mount --source test.img --mountpoint L:
 
 # Direct I/O を無効化して標準の 8MB ブロック LRU キャッシュ経路のみでマウント
-.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --no-direct-io
+.\build\zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --no-direct-io
 
 # Read-Write マウント（明示的に --rw を指定、Dirty Journal 検出時は自動拒否、Direct I/O は自動無効）
-.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
+.\build\zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
 
 # 非破壊 Overlay マウント（Lower の ext4 は常に RO＋Direct I/O 既定 ON、作成/変更は NTFS Upperdir へ保存）
 # ※ 初回利用時に Upperdir に .wh.__ext4_lower_id を記録し、別の ext4 への誤再利用を自動ブロックします
-.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
+.\build\zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 
 # NTFS の空きディレクトリへ直接マウントすることも可能
 # （親ディレクトリは通常の NTFS 書き込み領域、サブフォルダ配下だけを Overlay/ext4 として公開）
-.\build\zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint C:\models\linux_ext4
+.\build\zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint C:\models\linux_ext4
 ```
 
 主なオプション一覧：
@@ -133,11 +133,11 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 アンマウントは実行中のコンソールで `Ctrl+C` を押下します（`ext2fs_flush` と I/O キャッシュフラッシュを実行したうえで安全に停止・解除します）。
 
-プロセスが強制終了や異常終了してドライブレターだけが残ってしまった場合は、マウント時と同じ権限（物理ディスクの場合は管理者権限）で以下を実行してドライブ定義を解除できます（安全のため `QueryDosDeviceW` と `GetVolumeInformationW` により対象ドライブを検査し、`C:` や通常の NTFS/exFAT ドライブ等、ZeroExt/WinFsp 以外のボリュームは解除を拒否します）：
+プロセスが強制終了や異常終了してドライブレターだけが残ってしまった場合は、マウント時と同じ権限（物理ディスクの場合は管理者権限）で以下を実行してドライブ定義を解除できます（安全のため `QueryDosDeviceW` と `GetVolumeInformationW` により対象ドライブを検査し、`C:` や通常の NTFS/exFAT ドライブ等、ZeroExt4/WinFsp 以外のボリュームは解除を拒否します）：
 
 ```powershell
-.\build\zeroext.exe unmount L:
+.\build\zeroext4.exe unmount L:
 ```
 
 > [!NOTE]
-> **管理者権限で実行した場合のドライブ表示について**: 物理ディスクのマウントには管理者権限が必要です。昇格したプロセスが作るドライブレターは通常、昇格セッションからしか見えませんが、`zeroext` は昇格を検知すると Mount Manager 経由のグローバルドライブ (`\\.\X:`) として登録し、失敗時はデスクトップユーザーのセッションにも定義します（[ADR-0009](../adr/0009-elevated-drive-letter-visibility.md)）。使用済みドライブレターの場合は空き文字を指定してください。
+> **管理者権限で実行した場合のドライブ表示について**: 物理ディスクのマウントには管理者権限が必要です。昇格したプロセスが作るドライブレターは通常、昇格セッションからしか見えませんが、`zeroext4` は昇格を検知すると Mount Manager 経由のグローバルドライブ (`\\.\X:`) として登録し、失敗時はデスクトップユーザーのセッションにも定義します（[ADR-0009](../adr/0009-elevated-drive-letter-visibility.md)）。使用済みドライブレターの場合は空き文字を指定してください。

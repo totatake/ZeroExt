@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_EXT4_ERRNO_H
-#define ZEROEXT_EXT4_ERRNO_H
+#ifndef ZEROEXT4_EXT4_ERRNO_H
+#define ZEROEXT4_EXT4_ERRNO_H
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -37,4 +37,4 @@ void ext4_log(int level, const char *fmt, ...);
 }
 #endif
 
-#endif /* ZEROEXT_EXT4_ERRNO_H */
+#endif /* ZEROEXT4_EXT4_ERRNO_H */

@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 
 . (Join-Path $PSScriptRoot "find_vs.ps1")
-$Toolchain = Resolve-ZeroExtVsToolchain
+$Toolchain = Resolve-ZeroExt4VsToolchain
 $Vcvars = $Toolchain.Vcvars
 $Cmake  = $Toolchain.Cmake
 $Ctest  = $Toolchain.Ctest
@@ -43,6 +43,6 @@ if (-not $SkipGui) {
             }
         }
     } else {
-        Write-Warning "dotnet SDK not found; skipping ZeroExtGui build."
+        Write-Warning "dotnet SDK not found; skipping ZeroExt4Gui build."
     }
 }

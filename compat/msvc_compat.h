@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_MSVC_COMPAT_H
-#define ZEROEXT_MSVC_COMPAT_H
+#ifndef ZEROEXT4_MSVC_COMPAT_H
+#define ZEROEXT4_MSVC_COMPAT_H
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -78,4 +78,4 @@ typedef unsigned short mode_t;
 #pragma warning(disable : 4996) /* deprecated POSIX names */
 #endif /* _MSC_VER */
 
-#endif /* ZEROEXT_MSVC_COMPAT_H */
+#endif /* ZEROEXT4_MSVC_COMPAT_H */

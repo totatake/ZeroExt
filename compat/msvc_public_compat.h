@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_MSVC_PUBLIC_COMPAT_H
-#define ZEROEXT_MSVC_PUBLIC_COMPAT_H
+#ifndef ZEROEXT4_MSVC_PUBLIC_COMPAT_H
+#define ZEROEXT4_MSVC_PUBLIC_COMPAT_H
 
 #ifdef _MSC_VER
 #include <sys/types.h>
@@ -14,4 +14,4 @@ typedef unsigned short mode_t;
 #endif
 #endif /* _MSC_VER */
 
-#endif /* ZEROEXT_MSVC_PUBLIC_COMPAT_H */
+#endif /* ZEROEXT4_MSVC_PUBLIC_COMPAT_H */

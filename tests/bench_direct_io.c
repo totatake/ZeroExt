@@ -425,7 +425,7 @@ int main(int argc, char **argv) {
     }
 
     GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
-    snprintf(img_path, sizeof(img_path), "%szeroext_bench_%lu.img", tmp_dir, GetCurrentProcessId());
+    snprintf(img_path, sizeof(img_path), "%szeroext4_bench_%lu.img", tmp_dir, GetCurrentProcessId());
 
     printf("Preparing 160MB ext4 benchmark image (/model.gguf 64MB, /frag.bin 32MB)...\n");
     if (prepare_image(img_path) != 0) {

@@ -1,4 +1,4 @@
-function Resolve-ZeroExtVsToolchain {
+function Resolve-ZeroExt4VsToolchain {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     $vsInstallPath = $null
 

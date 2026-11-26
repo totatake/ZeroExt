@@ -1,9 +1,9 @@
 # 性能評価レポート
 
-本書は、Read-Only / `--overlay` モードで動作するダイレクト・エクステント I/O 経路（ロックレス extent ベース並列 `pread`、現在は既定で有効・`--no-direct-io` で標準経路へ切替可）の有無による読み取り性能の違いに加え、**同一物理 NVMe SSD 上での Windows Native (NTFS)・`ZeroExt` (`zeroext.exe`)・`wsl --mount --vhd` 横並び比較** の実測結果をまとめたものである。
+本書は、Read-Only / `--overlay` モードで動作するダイレクト・エクステント I/O 経路（ロックレス extent ベース並列 `pread`、現在は既定で有効・`--no-direct-io` で標準経路へ切替可）の有無による読み取り性能の違いに加え、**同一物理 NVMe SSD 上での Windows Native (NTFS)・`ZeroExt4` (`zeroext4.exe`)・`wsl --mount --vhd` 横並び比較** の実測結果をまとめたものである。
 
-- 対象プロジェクト: **`ZeroExt`**（コマンド名: `zeroext.exe`、ベンチマークバイナリ: `zeroext_bench.exe`、評価リビジョン: `78cd744` / Step 1〜4 最適化・`e2fsprogs 1.47.4` 反映後）
-- ベンチマーク実装: [tests/bench_direct_io.c](../../tests/bench_direct_io.c)（ビルド成果物: `build/zeroext_bench.exe`）
+- 対象プロジェクト: **`ZeroExt4`**（コマンド名: `zeroext4.exe`、ベンチマークバイナリ: `zeroext4_bench.exe`、評価リビジョン: `78cd744` / Step 1〜4 最適化・`e2fsprogs 1.47.4` 反映後）
+- ベンチマーク実装: [tests/bench_direct_io.c](../../tests/bench_direct_io.c)（ビルド成果物: `build/zeroext4_bench.exe`）
 - 同一 SSD 比較スクリプト: [scripts/bench_compare_ssd.ps1](../../scripts/bench_compare_ssd.ps1)（管理者権限 PowerShell 実行）
 - 最適化の経緯と詳細トレース解析: [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md)
 - 注記: 本書内の「`--no-direct-io` / `Std`」は標準 `ext2fs_file_read` 経路、「`--direct-io` ON / `DIO`」は RO / `--overlay` 時の既定動作に対応する。また Step 2 (`8bd61df`) 以降、RO マウント時は `FileInfoTimeout = INFINITE` (`(UINT32)-1`) が既定となり Windows NT Cache Manager が有効化されている。
@@ -19,7 +19,7 @@
 | ビルド構成 | CMake (`Ninja`) + MSVC 19.44 / `Release` ビルド (`scripts/build_and_test.ps1`) |
 | ユーザー空間ブロックキャッシュ | `--cache-blocks 2048`（4 KB ブロック × 2048 = 8 MB LRU キャッシュ、デフォルト設定） |
 | バッキングストレージ | Windows ローカルファイル上の ext4 イメージファイル（`.img`） |
-| WinFsp マウントパス | `W:`（`zeroext.exe mount --source <img_path> --mountpoint W: [--no-direct-io]`） |
+| WinFsp マウントパス | `W:`（`zeroext4.exe mount --source <img_path> --mountpoint W: [--no-direct-io]`） |
 
 ### 1.2 テストデータセット
 
@@ -68,7 +68,7 @@
 
 ---
 
-### 2.2 VFS 単体層（インプロセス測定、`zeroext_bench.exe`、`enable_direct_io=0` vs `1`）
+### 2.2 VFS 単体層（インプロセス測定、`zeroext4_bench.exe`、`enable_direct_io=0` vs `1`）
 
 対象 extent 構成: `/model.gguf` `runs=1`, `/frag.bin` `runs=65`
 
@@ -86,11 +86,11 @@
 
 ---
 
-### 2.3 同一 NVMe SSD 5 方式比較（Windows Native NTFS / `ZeroExt` / `wsl --mount --vhd`）
+### 2.3 同一 NVMe SSD 5 方式比較（Windows Native NTFS / `ZeroExt4` / `wsl --mount --vhd`）
 
 #### 測定環境および条件（同一 SSD 上での公平比較）
 
-`scripts/bench_compare_ssd.ps1` を管理者 PowerShell で実行し、全バックエンドを同一物理 NVMe SSD（`C:` ドライブ）上で計測した。`ZeroExt` 側は `.img` ファイルの OS キャッシュ干渉を排除するため `Mount-VHD -ReadOnly` でアタッチした `\\.\PhysicalDrive4`（`win32_io.c` が実 SSD と同じ `FILE_FLAG_NO_BUFFERING` でオープン）を使用し、`wsl --mount --vhd` と同一の 1024 MB 固定サイズ VHDX（GPT Partition 1, ext4, `/model.gguf` 512 MB・`Runs: 4`）を共有した。
+`scripts/bench_compare_ssd.ps1` を管理者 PowerShell で実行し、全バックエンドを同一物理 NVMe SSD（`C:` ドライブ）上で計測した。`ZeroExt4` 側は `.img` ファイルの OS キャッシュ干渉を排除するため `Mount-VHD -ReadOnly` でアタッチした `\\.\PhysicalDrive4`（`win32_io.c` が実 SSD と同じ `FILE_FLAG_NO_BUFFERING` でオープン）を使用し、`wsl --mount --vhd` と同一の 1024 MB 固定サイズ VHDX（GPT Partition 1, ext4, `/model.gguf` 512 MB・`Runs: 4`）を共有した。
 
 | 項目 | 実環境・設定値 |
 | :--- | :--- |
@@ -99,13 +99,13 @@
 | OS / WSL2 | `Windows 10 Pro 26H2 (Build 26300)` / `WSL 2.3.26.0` (`Ubuntu`, `Kernel 5.15.167.4-microsoft-standard-WSL2`) |
 | 対象 SSD | `Disk 3 [INTEL SSDPEKNU512GZ]` (`Bus=NVMe`, `Media=SSD`, `476.9 GB`, `C:`) |
 | テストデータ | 決定論的非ゼロ 512 MB 連続ファイル（NTFS: `native_model.gguf`, ext4: `/model.gguf` `Runs=4`） |
-| 比較 5 バックエンド | ① `Native NTFS` / ② `ZeroExt (Standard / --no-direct-io)` / ③ `ZeroExt (Direct I/O 既定)` / ④ `WSL2 9P (\\wsl.localhost)` / ⑤ `WSL2 Linux Kernel (Ref)`（WSL2 内直接アクセス） |
+| 比較 5 バックエンド | ① `Native NTFS` / ② `ZeroExt4 (Standard / --no-direct-io)` / ③ `ZeroExt4 (Direct I/O 既定)` / ④ `WSL2 9P (\\wsl.localhost)` / ⑤ `WSL2 Linux Kernel (Ref)`（WSL2 内直接アクセス） |
 | Cold / Unbuf 条件 | Windows 側: `FILE_FLAG_NO_BUFFERING` / WSL2 側: 各測定前に `sync && echo 3 > /proc/sys/vm/drop_caches`＋Linux 直接測定は `O_DIRECT` |
 | Warm / Cached 条件 | `warm` 指定により計測前に 1 MB 単位で全 512 MB を 1 周先読みしシークバック後に計測（4KB ランダムは 16,384 ops = 64 MB） |
 
 #### 横並びサマリー（MB/s）
 
-| Workload | Native NTFS | `ZeroExt Std` (`--no-direct-io`) | `ZeroExt DIO` (既定) | WSL2 9P | WSL2 Kernel (Ref) |
+| Workload | Native NTFS | `ZeroExt4 Std` (`--no-direct-io`) | `ZeroExt4 DIO` (既定) | WSL2 9P | WSL2 Kernel (Ref) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
 | `Cold/Unbuf Seq 1024KB` | `2,058.5` | `75.2` | **`1,563.7`** | `160.7` | `1,317.6` |
 | `Cold/Unbuf Seq 64KB` | `1,074.3` | `75.0` | **`671.6`** | `107.8` | `448.3` |
@@ -126,14 +126,14 @@
    - `CACHED-WARM SEQ (1024KB)`: `0.049 s` / `10552.5 MB/s` (`10552 IOPS`)
    - `CACHED-WARM SEQ (64KB)`: `0.103 s` / `4971.2 MB/s` (`79539 IOPS`)
    - `CACHED-WARM RND (4KB)`: `0.070 s` / `916.3 MB/s` (`234584 IOPS`)
-2. **`ZeroExt` (`--no-direct-io` 標準経路, `\\.\PhysicalDrive4` → `W:`)**:
+2. **`ZeroExt4` (`--no-direct-io` 標準経路, `\\.\PhysicalDrive4` → `W:`)**:
    - `UNBUF SEQ (1024KB)`: `6.808 s` / `75.2 MB/s` (`75 IOPS`)
    - `UNBUF SEQ (64KB)`: `6.828 s` / `75.0 MB/s` (`1200 IOPS`)
    - `UNBUF RND (4KB)`: `1.854 s` / `34.5 MB/s` (`8836 IOPS`)
    - `CACHED-WARM SEQ (1024KB)`: `0.049 s` / `10346.1 MB/s` (`10346 IOPS`)
    - `CACHED-WARM SEQ (64KB)`: `0.073 s` / `6987.7 MB/s` (`111803 IOPS`)
    - `CACHED-WARM RND (4KB)`: `0.064 s` / `999.0 MB/s` (`255744 IOPS`)
-3. **`ZeroExt` (Direct I/O ON 既定経路, `\\.\PhysicalDrive4` → `W:`)**:
+3. **`ZeroExt4` (Direct I/O ON 既定経路, `\\.\PhysicalDrive4` → `W:`)**:
    - `UNBUF SEQ (1024KB)`: `0.327 s` / `1563.7 MB/s` (`1564 IOPS`)
    - `UNBUF SEQ (64KB)`: `0.762 s` / `671.6 MB/s` (`10746 IOPS`)
    - `UNBUF RND (4KB)`: `1.716 s` / `37.3 MB/s` (`9549 IOPS`)
@@ -177,19 +177,19 @@
 
 ### 3.3 同一 SSD 5 方式比較から得られた技術的知見・Step 1〜4 の効果
 
-1. **実ブロックデバイス直読（Cold / Unbuffered）で `ZeroExt`（Direct I/O 既定）は `WSL2 9P` 比最大 9.73x・`--no-direct-io` 比 20.8x を達成**:
+1. **実ブロックデバイス直読（Cold / Unbuffered）で `ZeroExt4`（Direct I/O 既定）は `WSL2 9P` 比最大 9.73x・`--no-direct-io` 比 20.8x を達成**:
    - `Cold/Unbuf Seq 1024KB`: **`1,563.7 MB/s`**（`--no-direct-io` `75.2 MB/s` の **20.8x**、`WSL2 9P` `160.7 MB/s` の **9.73x**、`WSL2 Linux Kernel` `1,317.6 MB/s` の **1.19x**、`Native NTFS` `2,058.5 MB/s` の **76.0%**）。
    - `Cold/Unbuf Seq 64KB`: **`671.6 MB/s`**（`--no-direct-io` `75.0 MB/s` の **8.95x**、`WSL2 9P` `107.8 MB/s` の **6.23x**、`WSL2 Linux Kernel` `448.3 MB/s` の **1.50x**）。
    - `Cold/Unbuf Rnd 4KB`: **`37.3 MB/s` (`9,549 IOPS`)**（`WSL2 9P` `9.5 MB/s` の **3.93x**、`WSL2 Linux Kernel` `20.1 MB/s` の **1.86x**）。
    - 実ディスク `\\.\PhysicalDriveN` はセクタ整合のため `FILE_FLAG_NO_BUFFERING` で開く必要があり、`--no-direct-io` 標準経路では 1 MB ごとに 256 回の 4 KB 読込が発生して `75.2 MB/s` が上限となるため、RO / `--overlay` での Direct I/O 既定有効化が実ディスク性能を支えている。
-2. **Warm / Cached で `ZeroExt` が `Native NTFS` 同等以上・`WSL2 9P` 比 53x〜72x に到達（Step 2 の効果）**:
+2. **Warm / Cached で `ZeroExt4` が `Native NTFS` 同等以上・`WSL2 9P` 比 53x〜72x に到達（Step 2 の効果）**:
    - Step 2（`8bd61df`）で Read-Only マウント時の `FileInfoTimeout` 既定値を `(UINT32)-1` (`INFINITE`) としたことで、Windows NT Cache Manager（`CcCopyRead`）が有効化され、以前の課題だった Warm 時の頭打ち（`1,490.5 MB/s` / `36.8 MB/s`）が完全に解消された：
      - `Warm/Cached Seq 1024KB`: **`10,542.5 MB/s`**（`Native NTFS` `10,552.5 MB/s` の **1.00x**、`WSL2 9P` `196.0 MB/s` の **53.8x**、改善前 `1,490.5 MB/s` 比 **7.07x**）
      - `Warm/Cached Seq 64KB`: **`8,697.8 MB/s`**（`Native NTFS` `4,971.2 MB/s` の **1.75x**、`WSL2 9P` `120.0 MB/s` の **72.5x**、改善前 `661.2 MB/s` 比 **13.2x**）
      - `Warm/Cached Rnd 4KB`: **`990.5 MB/s` (`253,557 IOPS`)**（`Native NTFS` `916.3 MB/s` の **1.08x**、`WSL2 9P` `17.9 MB/s` の **55.3x**、改善前 `36.8 MB/s` 比 **26.9x**）
    - `--no-direct-io` 側でも 2 周目以降は OS キャッシュで処理されるため `10,346.1 / 6,987.7 / 999.0 MB/s` となるが、初回読込（Cold）が **`20.8x`** 速い既定の Direct I/O ON が総合的に優位である。
 3. **`WSL2 9P`（`\\wsl.localhost`）経由との比較**:
-   - WSL2 内の Linux カーネル直接読み取りは Warm 時に `10,409.7〜14,375.3 MB/s`（4 KB ランダム `3,189.4 MB/s`）に達するものの、Windows 側アプリから `\\wsl.localhost` 越しにアクセスする場合は 9P / HVSocket 往復が律速となり、`196.0 MB/s`（4 KB ランダムは `17.9 MB/s`）が上限となる。`ZeroExt` は Windows ネイティブのドライブレター経由で **Cold 時最大 9.73x・Warm 時 53x〜72x** 高速にアクセスできる。
+   - WSL2 内の Linux カーネル直接読み取りは Warm 時に `10,409.7〜14,375.3 MB/s`（4 KB ランダム `3,189.4 MB/s`）に達するものの、Windows 側アプリから `\\wsl.localhost` 越しにアクセスする場合は 9P / HVSocket 往復が律速となり、`196.0 MB/s`（4 KB ランダムは `17.9 MB/s`）が上限となる。`ZeroExt4` は Windows ネイティブのドライブレター経由で **Cold 時最大 9.73x・Warm 時 53x〜72x** 高速にアクセスできる。
 
 ### 3.4 実運用における使い分け指針
 
@@ -212,14 +212,14 @@
 powershell -ExecutionPolicy Bypass -File scripts\build_and_test.ps1
 ```
 
-これにより `build\zeroext.exe` および `build\zeroext_bench.exe`（ソース: `tests/bench_direct_io.c`）が `Release` 構成でビルドされる。
+これにより `build\zeroext4.exe` および `build\zeroext4_bench.exe`（ソース: `tests/bench_direct_io.c`）が `Release` 構成でビルドされる。
 
 ### 4.2 VFS 単体ベンチマークの実行
 
-引数なしで `zeroext_bench.exe` を実行すると、`%TEMP%` に 160 MB のテスト用 ext4 イメージを自動作成し、`--no-direct-io` 相当（`enable_direct_io=0`）と RO 既定 Direct I/O ON（`enable_direct_io=1`）を連続計測したのちイメージを自動削除する。
+引数なしで `zeroext4_bench.exe` を実行すると、`%TEMP%` に 160 MB のテスト用 ext4 イメージを自動作成し、`--no-direct-io` 相当（`enable_direct_io=0`）と RO 既定 Direct I/O ON（`enable_direct_io=1`）を連続計測したのちイメージを自動削除する。
 
 ```powershell
-.\build\zeroext_bench.exe
+.\build\zeroext4_bench.exe
 ```
 
 ### 4.3 WinFsp 実マウントベンチマークの実行
@@ -232,35 +232,35 @@ $HostBin = "$env:TEMP\bench_payload_256mb.bin"
 $Img     = "$env:TEMP\bench_live_320mb.img"
 $fs = [System.IO.File]::Create($HostBin); $fs.SetLength(256MB); $fs.Close()
 
-.\build\zeroext.exe mkfs $Img --size-mb 320 --label BENCH
-.\build\zeroext.exe write $Img /model.gguf $HostBin --from-file
+.\build\zeroext4.exe mkfs $Img --size-mb 320 --label BENCH
+.\build\zeroext4.exe write $Img /model.gguf $HostBin --from-file
 ```
 
-2. 別ターミナルで対象ドライブをマウントし、`zeroext_bench.exe --read` を実行する（既定 Direct I/O あり / `--no-direct-io` を切り替えて計測）。
+2. 別ターミナルで対象ドライブをマウントし、`zeroext4_bench.exe --read` を実行する（既定 Direct I/O あり / `--no-direct-io` を切り替えて計測）。
 
 ```powershell
 # マウント側（標準経路 / 既定 Direct I/O を切り替え）
-.\build\zeroext.exe mount --source $Img --mountpoint W: --no-direct-io
+.\build\zeroext4.exe mount --source $Img --mountpoint W: --no-direct-io
 # または（既定 Direct I/O ON）
-.\build\zeroext.exe mount --source $Img --mountpoint W:
+.\build\zeroext4.exe mount --source $Img --mountpoint W:
 ```
 
 ```powershell
 # 計測側
-.\build\zeroext_bench.exe --read W:\model.gguf 1024 unbuf seq
-.\build\zeroext_bench.exe --read W:\model.gguf 64   unbuf seq
-.\build\zeroext_bench.exe --read W:\model.gguf 4    unbuf rnd
-.\build\zeroext_bench.exe --read W:\model.gguf 1024 cached seq
+.\build\zeroext4_bench.exe --read W:\model.gguf 1024 unbuf seq
+.\build\zeroext4_bench.exe --read W:\model.gguf 64   unbuf seq
+.\build\zeroext4_bench.exe --read W:\model.gguf 4    unbuf rnd
+.\build\zeroext4_bench.exe --read W:\model.gguf 1024 cached seq
 ```
 
 3. 計測完了後、マウントプロセスを停止（`Ctrl+C`）し、一時ファイル `$HostBin` および `$Img` を削除する。
 
 ### 4.4 同一 NVMe SSD 5 方式比較ベンチマーク（`scripts\bench_compare_ssd.ps1`）の実行
 
-Windows Native (NTFS)・`ZeroExt`（`--no-direct-io` / 既定 Direct I/O）・`wsl --mount --vhd`（9P / Linux カーネル参考値）の 5 バックエンドを同一 SSD 上で一括計測する場合は、**管理者権限の PowerShell** で以下を実行する（`Mount-VHD`, `\\.\PhysicalDriveN`, `wsl --mount --vhd` に管理者権限が必要）。
+Windows Native (NTFS)・`ZeroExt4`（`--no-direct-io` / 既定 Direct I/O）・`wsl --mount --vhd`（9P / Linux カーネル参考値）の 5 バックエンドを同一 SSD 上で一括計測する場合は、**管理者権限の PowerShell** で以下を実行する（`Mount-VHD`, `\\.\PhysicalDriveN`, `wsl --mount --vhd` に管理者権限が必要）。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "D:\ZeroExt\scripts\bench_compare_ssd.ps1"
+powershell -ExecutionPolicy Bypass -File "D:\ZeroExt4\scripts\bench_compare_ssd.ps1"
 ```
 
 計測ログおよび横並びサマリー表は `build\bench_ssd_compare_results.txt` へ出力され、テスト終了時に一時マウント・VHDX・一時ファイルは自動クリーンアップされる（空きドライブ `W:` が使用中の場合は `-MountDrive Y:` 等で変更可能）。

@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_COMPAT_SYS_TIME_H
-#define ZEROEXT_COMPAT_SYS_TIME_H
+#ifndef ZEROEXT4_COMPAT_SYS_TIME_H
+#define ZEROEXT4_COMPAT_SYS_TIME_H
 
 #include <time.h>
 
@@ -13,4 +13,4 @@ struct timeval {
 #endif
 #endif
 
-#endif /* ZEROEXT_COMPAT_SYS_TIME_H */
+#endif /* ZEROEXT4_COMPAT_SYS_TIME_H */

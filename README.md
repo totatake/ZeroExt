@@ -1,17 +1,17 @@
-# ZeroExt
+# ZeroExt4
 
 **Language:** English | [日本語](README.ja.md)
 
-A high-performance **ext2 / ext3 / ext4** user-space filesystem driver, CLI tool (`zeroext.exe`), and desktop GUI mount manager (`ZeroExtGui.exe`) for Windows 11 / 10, built on upstream **`libext2fs` (`e2fsprogs`) + `WinFsp`**.
+A high-performance **ext2 / ext3 / ext4** user-space filesystem driver, CLI tool (`zeroext4.exe`), and desktop GUI mount manager (`ZeroExt4Gui.exe`) for Windows 11 / 10, built on upstream **`libext2fs` (`e2fsprogs`) + `WinFsp`**.
 
-> **Why ZeroExt?** Share large AI models (GGUF / Safetensors, etc.) and datasets on Linux partitions **directly with Windows at Native NTFS-class speed—without copying files, without risking ext4 corruption, and with zero BSOD risk** in user space.
+> **Why ZeroExt4?** Share large AI models (GGUF / Safetensors, etc.) and datasets on Linux partitions **directly with Windows at Native NTFS-class speed—without copying files, without risking ext4 corruption, and with zero BSOD risk** in user space.
 
 ## Comparison & Benchmark Highlights
 
 | Approach | Mount Style | Warm Read (`1MB` / `4KB Rnd`) | Cold NVMe (`1MB`) | Modern ext4 | BSOD Risk | Non-Destructive Write |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt` (Default RO / DIO)** | **Drive (`L:` etc.)** | **`10,543` / `991 MB/s`**<br><sub>(`1.00x–1.08x` vs Native NTFS)</sub> | **`1,564 MB/s`** | **Yes (`libext2fs`)** | **Zero** | **Yes (`--overlay`)** |
-| **WSL2 (`wsl --mount` + 9P)** | UNC (`\\wsl.localhost`) | `196` / `17.9 MB/s`<br><sub>(`1/54–1/72` of `ZeroExt`)</sub> | `161 MB/s` | Yes | Low (VM req.) | No |
+| **`ZeroExt4` (Default RO / DIO)** | **Drive (`L:` etc.)** | **`10,543` / `991 MB/s`**<br><sub>(`1.00x–1.08x` vs Native NTFS)</sub> | **`1,564 MB/s`** | **Yes (`libext2fs`)** | **Zero** | **Yes (`--overlay`)** |
+| **WSL2 (`wsl --mount` + 9P)** | UNC (`\\wsl.localhost`) | `196` / `17.9 MB/s`<br><sub>(`1/54–1/72` of `ZeroExt4`)</sub> | `161 MB/s` | Yes | Low (VM req.) | No |
 | **Legacy Kernel FSD (`Ext2Fsd`, etc.)** | Drive | Fast | Fast | Partial / Legacy | **High** | No |
 | **Commercial Drivers / Viewers** | Drive / Viewer | Fast / Copy req. | Fast / Copy req. | Yes / Partial | Medium / Zero | No |
 
@@ -70,21 +70,21 @@ See [Usage Guide §1](docs/guides/usage.md#1-winfsp-ランタイムのインス�
 
 ### 3. Launch GUI or Mount via CLI
 
-- **Desktop GUI (`.\build\gui\ZeroExtGui.exe`)**: Auto-detects disks and `.img` files, inspects JBD2 journal status, switches RO / Overlay / RW modes (default `L:` drive preference, `--case-sensitive`, English/Japanese UI, Dark/Light theme), stays in the system tray, and communicates with `zeroext.exe` over JSON / Named Event IPC without linking GPLv2 native code.
+- **Desktop GUI (`.\build\gui\ZeroExt4Gui.exe`)**: Auto-detects disks and `.img` files, inspects JBD2 journal status, switches RO / Overlay / RW modes (default `L:` drive preference, `--case-sensitive`, English/Japanese UI, Dark/Light theme), stays in the system tray, and communicates with `zeroext4.exe` over JSON / Named Event IPC without linking GPLv2 native code.
 - **CLI Examples**:
 
 ```powershell
 # Inspect disks/images and mount Read-Only + Direct Extent I/O (default)
-zeroext.exe list
-zeroext.exe inspect test.img
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
+zeroext4.exe list
+zeroext4.exe inspect test.img
+zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
 
 # Non-destructive Overlay mount (ext4 stays RO; changes saved to NTFS Upperdir)
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
+zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 
 # Direct Read-Write mount and safe unmount
-zeroext.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
-zeroext.exe unmount L:
+zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
+zeroext4.exe unmount L:
 ```
 
 See [Usage Guide](docs/guides/usage.md) for the complete GUI walkthrough, offline image commands (`mkfs` / `ls` / `cat` / `write`), and all CLI flags.

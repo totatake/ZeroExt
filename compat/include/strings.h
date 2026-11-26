@@ -1,5 +1,5 @@
-#ifndef ZEROEXT_COMPAT_STRINGS_H
-#define ZEROEXT_COMPAT_STRINGS_H
+#ifndef ZEROEXT4_COMPAT_STRINGS_H
+#define ZEROEXT4_COMPAT_STRINGS_H
 
 #include <string.h>
 
@@ -23,4 +23,4 @@ static __inline int ffs(int i) {
 }
 #endif
 
-#endif /* ZEROEXT_COMPAT_STRINGS_H */
+#endif /* ZEROEXT4_COMPAT_STRINGS_H */

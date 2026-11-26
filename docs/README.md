@@ -1,6 +1,6 @@
 # ドキュメント一覧
 
-本ディレクトリは **ZeroExt**（`libext2fs` + `WinFsp` による Windows 向け高速ユーザー空間 ext2/ext3/ext4 ドライバ・CLI・WPF GUI）の技術ドキュメントを集約するハブです。
+本ディレクトリは **ZeroExt4**（`libext2fs` + `WinFsp` による Windows 向け高速ユーザー空間 ext2/ext3/ext4 ドライバ・CLI・WPF GUI）の技術ドキュメントを集約するハブです。
 
 ## 基本ドキュメント
 
