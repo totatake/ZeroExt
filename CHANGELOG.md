@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-26
+
+### Added
+- Added technical source-level comparison report against `Ext4Windows` (`v1.3.0` / `31b83e2`) in [`docs/reports/ext4windows-comparison.md`](docs/reports/ext4windows-comparison.md), linked from `README.md`, `README.ja.md`, `docs/README.md`, `docs/overview.md`, and `docs/reports/README.md`.
+
+### Changed
+- **Breaking**: Renamed the project, executables, build targets, CMake options, GUI solution/projects, and settings path from `ZeroExt` to `ZeroExt4` (`zeroext.exe` -> `zeroext4.exe`, `zeroext_bench.exe` -> `zeroext4_bench.exe`, `zeroext_tests.exe` -> `zeroext4_tests.exe`, `zeroext_core` -> `zeroext4_core`, `ZEROEXT_*` -> `ZEROEXT4_*` CMake options, `ZeroExtGui.exe` -> `ZeroExt4Gui.exe`, `gui/ZeroExt.sln` -> `gui/ZeroExt4.sln`, `gui/ZeroExt.Gui*` -> `gui/ZeroExt4.Gui*`, `%LOCALAPPDATA%\ZeroExt\gui_settings.json` -> `%LOCALAPPDATA%\ZeroExt4\gui_settings.json`, `ZeroExt-<tag>-win-x64.zip` -> `ZeroExt4-<tag>-win-x64.zip`, `zeroext_crash.dmp` -> `zeroext4_crash.dmp`).
+- Synchronized version references (`v0.9.0`), supported versions in `SECURITY.md`, issue template examples, and documentation indices across `README.md`, `README.ja.md`, `docs/README.md`, `docs/roadmap.md`, `docs/design/detailed-design.md`, and `docs/reports/ext4windows-comparison.md`.
+
 ## [0.8.1] - 2026-11-25
 
 ### Added
@@ -88,7 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt4 / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/totatake/ZeroExt4/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/totatake/ZeroExt4/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/totatake/ZeroExt4/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/totatake/ZeroExt4/compare/v0.6.0...v0.7.0

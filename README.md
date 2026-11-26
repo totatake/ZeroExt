@@ -104,6 +104,7 @@ See [Usage Guide](docs/guides/usage.md) for the complete GUI walkthrough, offlin
 - [Testing & Verification Guide](docs/testing.md)
 - [Performance Evaluation Report](docs/reports/performance-evaluation.md)
 - [Perfetto Trace Analysis & Optimization Report](docs/reports/perfetto-trace-analysis.md)
+- [Technical Comparison with Ext4Windows](docs/reports/ext4windows-comparison.md)
 - [Roadmap](docs/roadmap.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing Guide](CONTRIBUTING.md)

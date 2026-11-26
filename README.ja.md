@@ -102,6 +102,7 @@ GUI 詳細・オフライン操作（`mkfs` / `ls` / `cat` / `write`）・全 CL
 - [テスト・検証ガイド](docs/testing.md)
 - [性能評価レポート](docs/reports/performance-evaluation.md)
 - [Perfetto トレース解析・最適化レポート](docs/reports/perfetto-trace-analysis.md)
+- [Ext4Windows との技術比較分析](docs/reports/ext4windows-comparison.md)
 - [ロードマップ](docs/roadmap.md)
 - [変更履歴](CHANGELOG.md)
 - [コントリビューションガイド](CONTRIBUTING.md)

@@ -29,7 +29,7 @@ ZeroExt4\
 │   ├── adr/                              # 設計判断記録 (0001〜0013)
 │   ├── design/                           # 詳細設計ドキュメント (detailed-design.md)
 │   ├── guides/                           # ガイド一覧 (usage.md / development.md)
-│   ├── reports/                          # 評価・解析レポート (performance-evaluation / perfetto)
+│   ├── reports/                          # 評価・解析レポート (performance-evaluation / perfetto / ext4windows-comparison)
 │   └── assets/                           # 図表・スクリーンショット配置用
 ├── scripts/
 │   ├── generate_e2fsprogs_headers.py     # ext2_err.et.in / ext2_types.h.in -> ext2_err.h/c, ext2_types.h, crc32c_table.h

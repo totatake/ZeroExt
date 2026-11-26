@@ -1,6 +1,6 @@
 # Ext4Windows との技術比較分析
 
-本書は、同じく **WinFsp** を用いて Windows 上に ext4 ファイルシステムをマウントする OSS 実装である **[Ext4Windows](https://github.com/Mateuscruz19/Ext4Windows)**（解析対象: `v1.3.0` / commit `31b83e2`）と **`ZeroExt4`**（`v0.8.1` / `e2fsprogs 1.47.4`）のソースコードを直接比較し、両者の設計思想・得意領域の違いおよび **`ZeroExt4` が Read-Only / 非破壊 `--overlay` 構成において高い性能を発揮する技術的根拠** を整理した解析レポートである。
+本書は、同じく **WinFsp** を用いて Windows 上に ext4 ファイルシステムをマウントする OSS 実装である **[Ext4Windows](https://github.com/Mateuscruz19/Ext4Windows)**（解析対象: `v1.3.0` / commit `31b83e2`）と **`ZeroExt4`**（`v0.9.0` / `e2fsprogs 1.47.4`）のソースコードを直接比較し、両者の設計思想・得意領域の違いおよび **`ZeroExt4` が Read-Only / 非破壊 `--overlay` 構成において高い性能を発揮する技術的根拠** を整理した解析レポートである。
 
 両プロジェクトは共通して `WinFsp` 上で動作しつつも、設計の主軸が異なる。`Ext4Windows` が `lwext4` のジャーナル再生・トランザクション書込や親ディレクトリの POSIX UID/GID/mode 継承を備えた **汎用・直接 Read-Write ユーティリティ指向** であるのに対し、`ZeroExt4` は大容量モデル・データセットの高速読取と ext4 非破壊性を最優先とした **Read-Only（および Lower 厳密 RO の `--overlay`）特化設計** を採っている。
 
@@ -12,7 +12,7 @@
 
 ## 1. 総合比較サマリー
 
-| 比較項目 | `Ext4Windows` (`v1.3.0` / `31b83e2`) | `ZeroExt4` (`v0.8.1`) | 設計上のトレードオフ・影響 |
+| 比較項目 | `Ext4Windows` (`v1.3.0` / `31b83e2`) | `ZeroExt4` (`v0.9.0`) | 設計上のトレードオフ・影響 |
 | :--- | :--- | :--- | :--- |
 | **設計の主軸・得意領域** | **汎用・直接 RW ユーティリティ指向**（直接 RW 時の POSIX 継承・ACL・ジャーナル保護重視） | **RO / 非破壊 `--overlay` 特化**（大容量高速読取・`mmap`・非破壊性重視） | 用途に応じた設計焦点の違い（`ZeroExt4 --rw` の制約は後述） |
 | **ext4 バックエンド** | `lwext4` 独自フォーク（`modern-ext4` 等を手動パッチ追加） | **本家 `e2fsprogs` `1.47.4` (`libext2fs`)**＋`compat/` Zero-Patch 分離 | 最新 ext4 機能互換・安全性・上流追従性（[ADR-0003](../adr/0003-upstream-libext2fs-over-lwext4.md)） |
