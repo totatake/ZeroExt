@@ -21,6 +21,7 @@ Windows から Linux (ext4) 上の巨大なデータ（例：AI モデル、学�
 
 > [!NOTE]
 > 上記スループット値は同一物理 NVMe SSD（`INTEL SSDPEKNU512GZ`, `AMD Ryzen 5 5600G`）上で 512 MB 連続ファイルを比較計測した結果です（[reports/performance-evaluation.md §2.3](reports/performance-evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext--wsl---mount---vhd)）。
+> また、同じ WinFsp ベースで `lwext4` を採用する他 OSS 実装（`Ext4Windows`）とのコードレベル技術比較については [Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) を参照してください。
 
 ---
 

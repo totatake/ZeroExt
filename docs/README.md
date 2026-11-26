@@ -19,5 +19,5 @@
 | [ガイド一覧](guides/README.md) | [利用ガイド](guides/usage.md) / [開発・ビルド・保守ガイド](guides/development.md) |
 | [Architecture Decision Records (ADR)](adr/README.md) | `ADR-0001`〜`ADR-0013`（WinFsp 採用・ライセンス分離・ロック階層・Direct I/O・Overlay 等） |
 | [詳細設計ドキュメント](design/README.md) | [詳細設計書](design/detailed-design.md) および将来のサブシステム設計パック |
-| [評価・解析レポート](reports/README.md) | [性能評価レポート](reports/performance-evaluation.md) / [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) |
+| [評価・解析レポート](reports/README.md) | [性能評価レポート](reports/performance-evaluation.md) / [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) / [Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) |
 | `assets/` | README や設計書で参照する図表・スクリーンショット配置用ディレクトリ |
