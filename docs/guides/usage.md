@@ -92,6 +92,9 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 > [!NOTE]
 > 物理ディスク（`\\.\PhysicalDriveX`）を対象にする場合は、**管理者権限のターミナル** から実行してください。
 
+> [!WARNING]
+> **`--rw` モード利用時のデータ破壊リスク**: `--rw`（直接 Read-Write）は Linux カーネルのような JBD2 トランザクションジャーナリングを伴わず、`libext2fs` を通じて ext4 のメタデータおよびデータブロックを直接更新します。書込中の異常終了・強制終了・電源断や予期しないバグにより ext4 パーティション／イメージが破損するおそれがあります。重要なデータでは事前バックアップを取得するか、下位 ext4 を 1 バイトも書き換えない `--overlay` モードを使用してください（万一 `--rw` 書き込み中に異常終了した場合は、Linux 上で `e2fsck` による検査・修復を実施してください）。
+
 ```powershell
 # Read-Only + Direct Extent I/O マウント（既定動作：フラグ不要・GGUF 等も高速かつ安全に読取可）
 .\build\zeroext4.exe mount --source test.img --mountpoint L:

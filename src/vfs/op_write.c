@@ -82,6 +82,7 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
     uint8_t *heap_blk = NULL;
     uint8_t *blk_buf;
     uint32_t done = 0;
+    int inode_dirty = 0;
     errcode_t retval = 0;
 
     *out_written = 0;
@@ -211,6 +212,7 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                             break;
                         }
                         ext2fs_iblk_add_blocks(fs, (struct ext2_inode *)full_ino, plen);
+                        inode_dirty = 1;
                         extended_left = 1;
                     }
                 }
@@ -243,6 +245,7 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                     break;
                 }
                 ext2fs_iblk_add_blocks(fs, (struct ext2_inode *)full_ino, plen);
+                inode_dirty = 1;
                 retval = ext2fs_extent_fix_parents(ehandle);
                 if (retval != 0) break;
             }
@@ -263,13 +266,15 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
     ext2fs_extent_free(ehandle);
     free(heap_blk);
 
-    if (done > 0) {
-        uint64_t new_end = start_pos + (uint64_t)done;
-        if (new_end > old_size) {
-            errcode_t sz_rc = ext2fs_inode_size_set(fs, (struct ext2_inode *)full_ino, new_end);
-            if (retval == 0) retval = sz_rc;
+    if (done > 0 || inode_dirty) {
+        if (done > 0) {
+            uint64_t new_end = start_pos + (uint64_t)done;
+            if (new_end > old_size) {
+                errcode_t sz_rc = ext2fs_inode_size_set(fs, (struct ext2_inode *)full_ino, new_end);
+                if (retval == 0) retval = sz_rc;
+            }
+            ext4_inode_touch_times(full_ino, 0, 1, 1);
         }
-        ext4_inode_touch_times(full_ino, 0, 1, 1);
         {
             errcode_t w_rc = ext2fs_write_inode_full(fs, ino, (struct ext2_inode *)full_ino,
                                                      sizeof(*full_ino));

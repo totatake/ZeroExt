@@ -89,6 +89,9 @@ zeroext4.exe unmount L:
 
 See [Usage Guide](docs/guides/usage.md) for the complete GUI walkthrough, offline image commands (`mkfs` / `ls` / `cat` / `write`), and all CLI flags.
 
+> [!WARNING]
+> **Data-corruption risk in `--rw` mode**: Direct Read-Write (`--rw`) modifies ext4 metadata and data blocks directly via `libext2fs` without JBD2 transaction journaling. Unexpected process termination, power loss, or an edge-case bug during `--rw` writes can corrupt the ext4 filesystem. Back up important data beforehand, or prefer `--overlay` to keep the underlying ext4 volume strictly Read-Only.
+
 ## Documentation
 
 *(Engineering documents under `docs/` are primarily written in Japanese.)*

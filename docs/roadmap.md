@@ -1,6 +1,6 @@
 # ロードマップ
 
-本書は **ZeroExt4**（`v0.9.0` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
+本書は **ZeroExt4**（`v0.10.0` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
 
 ---
 
@@ -17,7 +17,8 @@
 | `v0.7.0` | 2026-11-22 | OSS リポジトリ構造標準化（`CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `AGENTS.md`）、`docs/` の kebab-case 再編、`ADR-0001`〜`ADR-0013` 抽出、CI / Release ワークフロー分離 |
 | `v0.8.0` | 2026-11-23 | `--case-sensitive` モード実装（NTFS Upperdir `FileCaseSensitiveInfo`・`:cs` マーカーガード・事前検証／エラー翻訳・`_cs` 推奨パス）、`L:` 優先統一、Dark モード `ComboBox` 修正・GUI ヘッダー見切れ解消 |
 | `v0.8.1` | 2026-11-25 | ドキュメント体系整理（H1 タイトル・章番号・リンク名統一、`docs/guides/development.md`・`guides/README.md` 分離、要件 ID の `REQ-F-*`/`REQ-NF-*` 移行、`README`/`overview.md` 実測値同期・重複整理） |
-| `v0.9.0` | 2026-11-26 | プロジェクト名・バイナリ・CMake ターゲット／オプション・WPF GUI・設定パスを `ZeroExt4` へ全面リネーム（破壊的変更）、[Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) 追加、`--rw`/標準経路のバッチ連続エクステント書込・並列読込最適化とベンチマーク再評価 |
+| `v0.9.0` | 2026-11-26 | プロジェクト名・バイナリ・CMake ターゲット／オプション・WPF GUI・設定パスを `ZeroExt4` へ全面リネーム（破壊的変更）、[Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) 追加 |
+| `v0.10.0` | 2026-11-27 | `--rw` / 標準経路のバッチ連続エクステント書込・`fs_lock` 外並列読込・整列ゼロコピー書込最適化、`--rw-bench` ＆一貫性テスト追加、同一 SSD / WinFsp 実マウント / VFS ベンチマーク再評価 |
 
 ---
 
@@ -45,7 +46,7 @@
 | :--- | :--- | :--- | :---: |
 | **Phase 1**<br>（短期） | **安全性・診断の強化** | 非空レガシー Upperdir の既定拒否＆Lower ID 強化、`inspect` 診断拡充・`zeroext4 doctor`（GUI i18n は `v0.5.0`、安全 `unmount` 検証は `v0.6.0`、`--case-sensitive` は `v0.8.0` で完了） | **進行中（高）** |
 | **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export`、ハッシュ化による inode/path マップ高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **中〜高** |
-| **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出、非破壊診断 `zeroext4 fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、`--rw` 標準 `libext2fs` 経路の最適化 | **中** |
+| **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出、非破壊診断 `zeroext4 fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、`--rw` 標準 `libext2fs` 経路の追加最適化（バッチ連続エクステント書込・並列読込は `v0.10.0` で完了） | **中** |
 | **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／ポータブル配布評価、停止済み WSL2 `ext4.vhdx` 連携ワークフロー強化 | **低〜中** |
 
 ---
@@ -132,9 +133,9 @@
 ### 6.3 `--rw` 標準 `libext2fs` 経路の最適化（Direct I/O は無効維持）
 
 - 前述の安全境界通り、`--rw` では Direct Extent I/O を有効化せず、整合性を最優先する。
-- 直接 `--rw` マウント時の書き込み・読み取りスループット改善が必要な場合は、以下の**標準経路内の安全な最適化**で対応する：
-  - オープン済みハンドル (`ext4_file_handle_t`) における `ext2_file_t` の再利用（毎 Read/Write での `ext2fs_file_open` / `close` 削減）
-  - 連続小口書き込みのバッチ化と `ctx->rwlock` 排他ロック保持時間の短縮
+- 直接 `--rw` マウント時の書き込み・読み取りスループット改善は、標準経路内の安全な最適化で対応する（バッチ連続エクステント書込・`fs_lock` 外並列読込・整列ゼロコピー書込は **`v0.10.0` で実装済み**）。残る改善候補は以下の通り：
+  - オープン済みハンドル (`ext4_file_handle_t`) における `ext2_file_t` の再利用（非エクステントファイル／フォールバック経路での毎 Read/Write `ext2fs_file_open` / `close` 削減）
+  - 連続小口（4 KB 単位等）書き込みのさらなるバッチ化と `ctx->rwlock` 排他ロック保持時間の短縮
   - メタデータ更新時（`truncate` / `unlink` / `rename` / `write`）の各種キャッシュ無効化がすべて排他ロック保護下で行われることの継続検証
 
 ---
