@@ -1,8 +1,8 @@
 # 技術概要・他手法比較・ユースケース
 
-> **一言でいうと**: `ZeroExt4` は、Windows 上から Linux の ext2 / ext3 / ext4 パーティション・イメージを **BSOD リスクゼロのユーザー空間ドライバ** でありながら **Windows Native NTFS 並み（Warm 読取 10.5 GB/s / 254K IOPS・Cold 実 SSD 読取 1.56 GB/s）** で直接共有できるファイルシステムドライバです。
+> **一言でいうと**: `ZeroExt4` は、Windows 上から Linux の ext2 / ext3 / ext4 パーティション・イメージを **BSOD リスクゼロのユーザー空間ドライバ** でありながら **Windows Native NTFS 並み（Warm 読取 10.7 GB/s / 263K IOPS・Cold 実 SSD 読取 1.51 GB/s）** で直接共有できるファイルシステムドライバです。
 
-- 本書の前提となるベンチマーク実測値・検証環境は [性能評価レポート](reports/performance-evaluation.md)（計測リビジョン `78cd744` / `e2fsprogs 1.47.4` 適用後）および [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) に基づきます。
+- 本書の前提となるベンチマーク実測値・検証環境は [性能評価レポート](reports/performance-evaluation.md)（`v0.9.0` / `2026-11-27` 計測）および [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) に基づきます。
 - コンポーネント構成・ADR（設計判断記録）は [アーキテクチャ設計書](architecture.md) を参照してください。
 
 ---
@@ -13,8 +13,8 @@ Windows から Linux (ext4) 上の巨大なデータ（例：AI モデル、学�
 
 | 方式 / ツール | ドライブ直接マウント | Warm 読取性能<br><sub>(Seq 1MB / Rnd 4KB)</sub> | Cold 実 SSD 直読<br><sub>(Seq 1MB)</sub> | 現代 ext4 対応<br><sub>(`metadata_csum` / 64bit)</sub> | BSOD リスク / 署名要件 | 非破壊書込<br><sub>(`Overlay`)</sub> |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt4`（本ツール）** | **◎ 標準ドライブ (`L:`)** | **`10,543` / `991 MB/s`**<br><sub>(`Native NTFS` の `1.00x〜1.08x`)</sub> | **`1,564 MB/s`**<br><sub>(`WSL2 9P` の `9.73x`)</sub> | **◎ 本家 `e2fsprogs` (`libext2fs`)** | **ゼロ**（ユーザー空間 / WinFsp） | **◎ (`--overlay`)** |
-| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost\...`) | `196` / `17.9 MB/s`<br><sub>(`ZeroExt4` 比 `1/54〜1/72`)</sub> | `161 MB/s` | ◎（Linux カーネル） | 低（VM 常駐・メモリ占有大） | × |
+| **`ZeroExt4`（本ツール）** | **◎ 標準ドライブ (`L:`)** | **`10,664` / `1,027 MB/s`**<br><sub>(`Native NTFS` の `1.04x〜1.06x`)</sub> | **`1,506 MB/s`**<br><sub>(`WSL2 9P` の `9.11x`)</sub> | **◎ 本家 `e2fsprogs` (`libext2fs`)** | **ゼロ**（ユーザー空間 / WinFsp） | **◎ (`--overlay`)** |
+| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost\...`) | `197` / `18.1 MB/s`<br><sub>(`ZeroExt4` 比 `1/54〜1/70`)</sub> | `165 MB/s` | ◎（Linux カーネル） | 低（VM 常駐・メモリ占有大） | × |
 | **旧来の非公式カーネル FSD**<br><sub>(`Ext2Fsd` 等)</sub> | ◎ | 高速（カーネル空間） | 高速 | △〜×（最新 ext4 機能非対応の系統が多い） | **高**（カーネル不具合即 BSOD / 署名問題） | × |
 | **商用ドライバ**<br><sub>(`Paragon Linux File Systems` 等)</sub> | ◎ | 高速（カーネル空間） | 高速 | ◎（有償・プロプライエタリ） | 中（サードパーティ `.sys` 常駐） | × |
 | **読取専用ビューア / 複製** | ×（エクスポート前提） | ―（NTFS へ複製要） | ― | ○ | ゼロ | × |
@@ -33,7 +33,7 @@ Windows から Linux (ext4) 上の巨大なデータ（例：AI モデル、学�
 flowchart LR
     App["Windows アプリ / mmap (LM Studio / llama.cpp 等)"]
 
-    subgraph WSL["WSL2 9P 経路 (Warm 196 MB/s)"]
+    subgraph WSL["WSL2 9P 経路 (Warm 197 MB/s)"]
         direction LR
         W1["Windows 9P リダイレクタ"] --> W2["HVSocket (VM境界 RPC)"] --> W3["Linux Kernel + PageCache"] --> W4["仮想ディスク / NVMe"]
     end
@@ -46,8 +46,8 @@ flowchart LR
     subgraph ZeroExt4Path["ZeroExt4 2-Tier バイパス経路"]
         direction TB
         ZSys["winfsp-x64.sys (MS 署名済 FSD)"]
-        ZHot["Hot/Warm 経路: NT Cache Manager (CcCopyRead)\nFileInfoTimeout=INFINITE によりユーザー空間ゼロ通過\n=> 10,543 MB/s / 253,557 IOPS"]
-        ZCold["Cold/Unbuf 経路: Handle Extent キャッシュ O(log N) 二分探索\n+ FILE_FLAG_OVERLAPPED + FLS 並列一括直読\n=> 実 SSD 1,564 MB/s (VFS 8T 30,303 MB/s)"]
+        ZHot["Hot/Warm 経路: NT Cache Manager (CcCopyRead)\nFileInfoTimeout=INFINITE によりユーザー空間ゼロ通過\n=> 10,664 MB/s / 262,828 IOPS"]
+        ZCold["Cold/Unbuf 経路: Handle Extent キャッシュ O(log N) 二分探索\n+ FILE_FLAG_OVERLAPPED + FLS 並列一括直読\n=> 実 SSD 1,506 MB/s (VFS 8T 32,459 MB/s)"]
         ZSys -->|"2回目以降 (キャッシュヒット)"| ZHot
         ZSys -->|"初回 / UNBUF"| ZCold
     end
@@ -69,22 +69,22 @@ sequenceDiagram
 
     Note over App,WSL: ケース A: 初回読込 (Cold / Unbuffered 1 MB Read)
     App->>WSL: ReadFile 1 MB (via \\wsl.localhost)
-    WSL-->>App: Plan9/HVSocket RPC で毎回パケット化・コピー (160.7 MB/s)
+    WSL-->>App: Plan9/HVSocket RPC で毎回パケット化・コピー (165.4 MB/s)
 
     App->>Kern: ReadFile 1 MB (ZeroExt4 L:)
     Kern->>Ext: FspRead(Offset, 1 MB)
     Ext->>Ext: cached_extents 二分探索 O(log N) (ファイル開放後ロック不要)
     Ext->>SSD: ReadFile(FILE_FLAG_OVERLAPPED) で連続エクステント一括直読
-    SSD-->>Ext: 1,564 MB/s (物理 NVMe SSD 実測)
-    Ext-->>App: 返却 (VFS 単体 8 スレッド時は 30.3 GB/s)
+    SSD-->>Ext: 1,506 MB/s (物理 NVMe SSD 実測)
+    Ext-->>App: 返却 (VFS 単体 8 スレッド時は 32.5 GB/s)
 
     Note over App,WSL: ケース B: 再アクセス・モデル再読込 (Warm / Cached)
     App->>WSL: ReadFile (via \\wsl.localhost)
-    WSL-->>App: Linux 側キャッシュに載っていても 9P/VM 越えで頭打ち (196.0 MB/s)
+    WSL-->>App: Linux 側キャッシュに載っていても 9P/VM 越えで頭打ち (197.0 MB/s)
 
     App->>Kern: ReadFile / mmap fault (ZeroExt4 L:)
     Note right of Kern: RO 時は FileInfoTimeout=INFINITE により NT Cache Manager CcCopyRead が有効
-    Kern-->>App: ユーザー空間 zeroext4.exe を呼ばずメモリ直結応答 (10,543 MB/s / Native NTFS 比 1.00x)
+    Kern-->>App: ユーザー空間 zeroext4.exe を呼ばずメモリ直結応答 (10,664 MB/s / Native NTFS 比 1.04x)
 ```
 
 ---
@@ -95,9 +95,9 @@ sequenceDiagram
 ユーザー空間ファイルシステムは通常「カーネル ↔ ユーザー空間のコンテキストスイッチ」と「`libext2fs` の内部オーバーヘッド」が二重の足かせになります。`ZeroExt4` は次の 2 段階でこれらを両方バイパスします。
 
 1. **Hot / Warm バイパス（[winfsp_driver.c](../src/driver/winfsp_driver.c#L880-L885)）**:
-   Read-Only マウント時に WinFsp の `FileInfoTimeout` 既定値を `(UINT32)-1` (`INFINITE`) に設定し、Windows NT カーネルの Cache Manager (`CcCopyRead`) / Memory Manager (`Mm`) と完全に協調させます。これにより 2 回目以降の読取では `FspRead` コールバック呼び出し自体が **99.3% 削減**（64 MB 計測時 `17,736` → `131` 回）され、`ZeroExt4` は **`10,542.5 MB/s`**（`Native NTFS` `10,552.5 MB/s` と同等、`64KB` は `8,697.8 MB/s` で `1.75x`）を達成します。
+   Read-Only マウント時に WinFsp の `FileInfoTimeout` 既定値を `(UINT32)-1` (`INFINITE`) に設定し、Windows NT カーネルの Cache Manager (`CcCopyRead`) / Memory Manager (`Mm`) と完全に協調させます。これにより 2 回目以降の読取では `FspRead` コールバック呼び出し自体が **99.3% 削減**（64 MB 計測時 `17,736` → `131` 回）され、`ZeroExt4` は **`10,664.4 MB/s`**（`Native NTFS` `10,265.3 MB/s` の `1.04x`、`4KB Rnd` も `1,026.7 MB/s` で `1.06x`）を達成します。
 2. **Cold / Unbuffered バイパス（[extent_map.c](../src/extent/extent_map.c), [op_read.c](../src/vfs/op_read.c)）**:
-   RO / `--overlay` 時の初回アクセスでは `ext2fs_file_read` の 4 KB 分割＋CRC/ブロックキャッシュ経路をバイパスし、`ext4_file_handle_t` に保持したエクステント配列へ `O(log N)` 二分探索を行い、`win32_io_pread_direct` で最大 1 MB（あるいは 64 MiB）単位の連続範囲を一括読み出しします。その結果、同一 SSD の実物理ディスク直読でも標準経路 `75.2 MB/s` の **20.8 倍**（`1,563.7 MB/s`）に達します。
+   RO / `--overlay` 時の初回アクセスでは `ext2fs_file_read` の 4 KB 分割＋CRC/ブロックキャッシュ経路をバイパスし、`ext4_file_handle_t` に保持したエクステント配列へ `O(log N)` 二分探索を行い、`win32_io_pread_direct` で最大 1 MB（あるいは 64 MiB）単位の連続範囲を一括読み出しします。これにより同一 SSD の実物理ディスク直読でも **`1,506.2 MB/s`**（`WSL2 9P` の **9.11 倍**）に達します（`v0.9.0` 以降は標準/`--rw` 経路もバッチ連続エクステント I/O により `1,433.5 MB/s` まで高速化）。
 
 ---
 
@@ -140,9 +140,9 @@ Linux デュアルブート環境や組込みイメージを Windows から扱�
 ## 3. 実践ユースケース
 
 ### 3.1 デュアルブート環境での巨大ローカル AI モデル共有（主軸：GGUF / Safetensors / ComfyUI / LM Studio）
-- **背景と課題**: Linux 側（PyTorch 学習・vLLM・Ollama・Hugging Face キャッシュ）でダウンロード・生成した 10 GB〜100 GB 超のモデルを Windows 側（LM Studio / `llama.cpp` / KoboldCpp / ComfyUI）でも使いたい場合、従来は「大容量 SSD にモデルを 2 重コピーする」か「WSL2 `\\wsl.localhost` 経由で `196 MB/s` の低速ロードに耐える」しかありませんでした。
+- **背景と課題**: Linux 側（PyTorch 学習・vLLM・Ollama・Hugging Face キャッシュ）でダウンロード・生成した 10 GB〜100 GB 超のモデルを Windows 側（LM Studio / `llama.cpp` / KoboldCpp / ComfyUI）でも使いたい場合、従来は「大容量 SSD にモデルを 2 重コピーする」か「WSL2 `\\wsl.localhost` 経由で `197 MB/s` の低速ロードに耐える」しかありませんでした。
 - **ZeroExt4 での解決**:
-  - コピー不要（SSD 容量節約）のまま、初回ロード **1.56 GB/s**、モデル再読込・コンテキスト再ロード時は **10.5 GB/s**（Native NTFS 同等）で `mmap` ページインが可能。
+  - コピー不要（SSD 容量節約）のまま、初回ロード **1.51 GB/s**、モデル再読込・コンテキスト再ロード時は **10.7 GB/s**（Native NTFS 同等以上）で `mmap` ページインが可能。
   - Windows 側のツール（例：ComfyUI やインデックス作成ツール）がモデルと同じフォルダへ設定・ログ・サムネイルを書き込もうとしても、**`--overlay` モード**を使えば Linux 側の ext4 パーティションには一切触れず Windows NTFS 側だけに差分を逃がせます。
 - **推奨コマンド例**:
   ```powershell
@@ -202,7 +202,7 @@ Linux デュアルブート環境や組込みイメージを Windows から扱�
 ---
 
 ### 3.6 停止済み WSL2 (`ext4.vhdx`) や Linux バックアップイメージのネイティブ高速検索・参照
-- **課題**: WSL2 の仮想ディスク内のソースツリーや成果物を Windows 側の IDE（VS Code / Visual Studio / ripgrep / Everything）から検索すると、`\\wsl.localhost`（9P 経由）のランダム 4 KB 速度が **`17.9 MB/s`** に落ち込むため極端に重くなります。
-- **ZeroExt4 が効く理由**: Hyper-V（`Mount-VHD -ReadOnly` 等）＋ `ZeroExt4` で物理ドライブとして Read-Only マウントすれば、Windows ネイティブの I/O と NT キャッシュ（Warm 4KB **`990.5 MB/s`** = **`9P` の 55.3 倍**）で高速に検索・閲覧できます。
+- **課題**: WSL2 の仮想ディスク内のソースツリーや成果物を Windows 側の IDE（VS Code / Visual Studio / ripgrep / Everything）から検索すると、`\\wsl.localhost`（9P 経由）のランダム 4 KB 速度が **`18.1 MB/s`** に落ち込むため極端に重くなります。
+- **ZeroExt4 が効く理由**: Hyper-V（`Mount-VHD -ReadOnly` 等）＋ `ZeroExt4` で物理ドライブとして Read-Only マウントすれば、Windows ネイティブの I/O と NT キャッシュ（Warm 4KB **`1,026.7 MB/s`** = **`9P` の 56.7 倍**）で高速に検索・閲覧できます。
 - **【厳守】運用上の注意**:
   - **稼働中の WSL2 や仮想マシンがマウントして書き込み中の `.vhdx` / パーティションを同時にマウントしないでください。** 必ず対象 VM / WSL2 を完全停止（`wsl --shutdown`）し、`Mount-VHD -ReadOnly`（またはイメージファイルとしてコピー）したうえで Read-Only マウントしてください。

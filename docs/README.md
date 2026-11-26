@@ -9,7 +9,7 @@
 | [技術概要・他手法比較・ユースケース](overview.md) | 開発背景、2-Tier I/O バイパス、他手法比較（NTFS / WSL2 9P 等）、実践ユースケース |
 | [要件定義書](requirements.md) | 対応スコープ、ライセンス境界、機能要件 (`REQ-F-001`..`011`)・非機能要件 (`REQ-NF-001`..`004`) |
 | [アーキテクチャ設計書](architecture.md) | システム構成図・I/O シーケンス・`e2fsprogs` 追従方針・ADR 索引 |
-| [テスト・検証ガイド](testing.md) | CTest（6 スイート 32 関数）・GUI 自動テスト（11 件）・ASan / CRT リーク / `/analyze` |
+| [テスト・検証ガイド](testing.md) | CTest（6 スイート 33 関数）・GUI 自動テスト（11 件）・ASan / CRT リーク / `/analyze` |
 | [ロードマップ](roadmap.md) | 完了済みマイルストーン（`v0.1.0`〜`v0.9.0`）、安全境界、Phase 1〜4 計画 |
 
 ## サブディレクトリ

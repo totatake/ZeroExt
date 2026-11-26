@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **32 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **33 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -66,6 +66,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_multi_group_backup_superblock_flush` | 複数ブロックグループ（140MB 規模）環境でのバックアップスーパーブロック／BGD フラッシュ安全検証 |
 | `test_concurrent_rw_and_dentry_invalidation_stress` | 並列 RW アクセスと Dentry 世代無効化・`fs_lock` が混在する高負荷ストレステスト（ASan 対象） |
 | `test_case_sensitive_coexistence` | `case_insensitive = 0` 時における `/Foo.txt` / `/foo.txt`・`/Sub` / `/sub` 共存・リネーム・削除・RO 再マウント永続性検証 |
+| `test_rw_batched_extent_write_and_read_coherence` | `--rw` バッチ連続エクステント書込・並列読取・非アライメント/スパースホール/EOF追記整合性・`ENOSPC` 安全境界・RO 再マウント検証 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 

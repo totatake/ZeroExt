@@ -174,7 +174,7 @@ static int dentry_cache_lookup(struct ext4_dentry_cache *c, const char *norm_pat
     bidx = (int)(h & (DENTRY_SHARD_BUCKETS - 1));
 
     AcquireSRWLockShared(&sh->lock);
-    cur_epoch = InterlockedCompareExchange64(&c->epoch, 0, 0);
+    cur_epoch = ReadAcquire64(&c->epoch);
     if (sh->epoch == cur_epoch) {
         for (int16_t idx = sh->buckets[bidx]; idx >= 0; idx = sh->slots[idx].next) {
             dentry_slot_t *s = &sh->slots[idx];
@@ -219,7 +219,7 @@ static void dentry_cache_put(struct ext4_dentry_cache *c, const char *store_path
     bidx = (int)(h & (DENTRY_SHARD_BUCKETS - 1));
 
     AcquireSRWLockExclusive(&sh->lock);
-    cur_epoch = InterlockedCompareExchange64(&c->epoch, 0, 0);
+    cur_epoch = ReadAcquire64(&c->epoch);
     if (sh->epoch != cur_epoch) {
         dentry_shard_reset_locked(sh, cur_epoch);
     }
@@ -578,6 +578,8 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
         free(ctx);
         return ext4_errcode_to_errno(retval);
     }
+
+    (void)ext2fs_create_inode_cache(ctx->fs, 64);
 
     retval = ext2fs_read_bitmaps(ctx->fs);
     if (retval) {

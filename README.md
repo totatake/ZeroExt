@@ -10,8 +10,8 @@ A high-performance **ext2 / ext3 / ext4** user-space filesystem driver, CLI tool
 
 | Approach | Mount Style | Warm Read (`1MB` / `4KB Rnd`) | Cold NVMe (`1MB`) | Modern ext4 | BSOD Risk | Non-Destructive Write |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt4` (Default RO / DIO)** | **Drive (`L:` etc.)** | **`10,543` / `991 MB/s`**<br><sub>(`1.00x–1.08x` vs Native NTFS)</sub> | **`1,564 MB/s`** | **Yes (`libext2fs`)** | **Zero** | **Yes (`--overlay`)** |
-| **WSL2 (`wsl --mount` + 9P)** | UNC (`\\wsl.localhost`) | `196` / `17.9 MB/s`<br><sub>(`1/54–1/72` of `ZeroExt4`)</sub> | `161 MB/s` | Yes | Low (VM req.) | No |
+| **`ZeroExt4` (Default RO / DIO)** | **Drive (`L:` etc.)** | **`10,664` / `1,027 MB/s`**<br><sub>(`1.04x–1.06x` vs Native NTFS)</sub> | **`1,506 MB/s`** | **Yes (`libext2fs`)** | **Zero** | **Yes (`--overlay`)** |
+| **WSL2 (`wsl --mount` + 9P)** | UNC (`\\wsl.localhost`) | `197` / `18.1 MB/s`<br><sub>(`1/54–1/70` of `ZeroExt4`)</sub> | `165 MB/s` | Yes | Low (VM req.) | No |
 | **Legacy Kernel FSD (`Ext2Fsd`, etc.)** | Drive | Fast | Fast | Partial / Legacy | **High** | No |
 | **Commercial Drivers / Viewers** | Drive / Viewer | Fast / Copy req. | Fast / Copy req. | Yes / Partial | Medium / Zero | No |
 
@@ -20,9 +20,9 @@ A high-performance **ext2 / ext3 / ext4** user-space filesystem driver, CLI tool
 ```mermaid
 flowchart LR
     App["Windows App / mmap (LM Studio / llama.cpp / etc.)"] --> Sys["winfsp-x64.sys (MS-Signed FSD)"]
-    Sys -->|"Warm / RO FileInfoTimeout=INFINITE"| Hot["NT Cache Manager (CcCopyRead)\nUser-space bypass: 10.5 GB/s / 254K IOPS"]
-    Sys -->|"Cold / Unbuffered"| Cold["Handle Extent Binary Search O(log N)\n+ FILE_FLAG_OVERLAPPED Parallel Direct Read: 1.56 GB/s"]
-    App -.->|"Compare: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM Boundary RPC Roundtrips\n196 MB/s (4KB Rnd 17.9 MB/s)"]
+    Sys -->|"Warm / RO FileInfoTimeout=INFINITE"| Hot["NT Cache Manager (CcCopyRead)\nUser-space bypass: 10.7 GB/s / 263K IOPS"]
+    Sys -->|"Cold / Unbuffered"| Cold["Handle Extent Binary Search O(log N)\n+ FILE_FLAG_OVERLAPPED Parallel Direct Read: 1.51 GB/s"]
+    App -.->|"Compare: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM Boundary RPC Roundtrips\n197 MB/s (4KB Rnd 18.1 MB/s)"]
 ```
 
 - For full comparison tables, sequence diagrams, and benchmark methodology, see **[Overview, Comparisons & Use Cases](docs/overview.md)** and **[Performance Evaluation Report](docs/reports/performance-evaluation.md)** (Japanese docs).
@@ -33,7 +33,7 @@ flowchart LR
 - **ML Datasets / Video & 3D Asset Sharing**: Traverse large directories smoothly via a 16-shard positive/negative dentry cache and `FspGetDirInfoByName`.
 - **External Linux NVMe / microSD Recovery**: Inspect JBD2 dirty journals and mount read-only to safely recover Raspberry Pi / Jetson / Steam Deck / Linux server drives.
 - **Non-Destructive Embedded / VM Image (`.img`) Testing**: Isolate modifications in an NTFS `--overlay` while keeping the base `.img` untouched (offline CLI/GUI browsing works without WinFsp).
-- **Fast Access to Stopped WSL2 (`ext4.vhdx`) Images**: Bypass `\\wsl.localhost` (`17.9 MB/s`) and read files 55x+ faster on random 4KB workloads from native Windows tools.
+- **Fast Access to Stopped WSL2 (`ext4.vhdx`) Images**: Bypass `\\wsl.localhost` (`18.1 MB/s`) and read files 56x+ faster on random 4KB workloads from native Windows tools.
 
 See [docs/overview.md](docs/overview.md#3-実践ユースケース) for command examples and operational caveats.
 

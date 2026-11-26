@@ -10,8 +10,8 @@ Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高�
 
 | 方式 | マウント形態 | Warm 読取 (`1MB` / `4KB Rnd`) | Cold 実 SSD (`1MB`) | 現代 ext4 対応 | BSOD リスク | 非破壊書込 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`ZeroExt4` (既定 RO / DIO)** | **◎ (`L:` 等)** | **`10,543` / `991 MB/s`**<br><sub>(`Native NTFS` 比 `1.00x〜1.08x`)</sub> | **`1,564 MB/s`** | **◎ (`libext2fs`)** | **ゼロ** | **◎ (`--overlay`)** |
-| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost`) | `196` / `17.9 MB/s`<br><sub>(`ZeroExt4` 比 `1/54〜1/72`)</sub> | `161 MB/s` | ◎ | 低（VM 要） | × |
+| **`ZeroExt4` (既定 RO / DIO)** | **◎ (`L:` 等)** | **`10,664` / `1,027 MB/s`**<br><sub>(`Native NTFS` 比 `1.04x〜1.06x`)</sub> | **`1,506 MB/s`** | **◎ (`libext2fs`)** | **ゼロ** | **◎ (`--overlay`)** |
+| **WSL2 (`wsl --mount` + 9P)** | △ (`\\wsl.localhost`) | `197` / `18.1 MB/s`<br><sub>(`ZeroExt4` 比 `1/54〜1/70`)</sub> | `165 MB/s` | ◎ | 低（VM 要） | × |
 | **旧来のカーネル FSD (`Ext2Fsd` 等)** | ◎ | 高速 | 高速 | △〜× | **高** | × |
 | **商用ドライバ / 読取ビューア** | ◎ / × | 高速 / 複製要 | 高速 / 複製要 | ◎ / ○ | 中 / ゼロ | × |
 
@@ -20,9 +20,9 @@ Windows 11 / 10 向けの **`libext2fs` (`e2fsprogs`) + `WinFsp`** ベース高�
 ```mermaid
 flowchart LR
     App["Windows アプリ / mmap (LM Studio / llama.cpp 等)"] --> Sys["winfsp-x64.sys (MS 署名済 FSD)"]
-    Sys -->|"2回目以降 / RO FileInfoTimeout=INFINITE"| Hot["NT Cache Manager (CcCopyRead)\nユーザー空間バイパス: 10.5 GB/s / 254K IOPS"]
-    Sys -->|"初回 / Unbuffered"| Cold["Handle Extent 二分探索 O(log N)\n+ FILE_FLAG_OVERLAPPED 並列直読: 1.56 GB/s"]
-    App -.->|"比較: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM 境界 RPC 往復\n196 MB/s (4KB Rnd 17.9 MB/s)"]
+    Sys -->|"2回目以降 / RO FileInfoTimeout=INFINITE"| Hot["NT Cache Manager (CcCopyRead)\nユーザー空間バイパス: 10.7 GB/s / 263K IOPS"]
+    Sys -->|"初回 / Unbuffered"| Cold["Handle Extent 二分探索 O(log N)\n+ FILE_FLAG_OVERLAPPED 並列直読: 1.51 GB/s"]
+    App -.->|"比較: WSL2 \\wsl.localhost"| Slow["9P / HVSocket VM 境界 RPC 往復\n197 MB/s (4KB Rnd 18.1 MB/s)"]
 ```
 
 - 他手法との詳細比較・シーケンス図・ベンチマーク条件は **[技術概要・他手法比較・ユースケース](docs/overview.md)** および **[性能評価レポート](docs/reports/performance-evaluation.md)** を参照してください。
@@ -33,7 +33,7 @@ flowchart LR
 - **ML データセット / 動画・3D アセット共有**: 大量ファイルを含むフォルダも 16 シャード正/負 Dentry キャッシュと `FspGetDirInfoByName` により軽快に走査・共有。
 - **Linux 外付け NVMe / microSD 保守・救出**: Raspberry Pi / Jetson / Steam Deck / Linux サーバーのディスクを接続し、Dirty Journal 検査＋Read-Only マウントで安全に救出。
 - **組込み・VM イメージ (`.img`) の非破壊検証**: `--overlay` で差分だけ NTFS 上に保持しつつ動作確認（WinFsp なし環境では GUI / CLI のオフライン閲覧も利用可）。
-- **停止済み WSL2 (`ext4.vhdx`) の高速検索**: `\\wsl.localhost`（`17.9 MB/s`）を回避し、ネイティブツールから最大 55 倍以上のランダム 4KB 応答で参照可能。
+- **停止済み WSL2 (`ext4.vhdx`) の高速検索**: `\\wsl.localhost`（`18.1 MB/s`）を回避し、ネイティブツールから最大 56 倍以上のランダム 4KB 応答で参照可能。
 
 具体的なコマンド例や注意点は [docs/overview.md](docs/overview.md#3-実践ユースケース) を参照してください。
 

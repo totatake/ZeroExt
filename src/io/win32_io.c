@@ -621,6 +621,7 @@ static errcode_t win32_aligned_write(win32_private_t *priv, uint64_t logical_off
     uint64_t phys_off;
     uint32_t sec = priv->sector_size;
     DWORD err;
+    int off_len_aligned;
 
     if (priv->read_only) {
         return EXT2_ET_RO_FILSYS;
@@ -629,9 +630,24 @@ static errcode_t win32_aligned_write(win32_private_t *priv, uint64_t logical_off
     if (logical_off > priv->partition_size || len > priv->partition_size - logical_off) {
         return EXT2_ET_LLSEEK_FAILED;
     }
-    phys_off = priv->partition_offset + logical_off;
 
-    if ((phys_off % sec) == 0 && (len % sec) == 0 && (((uintptr_t)src) % sec) == 0) {
+    /* Chunk writes > 64 MiB so DWORD length and aligned bounce buffers remain bounded */
+    if (len > (64U * 1024U * 1024U)) {
+        size_t done = 0;
+        while (done < len) {
+            size_t chunk = len - done;
+            if (chunk > (64U * 1024U * 1024U)) chunk = (64U * 1024U * 1024U);
+            errcode_t rc = win32_aligned_write(priv, logical_off + done, (const uint8_t *)src + done, chunk);
+            if (rc != 0) return rc;
+            done += chunk;
+        }
+        return 0;
+    }
+
+    phys_off = priv->partition_offset + logical_off;
+    off_len_aligned = ((phys_off % sec) == 0 && (len % sec) == 0);
+
+    if (off_len_aligned && (!priv->is_physical_device || (((uintptr_t)src) % sec) == 0)) {
         err = raw_pwrite_exact(priv->handle, phys_off, src, (DWORD)len);
         if (err != ERROR_SUCCESS) {
             return EXT2_ET_SHORT_WRITE;
@@ -648,11 +664,11 @@ static errcode_t win32_aligned_write(win32_private_t *priv, uint64_t logical_off
         uint8_t *tmp = (uint8_t *)_aligned_malloc(aligned_len, sec);
         DWORD got = 0;
         if (!tmp) return EXT2_ET_NO_MEMORY;
-        memset(tmp, 0, aligned_len);
 
-        if ((phys_off % sec) != 0 || (len % sec) != 0) {
+        if (!off_len_aligned) {
             uint64_t _zt_rmw = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
             LONG64 rmw_cnt;
+            memset(tmp, 0, aligned_len);
             err = raw_pread_exact(priv->handle, aligned_start, tmp, (DWORD)aligned_len, &got);
             if (_zt_rmw) {
                 ztrace_record_complete("io", "win32_rmw_read", _zt_rmw, ztrace_now_qpc() - _zt_rmw,
@@ -955,18 +971,23 @@ static errcode_t win32_get_stats(io_channel channel, io_stats *stats) {
 static errcode_t win32_zeroout(io_channel channel, unsigned long long block, unsigned long long count) {
     win32_private_t *priv;
     uint8_t *zeros;
-    unsigned long long i;
+    size_t batch_blks;
+    unsigned long long done = 0;
     errcode_t retval = 0;
 
     if (!channel || channel->magic != EXT2_ET_MAGIC_IO_CHANNEL) return EXT2_ET_MAGIC_IO_CHANNEL;
     priv = (win32_private_t *)channel->private_data;
     if (priv->read_only) return EXT2_ET_RO_FILSYS;
+    if (count == 0) return 0;
 
-    zeros = (uint8_t *)calloc(1, (size_t)channel->block_size);
+    batch_blks = (count > 256ULL) ? 256U : (size_t)count;
+    zeros = (uint8_t *)calloc(batch_blks, (size_t)channel->block_size);
     if (!zeros) return EXT2_ET_NO_MEMORY;
-    for (i = 0; i < count; i++) {
-        retval = win32_write_blk64(channel, block + i, 1, zeros);
+    while (done < count) {
+        size_t chunk = (count - done > batch_blks) ? batch_blks : (size_t)(count - done);
+        retval = win32_write_blk64(channel, block + done, (int)chunk, zeros);
         if (retval) break;
+        done += chunk;
     }
     free(zeros);
     return retval;

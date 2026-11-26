@@ -17,7 +17,7 @@
 | `v0.7.0` | 2026-11-22 | OSS リポジトリ構造標準化（`CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `AGENTS.md`）、`docs/` の kebab-case 再編、`ADR-0001`〜`ADR-0013` 抽出、CI / Release ワークフロー分離 |
 | `v0.8.0` | 2026-11-23 | `--case-sensitive` モード実装（NTFS Upperdir `FileCaseSensitiveInfo`・`:cs` マーカーガード・事前検証／エラー翻訳・`_cs` 推奨パス）、`L:` 優先統一、Dark モード `ComboBox` 修正・GUI ヘッダー見切れ解消 |
 | `v0.8.1` | 2026-11-25 | ドキュメント体系整理（H1 タイトル・章番号・リンク名統一、`docs/guides/development.md`・`guides/README.md` 分離、要件 ID の `REQ-F-*`/`REQ-NF-*` 移行、`README`/`overview.md` 実測値同期・重複整理） |
-| `v0.9.0` | 2026-11-26 | プロジェクト名・バイナリ・CMake ターゲット／オプション・WPF GUI・設定パスを `ZeroExt4` へ全面リネーム（破壊的変更）、[Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) レポート追加 |
+| `v0.9.0` | 2026-11-26 | プロジェクト名・バイナリ・CMake ターゲット／オプション・WPF GUI・設定パスを `ZeroExt4` へ全面リネーム（破壊的変更）、[Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) 追加、`--rw`/標準経路のバッチ連続エクステント書込・並列読込最適化とベンチマーク再評価 |
 
 ---
 

@@ -2,7 +2,7 @@
 
 本書は、Read-Only / `--overlay` モードで動作するダイレクト・エクステント I/O 経路（ロックレス extent ベース並列 `pread`、現在は既定で有効・`--no-direct-io` で標準経路へ切替可）の有無による読み取り性能の違いに加え、**同一物理 NVMe SSD 上での Windows Native (NTFS)・`ZeroExt4` (`zeroext4.exe`)・`wsl --mount --vhd` 横並び比較** の実測結果をまとめたものである。
 
-- 対象プロジェクト: **`ZeroExt4`**（コマンド名: `zeroext4.exe`、ベンチマークバイナリ: `zeroext4_bench.exe`、評価リビジョン: `78cd744` / Step 1〜4 最適化・`e2fsprogs 1.47.4` 反映後）
+- 対象プロジェクト: **`ZeroExt4`**（コマンド名: `zeroext4.exe`、ベンチマークバイナリ: `zeroext4_bench.exe`、評価バージョン: `v0.9.0` / Step 1〜4 最適化・`e2fsprogs 1.47.4`・RW/標準経路バッチ連続エクステント I/O 最適化反映後）
 - ベンチマーク実装: [tests/bench_direct_io.c](../../tests/bench_direct_io.c)（ビルド成果物: `build/zeroext4_bench.exe`）
 - 同一 SSD 比較スクリプト: [scripts/bench_compare_ssd.ps1](../../scripts/bench_compare_ssd.ps1)（管理者権限 PowerShell 実行）
 - 最適化の経緯と詳細トレース解析: [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md)
@@ -42,7 +42,7 @@
 
 ---
 
-## 2. 測定結果（Step 1〜4 最適化・`e2fsprogs 1.47.4` 反映後・`2026-11-21` 再評価）
+## 2. 測定結果（`v0.9.0`・RW/標準経路バッチ連続エクステント最適化反映後・`2026-11-27` 再評価）
 
 ### 2.1 WinFsp ライブマウント経由（`.img` 上の `model.gguf`）
 
@@ -50,10 +50,10 @@
 
 | ワークロード | `--no-direct-io` (標準経路) | 既定 Direct I/O ON | 速度比 (DIO / Std) |
 | :--- | ---: | ---: | ---: |
-| `UNBUF SEQ (1024KB)` | `0.379 s` / `675.8 MB/s` (`676 IOPS`) | `0.092 s` / **`2776.4 MB/s`** (`2776 IOPS`) | **4.11x** |
-| `UNBUF SEQ (64KB)` | `0.406 s` / `630.9 MB/s` (`10094 IOPS`) | `0.146 s` / **`1751.9 MB/s`** (`28030 IOPS`) | **2.78x** |
-| `UNBUF RND (4KB)` (64 MB / 16K ops) | `0.447 s` / `143.1 MB/s` (`36640 IOPS`) | `0.448 s` / `142.9 MB/s` (`36576 IOPS`) | **1.00x** |
-| `CACHED SEQ (1024KB)` (Cold) | `0.413 s` / `619.4 MB/s` (`619 IOPS`) | `0.082 s` / **`3132.1 MB/s`** (`3132 IOPS`) | **5.06x** |
+| `UNBUF SEQ (1024KB)` | `0.093 s` / `2739.8 MB/s` (`2740 IOPS`) | `0.093 s` / **`2758.6 MB/s`** (`2759 IOPS`) | **1.01x** |
+| `UNBUF SEQ (64KB)` | `0.146 s` / `1752.9 MB/s` (`28046 IOPS`) | `0.140 s` / **`1832.6 MB/s`** (`29321 IOPS`) | **1.05x** |
+| `UNBUF RND (4KB)` (64 MB / 16K ops) | `0.438 s` / `146.1 MB/s` (`37408 IOPS`) | `0.394 s` / **`162.4 MB/s`** (`41562 IOPS`) | **1.11x** |
+| `CACHED SEQ (1024KB)` (Cold) | `0.081 s` / `3156.4 MB/s` (`3156 IOPS`) | `0.080 s` / **`3202.1 MB/s`** (`3202 IOPS`) | **1.01x** |
 
 #### 参考（64 MB ファイル条件での実マウント比較・Step 1〜4 時点 `f173d76`）
 
@@ -64,25 +64,39 @@
 | `UNBUF RND (4KB)` | `150.7 MB/s` | **`154.4 MB/s`** | **1.02x** |
 | `CACHED SEQ (1024KB)` (Cold) | `1189.1 MB/s` | **`2474.3 MB/s`** | **2.08x** |
 
-256 MB 条件（最新計測）でも一貫して大ブロック・シーケンシャル読み取りにおいて約 2.78x〜5.06x（最大 `3,132.1 MB/s`）の高速化が確認された。
+`v0.9.0` の標準経路バッチ連続エクステント読込により、WinFsp ライブマウント経由の `--no-direct-io` も前回 (`78cd744`) 比で `UNBUF SEQ 1024KB` が `675.8` → **`2,739.8 MB/s`（4.05x）**、`CACHED SEQ 1024KB` が `619.4` → **`3,156.4 MB/s`（5.10x）** へ大幅向上した。既定の Direct I/O ON もハンドル参照の `ReadPointerAcquire` 化等により `UNBUF RND (4KB)` が `142.9` → **`162.4 MB/s`（+13.6%）**・`CACHED SEQ (1024KB)` が **`3,202.1 MB/s`** と全項目で最速を維持している。
 
 ---
 
 ### 2.2 VFS 単体層（インプロセス測定、`zeroext4_bench.exe`、`enable_direct_io=0` vs `1`）
 
-対象 extent 構成: `/model.gguf` `runs=1`, `/frag.bin` `runs=65`
+対象 extent 構成: `/model.gguf` `runs=1`, `/frag.bin` `runs=64`
 
 | ワークロード | `enable_direct_io=0` (標準経路) | `enable_direct_io=1` (既定 DIO) | 速度比 (DIO / Std) |
 | :--- | ---: | ---: | ---: |
-| `1T Seq  64KB /model.gguf (512MB)` | `0.600 s` / `853.7 MB/s` (`13659 IOPS`, `73.21 us/op`) | `0.099 s` / **`5164.1 MB/s`** (`82625 IOPS`, `12.10 us/op`) | **6.05x** |
-| `1T Seq   1MB /model.gguf (1024MB)` | `1.204 s` / `850.5 MB/s` (`851 IOPS`, `1175.77 us/op`) | `0.148 s` / **`6908.9 MB/s`** (`6909 IOPS`, `144.74 us/op`) | **8.12x** |
-| `1T Seq   4KB /model.gguf (128MB)` | `0.156 s` / `820.1 MB/s` (`209944 IOPS`, `4.76 us/op`) | `0.123 s` / **`1037.5 MB/s`** (`265612 IOPS`, `3.76 us/op`) | **1.27x** |
-| `1T Rnd   4KB /model.gguf (32K ops)` | `0.199 s` / `643.8 MB/s` (`164820 IOPS`, `6.07 us/op`) | `0.167 s` / **`767.0 MB/s`** (`196347 IOPS`, `5.09 us/op`) | **1.19x** |
-| `8T Seq  64KB /model.gguf (2048MB)` | `2.442 s` / `838.7 MB/s` (`13419 IOPS`, `74.52 us/op`) | `0.068 s` / **`30302.9 MB/s`** (`484846 IOPS`, `2.06 us/op`) | **36.13x** |
-| `8T Rnd   4KB /model.gguf (131K ops)` | `1.103 s` / `464.2 MB/s` (`118828 IOPS`, `8.42 us/op`) | `0.400 s` / **`1280.4 MB/s`** (`327778 IOPS`, `3.05 us/op`) | **2.76x** |
-| `8T Rnd   4KB /frag.bin   (131K ops)` | `1.358 s` / `376.9 MB/s` (`96497 IOPS`, `10.36 us/op`) | `0.409 s` / **`1251.9 MB/s`** (`320487 IOPS`, `3.12 us/op`) | **3.32x** |
+| `1T Seq  64KB /model.gguf (512MB)` | `0.096 s` / `5340.1 MB/s` (`85441 IOPS`, `11.70 us/op`) | `0.095 s` / **`5409.6 MB/s`** (`86553 IOPS`, `11.55 us/op`) | **1.01x** |
+| `1T Seq   1MB /model.gguf (1024MB)` | `0.134 s` / `7623.6 MB/s` (`7624 IOPS`, `131.17 us/op`) | `0.133 s` / **`7698.6 MB/s`** (`7699 IOPS`, `129.89 us/op`) | **1.01x** |
+| `1T Seq   4KB /model.gguf (128MB)` | `0.143 s` / `893.6 MB/s` (`228759 IOPS`, `4.37 us/op`) | `0.118 s` / **`1084.4 MB/s`** (`277607 IOPS`, `3.60 us/op`) | **1.21x** |
+| `1T Rnd   4KB /model.gguf (32K ops)` | `0.184 s` / `695.1 MB/s` (`177942 IOPS`, `5.62 us/op`) | `0.162 s` / **`789.4 MB/s`** (`202096 IOPS`, `4.95 us/op`) | **1.14x** |
+| `8T Seq  64KB /model.gguf (2048MB)` | `0.088 s` / `23314.0 MB/s` (`373024 IOPS`, `2.68 us/op`) | `0.063 s` / **`32458.9 MB/s`** (`519342 IOPS`, `1.93 us/op`) | **1.39x** |
+| `8T Rnd   4KB /model.gguf (131K ops)` | `0.366 s` / **`1400.7 MB/s`** (`358589 IOPS`, `2.79 us/op`) | `0.426 s` / `1201.9 MB/s` (`307683 IOPS`, `3.25 us/op`) | **0.86x** |
+| `8T Rnd   4KB /frag.bin   (131K ops)` | `0.599 s` / `854.0 MB/s` (`218637 IOPS`, `4.57 us/op`) | `0.418 s` / **`1223.7 MB/s`** (`313262 IOPS`, `3.19 us/op`) | **1.43x** |
 
-<sub>※ `e2fsprogs 1.47.4` 対応において `fs->icache` 等の非スレッドセーフな共有状態を保護するため `ctx->fs` 呼び出しに `fs_lock` を導入した結果、標準経路 (`enable_direct_io=0`) の 8 スレッド並列読み取りは直列化され、8T 4KB ランダムを含め全項目でロックレスな Direct I/O ON が 2.76x〜36.13x 高速となった。</sub>
+<sub>※ `v0.9.0` で標準経路 (`enable_direct_io=0` / `--rw`) に `fs_lock` 外での並列 `io_channel_read_blk64` 一括読込を導入した結果、前回 (`78cd744`) 比で標準経路が `1T Seq 1MB` **8.96x** (`850.5` → `7,623.6 MB/s`)、`8T Seq 64KB` **27.80x** (`838.7` → `23,314.0 MB/s`)、`8T Rnd 4KB` **2.27x〜3.02x** へ大幅に向上した。依然として `8T Seq 64KB` (`32.5 GB/s`) や断片化ファイル (`1,223.7 MB/s`) ではロックレスな Direct I/O ON が優位である。</sub>
+
+#### `--rw` モード書込・読込単体計測（`zeroext4_bench.exe --rw-bench`）
+
+256 MB テスト用 ext4 イメージ上で、`--rw`（Direct I/O 無効・バッチ連続エクステント書込／並列標準読込）の性能を計測した結果は以下の通り。
+
+| ワークロード | 所要時間 | スループット | IOPS | 平均レイテンシ |
+| :--- | ---: | ---: | ---: | ---: |
+| `RW 1T Write Seq  1MB (64MB)`（新規割当） | `0.015 s` | **`4184.5 MB/s`** | `4185 IOPS` | `238.97 us/op` |
+| `RW 1T Write Seq 64KB (64MB)`（新規割当） | `0.031 s` | **`2067.4 MB/s`** | `33079 IOPS` | `30.23 us/op` |
+| `RW 1T Overwrite 64KB (64MB)`（上書更新） | `0.021 s` | **`2992.0 MB/s`** | `47872 IOPS` | `20.89 us/op` |
+| `RW 1T Write Seq  4KB (16MB)`（EOF 追記） | `0.052 s` | **`309.0 MB/s`** | `79099 IOPS` | `12.64 us/op` |
+| `RW 1T Read  Seq  1MB (256MB)` | `0.030 s` | **`8425.2 MB/s`** | `8425 IOPS` | `118.69 us/op` |
+| `RW 8T Read  Seq 64KB (1024MB)` | `0.034 s` | **`30186.9 MB/s`** | `482990 IOPS` | `2.07 us/op` |
+| `RW 8T Read  Rnd  4KB (65K ops)` | `0.128 s` | **`1998.7 MB/s`** | `511673 IOPS` | `1.95 us/op` |
 
 ---
 
@@ -94,7 +108,7 @@
 
 | 項目 | 実環境・設定値 |
 | :--- | :--- |
-| 計測日時 | `2026-11-21 17:45:29 +09:00` |
+| 計測日時 | `2026-11-27 00:00:31 +09:00` |
 | CPU / RAM | `AMD Ryzen 5 5600G with Radeon Graphics` / `63.8 GB` |
 | OS / WSL2 | `Windows 10 Pro 26H2 (Build 26300)` / `WSL 2.3.26.0` (`Ubuntu`, `Kernel 5.15.167.4-microsoft-standard-WSL2`) |
 | 対象 SSD | `Disk 3 [INTEL SSDPEKNU512GZ]` (`Bus=NVMe`, `Media=SSD`, `476.9 GB`, `C:`) |
@@ -107,12 +121,12 @@
 
 | Workload | Native NTFS | `ZeroExt4 Std` (`--no-direct-io`) | `ZeroExt4 DIO` (既定) | WSL2 9P | WSL2 Kernel (Ref) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| `Cold/Unbuf Seq 1024KB` | `2,058.5` | `75.2` | **`1,563.7`** | `160.7` | `1,317.6` |
-| `Cold/Unbuf Seq 64KB` | `1,074.3` | `75.0` | **`671.6`** | `107.8` | `448.3` |
-| `Cold/Unbuf Rnd 4KB` | `55.4` | `34.5` | **`37.3`** | `9.5` | `20.1` |
-| `Warm/Cached Seq 1024KB` | `10,552.5` | **`10,346.1`** | **`10,542.5`** | `196.0` | `10,409.7` |
-| `Warm/Cached Seq 64KB` | `4,971.2` | **`6,987.7`** | **`8,697.8`** | `120.0` | `14,375.3` |
-| `Warm/Cached Rnd 4KB` | `916.3` | **`999.0`** | **`990.5`** | `17.9` | `3,189.4` |
+| `Cold/Unbuf Seq 1024KB` | `1,930.3` | **`1,433.5`** | **`1,506.2`** | `165.4` | `1,498.1` |
+| `Cold/Unbuf Seq 64KB` | `1,094.1` | **`602.5`** | **`667.5`** | `108.7` | `458.2` |
+| `Cold/Unbuf Rnd 4KB` | `56.9` | `35.4` | **`36.8`** | `9.1` | `21.1` |
+| `Warm/Cached Seq 1024KB` | `10,265.3` | **`9,938.8`** | **`10,664.4`** | `197.0` | `9,751.8` |
+| `Warm/Cached Seq 64KB` | `8,161.6` | **`8,385.5`** | **`8,676.8`** | `124.1` | `13,403.4` |
+| `Warm/Cached Rnd 4KB` | `969.6` | **`1,014.7`** | **`1,026.7`** | `18.1` | `3,154.6` |
 
 #### 詳細実測値（所要時間 / スループット / IOPS）
 
@@ -120,40 +134,40 @@
 <summary>5 バックエンド全 30 項目の詳細計測ログ（クリックで展開）</summary>
 
 1. **Windows Native (NTFS)**:
-   - `UNBUF SEQ (1024KB)`: `0.249 s` / `2058.5 MB/s` (`2059 IOPS`)
-   - `UNBUF SEQ (64KB)`: `0.477 s` / `1074.3 MB/s` (`17189 IOPS`)
-   - `UNBUF RND (4KB)`: `1.155 s` / `55.4 MB/s` (`14183 IOPS`)
-   - `CACHED-WARM SEQ (1024KB)`: `0.049 s` / `10552.5 MB/s` (`10552 IOPS`)
-   - `CACHED-WARM SEQ (64KB)`: `0.103 s` / `4971.2 MB/s` (`79539 IOPS`)
-   - `CACHED-WARM RND (4KB)`: `0.070 s` / `916.3 MB/s` (`234584 IOPS`)
+   - `UNBUF SEQ (1024KB)`: `0.265 s` / `1930.3 MB/s` (`1930 IOPS`)
+   - `UNBUF SEQ (64KB)`: `0.468 s` / `1094.1 MB/s` (`17505 IOPS`)
+   - `UNBUF RND (4KB)`: `1.126 s` / `56.9 MB/s` (`14557 IOPS`)
+   - `CACHED-WARM SEQ (1024KB)`: `0.050 s` / `10265.3 MB/s` (`10265 IOPS`)
+   - `CACHED-WARM SEQ (64KB)`: `0.063 s` / `8161.6 MB/s` (`130585 IOPS`)
+   - `CACHED-WARM RND (4KB)`: `0.066 s` / `969.6 MB/s` (`248212 IOPS`)
 2. **`ZeroExt4` (`--no-direct-io` 標準経路, `\\.\PhysicalDrive4` → `W:`)**:
-   - `UNBUF SEQ (1024KB)`: `6.808 s` / `75.2 MB/s` (`75 IOPS`)
-   - `UNBUF SEQ (64KB)`: `6.828 s` / `75.0 MB/s` (`1200 IOPS`)
-   - `UNBUF RND (4KB)`: `1.854 s` / `34.5 MB/s` (`8836 IOPS`)
-   - `CACHED-WARM SEQ (1024KB)`: `0.049 s` / `10346.1 MB/s` (`10346 IOPS`)
-   - `CACHED-WARM SEQ (64KB)`: `0.073 s` / `6987.7 MB/s` (`111803 IOPS`)
-   - `CACHED-WARM RND (4KB)`: `0.064 s` / `999.0 MB/s` (`255744 IOPS`)
+   - `UNBUF SEQ (1024KB)`: `0.357 s` / `1433.5 MB/s` (`1433 IOPS`)
+   - `UNBUF SEQ (64KB)`: `0.850 s` / `602.5 MB/s` (`9639 IOPS`)
+   - `UNBUF RND (4KB)`: `1.810 s` / `35.4 MB/s` (`9050 IOPS`)
+   - `CACHED-WARM SEQ (1024KB)`: `0.052 s` / `9938.8 MB/s` (`9939 IOPS`)
+   - `CACHED-WARM SEQ (64KB)`: `0.061 s` / `8385.5 MB/s` (`134168 IOPS`)
+   - `CACHED-WARM RND (4KB)`: `0.063 s` / `1014.7 MB/s` (`259753 IOPS`)
 3. **`ZeroExt4` (Direct I/O ON 既定経路, `\\.\PhysicalDrive4` → `W:`)**:
-   - `UNBUF SEQ (1024KB)`: `0.327 s` / `1563.7 MB/s` (`1564 IOPS`)
-   - `UNBUF SEQ (64KB)`: `0.762 s` / `671.6 MB/s` (`10746 IOPS`)
-   - `UNBUF RND (4KB)`: `1.716 s` / `37.3 MB/s` (`9549 IOPS`)
-   - `CACHED-WARM SEQ (1024KB)`: `0.049 s` / `10542.5 MB/s` (`10542 IOPS`)
-   - `CACHED-WARM SEQ (64KB)`: `0.059 s` / `8697.8 MB/s` (`139165 IOPS`)
-   - `CACHED-WARM RND (4KB)`: `0.065 s` / `990.5 MB/s` (`253557 IOPS`)
+   - `UNBUF SEQ (1024KB)`: `0.340 s` / `1506.2 MB/s` (`1506 IOPS`)
+   - `UNBUF SEQ (64KB)`: `0.767 s` / `667.5 MB/s` (`10680 IOPS`)
+   - `UNBUF RND (4KB)`: `1.739 s` / `36.8 MB/s` (`9421 IOPS`)
+   - `CACHED-WARM SEQ (1024KB)`: `0.048 s` / `10664.4 MB/s` (`10664 IOPS`)
+   - `CACHED-WARM SEQ (64KB)`: `0.059 s` / `8676.8 MB/s` (`138829 IOPS`)
+   - `CACHED-WARM RND (4KB)`: `0.062 s` / `1026.7 MB/s` (`262828 IOPS`)
 4. **`WSL2 9P` (Windows アプリ → `\\wsl.localhost\Ubuntu\mnt\wsl\ext4bench\model.gguf`)**:
-   - `UNBUF SEQ (1024KB)`: `3.187 s` / `160.7 MB/s` (`161 IOPS`)
-   - `UNBUF SEQ (64KB)`: `4.752 s` / `107.8 MB/s` (`1724 IOPS`)
-   - `UNBUF RND (4KB)`: `6.764 s` / `9.5 MB/s` (`2422 IOPS`)
-   - `CACHED-WARM SEQ (1024KB)`: `2.612 s` / `196.0 MB/s` (`196 IOPS`)
-   - `CACHED-WARM SEQ (64KB)`: `4.265 s` / `120.0 MB/s` (`1921 IOPS`)
-   - `CACHED-WARM RND (4KB)`: `3.572 s` / `17.9 MB/s` (`4587 IOPS`)
+   - `UNBUF SEQ (1024KB)`: `3.095 s` / `165.4 MB/s` (`165 IOPS`)
+   - `UNBUF SEQ (64KB)`: `4.709 s` / `108.7 MB/s` (`1740 IOPS`)
+   - `UNBUF RND (4KB)`: `7.036 s` / `9.1 MB/s` (`2329 IOPS`)
+   - `CACHED-WARM SEQ (1024KB)`: `2.599 s` / `197.0 MB/s` (`197 IOPS`)
+   - `CACHED-WARM SEQ (64KB)`: `4.127 s` / `124.1 MB/s` (`1985 IOPS`)
+   - `CACHED-WARM RND (4KB)`: `3.539 s` / `18.1 MB/s` (`4630 IOPS`)
 5. **`WSL2 Linux Kernel Direct` (参考値: `/mnt/wsl/ext4bench/model.gguf`)**:
-   - `UNBUF SEQ (1024KB)`: `0.389 s` / `1317.6 MB/s` (`1318 IOPS`)
-   - `UNBUF SEQ (64KB)`: `1.142 s` / `448.3 MB/s` (`7174 IOPS`)
-   - `UNBUF RND (4KB)`: `3.182 s` / `20.1 MB/s` (`5148 IOPS`)
-   - `CACHED-WARM SEQ (1024KB)`: `0.049 s` / `10409.7 MB/s` (`10410 IOPS`)
-   - `CACHED-WARM SEQ (64KB)`: `0.036 s` / `14375.3 MB/s` (`230004 IOPS`)
-   - `CACHED-WARM RND (4KB)`: `0.020 s` / `3189.4 MB/s` (`816489 IOPS`)
+   - `UNBUF SEQ (1024KB)`: `0.342 s` / `1498.1 MB/s` (`1498 IOPS`)
+   - `UNBUF SEQ (64KB)`: `1.117 s` / `458.2 MB/s` (`7331 IOPS`)
+   - `UNBUF RND (4KB)`: `3.031 s` / `21.1 MB/s` (`5406 IOPS`)
+   - `CACHED-WARM SEQ (1024KB)`: `0.053 s` / `9751.8 MB/s` (`9752 IOPS`)
+   - `CACHED-WARM SEQ (64KB)`: `0.038 s` / `13403.4 MB/s` (`214454 IOPS`)
+   - `CACHED-WARM RND (4KB)`: `0.020 s` / `3154.6 MB/s` (`807576 IOPS`)
 
 </details>
 
@@ -161,43 +175,43 @@
 
 ## 3. 考察と技術的分析
 
-### 3.1 大容量・シーケンシャル読込（64 KB〜1 MB）が大幅に高速化される理由
+### 3.1 大容量・シーケンシャル読込（64 KB〜1 MB）および `--rw` 経路の高速化要因
 
-- **VFS 単体で最大 36.13x（1T 1MB `6,908.9 MB/s` / 8T 64KB `30,302.9 MB/s`）、WinFsp 実マウントでも最大 5.06x（`UNBUF SEQ 1024KB` `2,776.4 MB/s`、Cached Cold `3,132.1 MB/s`）を達成。**
-- 標準経路（`--no-direct-io`）は、任意の読込サイズであっても内部で `ext2fs_file_open` / `ext2fs_file_llseek` / `ext2fs_file_read` を介して **4 KB ブロック単位の `cache_lock` 取得・LRU 探索・コピー**を繰り返し実行するため、1 MB 読込 1 回あたり約 256 回のブロック単位オーバーヘッド（`1,175.77 us/op`）が発生する。さらに upstream `e2fsprogs 1.47.4` への更新後は、非スレッドセーフな `fs->icache` 等を保護するため `ctx->fs` 呼び出しが `fs_lock` で直列化されるため、多スレッド時のスループットも単一スレッド相当（`8T Seq 64KB` で `838.7 MB/s`）に頭打ちとなる。
-- Direct I/O ON（既定）では、ファイルハンドルまたはシャード化 `extent_cache` に保持した `ext4_extent_map_t` に対する二分探索で論理オフセットからディスク実オフセットへ即座に解決し、`fs_lock` を一切取得せず `FILE_FLAG_OVERLAPPED` によるロックレス並列 `ReadFile`（`win32_io_pread_direct`）で最大 1 MB まとめて読み切るため、VFS レイテンシが `144.74 us/op`（8T 64KB は `2.06 us/op`）まで短縮される。
+- **Direct I/O ON（既定）**: ファイルハンドル（`ReadPointerAcquire` で無競合参照）またはシャード化 `extent_cache` に保持した `ext4_extent_map_t` に対する二分探索で論理オフセットからディスク実オフセットへ即座に解決し、`fs_lock` を一切取得せず `FILE_FLAG_OVERLAPPED` 並列 `ReadFile`（`win32_io_pread_direct`）で一括読み切りを行うため、VFS 8T Seq 64KB で **`32,458.9 MB/s` (`519,342 IOPS`, `1.93 us/op`)**・1T Seq 1MB で **`7,698.6 MB/s`** に達する。
+- **標準経路（`--no-direct-io` / `--rw`）の `v0.9.0` 最適化**:
+  - 以前は `ext2fs_file_read` / `ext2fs_file_write` が 4 KB ブロック単位で `ext2fs_bmap2` と `ReadFile`/`WriteFile`（さらに `fs_lock` 直列化）を反復していたため、実 SSD Cold 読込は `75.2 MB/s`、VFS 8T は `838.7 MB/s` にとどまっていた。
+  - `v0.9.0` では、読込側で `ctx->fs_lock` 下ではエクステント配置解決のみを行って即解放し `ctx->rwlock (Shared)` 保持のまま並列一括 `io_channel_read_blk64` を実行するよう刷新した結果、実 SSD Cold Seq 1024KB が `75.2` → **`1,433.5 MB/s`（19.06x）**、VFS 8T Seq 64KB が `838.7` → **`23,314.0 MB/s`（27.80x）** へ劇的に改善した。
+  - 書込側（`--rw`）でも `ext2fs_new_range` + `ext2fs_block_alloc_stats_range` による連続エクステントバッチ確保と一括 `io_channel_write_blk64`・整列ゼロコピー書込を導入し、Direct Extent I/O を解禁せず安全境界を保ったまま `RW 1T Write Seq 1MB` **`4,184.5 MB/s`**・`RW 1T Overwrite 64KB` **`2,992.0 MB/s`** を達成した。
 
 ### 3.2 小ブロック（4 KB）ランダム読込における挙動とトレードオフ
 
-1. **`FILE_FLAG_OVERLAPPED` とロックレス経路による多スレッド 4 KB 性能**:
-   - Step 1 の `FILE_FLAG_OVERLAPPED`（[win32_io.c](../../src/io/win32_io.c)）導入により `FileObject->Lock` によるカーネル直列化（Lock Convoy）を解消した結果、Direct I/O 側の `8T Rnd 4KB` は最適化前の `632.4` → **`1,280.4 MB/s` (`327,778 IOPS`)**（`/frag.bin`: `640.6` → **`1,251.9 MB/s`**）と約 2 倍に向上しており、`e2fsprogs 1.47.4` 適用後もロックレスのまま維持されている。
-   - 一方、標準経路（`enable_direct_io=0`）は `e2fsprogs 1.47.4` 以降の `fs_lock` 導入により `8T Rnd 4KB` が `464.2 MB/s`（`/frag.bin`: `376.9 MB/s`）となったため、現在では多スレッド 4 KB ランダム読込を含め**全ワークロードで既定の Direct I/O ON が 2.76x〜3.32x 優位**となる。
+1. **`FILE_FLAG_OVERLAPPED` と並列 I/O による多スレッド 4 KB 性能**:
+   - Direct I/O 側の `8T Rnd 4KB` は `/model.gguf` **`1,201.9 MB/s`**・断片化 `/frag.bin` **`1,223.7 MB/s` (`313,262 IOPS`)** を安定して維持している。
+   - 標準経路（`enable_direct_io=0`）も `v0.9.0` の `fs_lock` 外並列化＋32 シャード CLOCK キャッシュにより `/model.gguf` `464.2` → **`1,400.7 MB/s`（3.02x）**、`/frag.bin` `376.9` → **`854.0 MB/s`（2.27x）** へ向上した（断片化ファイルでは毎回エクステント木を参照する標準経路よりハンドルキャッシュを持つ Direct I/O が 1.43x 優位）。
 2. **WinFsp 実マウント時の 4 KB 非バッファランダム性能**:
-   - WinFsp 経由の `UNBUF RND (4KB)` はカーネル〜ユーザー空間ディスパッチ費用（約 `25〜28 us/op`）が支配的となるため、`--direct-io` ON/OFF の差は **1.00x**（`142.9` vs `143.1 MB/s`）にとどまる。ただし通常のキャッシュ有効（`CACHED-WARM`）利用では後述の NT Cache Manager により **`990.5 MB/s` (`253,557 IOPS`)** に達する。
+   - WinFsp 経由の `UNBUF RND (4KB)` はカーネル〜ユーザー空間ディスパッチ費用（約 `25〜28 us/op`）が支配的となるため、`--direct-io` ON/OFF の差は僅差（実 SSD `36.8` vs `35.4 MB/s`）にとどまる。ただし通常のキャッシュ有効（`CACHED-WARM`）利用では NT Cache Manager により **`1,026.7 MB/s` (`262,828 IOPS`)** に達する。
 
-### 3.3 同一 SSD 5 方式比較から得られた技術的知見・Step 1〜4 の効果
+### 3.3 同一 SSD 5 方式比較から得られた技術的知見・Step 1〜4 および `v0.9.0` の効果
 
-1. **実ブロックデバイス直読（Cold / Unbuffered）で `ZeroExt4`（Direct I/O 既定）は `WSL2 9P` 比最大 9.73x・`--no-direct-io` 比 20.8x を達成**:
-   - `Cold/Unbuf Seq 1024KB`: **`1,563.7 MB/s`**（`--no-direct-io` `75.2 MB/s` の **20.8x**、`WSL2 9P` `160.7 MB/s` の **9.73x**、`WSL2 Linux Kernel` `1,317.6 MB/s` の **1.19x**、`Native NTFS` `2,058.5 MB/s` の **76.0%**）。
-   - `Cold/Unbuf Seq 64KB`: **`671.6 MB/s`**（`--no-direct-io` `75.0 MB/s` の **8.95x**、`WSL2 9P` `107.8 MB/s` の **6.23x**、`WSL2 Linux Kernel` `448.3 MB/s` の **1.50x**）。
-   - `Cold/Unbuf Rnd 4KB`: **`37.3 MB/s` (`9,549 IOPS`)**（`WSL2 9P` `9.5 MB/s` の **3.93x**、`WSL2 Linux Kernel` `20.1 MB/s` の **1.86x**）。
-   - 実ディスク `\\.\PhysicalDriveN` はセクタ整合のため `FILE_FLAG_NO_BUFFERING` で開く必要があり、`--no-direct-io` 標準経路では 1 MB ごとに 256 回の 4 KB 読込が発生して `75.2 MB/s` が上限となるため、RO / `--overlay` での Direct I/O 既定有効化が実ディスク性能を支えている。
-2. **Warm / Cached で `ZeroExt4` が `Native NTFS` 同等以上・`WSL2 9P` 比 53x〜72x に到達（Step 2 の効果）**:
-   - Step 2（`8bd61df`）で Read-Only マウント時の `FileInfoTimeout` 既定値を `(UINT32)-1` (`INFINITE`) としたことで、Windows NT Cache Manager（`CcCopyRead`）が有効化され、以前の課題だった Warm 時の頭打ち（`1,490.5 MB/s` / `36.8 MB/s`）が完全に解消された：
-     - `Warm/Cached Seq 1024KB`: **`10,542.5 MB/s`**（`Native NTFS` `10,552.5 MB/s` の **1.00x**、`WSL2 9P` `196.0 MB/s` の **53.8x**、改善前 `1,490.5 MB/s` 比 **7.07x**）
-     - `Warm/Cached Seq 64KB`: **`8,697.8 MB/s`**（`Native NTFS` `4,971.2 MB/s` の **1.75x**、`WSL2 9P` `120.0 MB/s` の **72.5x**、改善前 `661.2 MB/s` 比 **13.2x**）
-     - `Warm/Cached Rnd 4KB`: **`990.5 MB/s` (`253,557 IOPS`)**（`Native NTFS` `916.3 MB/s` の **1.08x**、`WSL2 9P` `17.9 MB/s` の **55.3x**、改善前 `36.8 MB/s` 比 **26.9x**）
-   - `--no-direct-io` 側でも 2 周目以降は OS キャッシュで処理されるため `10,346.1 / 6,987.7 / 999.0 MB/s` となるが、初回読込（Cold）が **`20.8x`** 速い既定の Direct I/O ON が総合的に優位である。
+1. **実ブロックデバイス直読（Cold / Unbuffered）で `ZeroExt4` は DIO・標準経路ともに `WSL2 9P` を大きく上回る**:
+   - `Cold/Unbuf Seq 1024KB`: `ZeroExt4 DIO` **`1,506.2 MB/s`**（`WSL2 9P` `165.4 MB/s` の **9.11x**、`WSL2 Linux Kernel` `1,498.1 MB/s` の **1.01x**、`Native NTFS` `1,930.3 MB/s` の **78.0%**）。`ZeroExt4 Std` も `v0.9.0` 最適化により `75.2` → **`1,433.5 MB/s`（19.06x）** へ大幅改善した。
+   - `Cold/Unbuf Seq 64KB`: `ZeroExt4 DIO` **`667.5 MB/s`**（`ZeroExt4 Std` `602.5 MB/s`、`WSL2 9P` `108.7 MB/s` の **6.14x**、`WSL2 Linux Kernel` `458.2 MB/s` の **1.46x**）。
+   - `Cold/Unbuf Rnd 4KB`: `ZeroExt4 DIO` **`36.8 MB/s` (`9,421 IOPS`)**（`WSL2 9P` `9.1 MB/s` の **4.04x**、`WSL2 Linux Kernel` `21.1 MB/s` の **1.74x**）。
+2. **Warm / Cached で `ZeroExt4` が `Native NTFS` 同等以上・`WSL2 9P` 比 54x〜70x に到達（Step 2 の効果）**:
+   - Read-Only マウント時の `FileInfoTimeout` 既定値を `(UINT32)-1` (`INFINITE`) としたことで、Windows NT Cache Manager（`CcCopyRead`）が有効化され、全 Warm 項目で Native NTFS を上回る帯域を記録した：
+     - `Warm/Cached Seq 1024KB`: **`10,664.4 MB/s`**（`Native NTFS` `10,265.3 MB/s` の **1.04x**、`WSL2 9P` `197.0 MB/s` の **54.1x**）
+     - `Warm/Cached Seq 64KB`: **`8,676.8 MB/s`**（`Native NTFS` `8,161.6 MB/s` の **1.06x**、`WSL2 9P` `124.1 MB/s` の **69.9x**）
+     - `Warm/Cached Rnd 4KB`: **`1,026.7 MB/s` (`262,828 IOPS`)**（`Native NTFS` `969.6 MB/s` の **1.06x**、`WSL2 9P` `18.1 MB/s` の **56.7x**）
 3. **`WSL2 9P`（`\\wsl.localhost`）経由との比較**:
-   - WSL2 内の Linux カーネル直接読み取りは Warm 時に `10,409.7〜14,375.3 MB/s`（4 KB ランダム `3,189.4 MB/s`）に達するものの、Windows 側アプリから `\\wsl.localhost` 越しにアクセスする場合は 9P / HVSocket 往復が律速となり、`196.0 MB/s`（4 KB ランダムは `17.9 MB/s`）が上限となる。`ZeroExt4` は Windows ネイティブのドライブレター経由で **Cold 時最大 9.73x・Warm 時 53x〜72x** 高速にアクセスできる。
+   - WSL2 内の Linux カーネル直接読み取りは Warm 時に `9,751.8〜13,403.4 MB/s`（4 KB ランダム `3,154.6 MB/s`）に達するものの、Windows 側アプリから `\\wsl.localhost` 越しにアクセスする場合は 9P / HVSocket 往復が律速となり、`197.0 MB/s`（4 KB ランダムは `18.1 MB/s`）が上限となる。`ZeroExt4` は Windows ネイティブのドライブレター経由で **Cold 時最大 9.11x・Warm 時 54x〜70x** 高速にアクセスできる。
 
 ### 3.4 実運用における使い分け指針
 
 - **既定設定（RO / `--overlay` で Direct I/O 自動有効 + `FileInfoTimeout = INFINITE`）**:
-  - 初回（Cold）の大容量・実ディスク直読（`1,563.7 MB/s`）から 2 回目以降のメモリ帯域（`10.5 GB/s` / `253K IOPS`）、さらに Step 4 の Dentry キャッシュ・`FspGetDirInfoByName` による高速な Explorer / シェルメタデータ応答までそのまま最高性能を発揮する。
-- **`--no-direct-io` / `--file-info-timeout <ms>` を検討すべきケース**:
-  - 互換性確認やトラブルシューティング目的で標準 `ext2fs_file_read` 経路にフォールバックさせたい場合は `--no-direct-io`（`fs_lock` により多スレッド並列時は直列化される）。
-  - 外部プロセスからイメージを同時更新するような特殊用途でカーネルキャッシュを抑制したい場合は `--file-info-timeout 1000`（`--rw` および書き込み可能 `--overlay` は既定で `1000 ms` かつ Direct I/O 無効）。
+  - 初回（Cold）の大容量・実ディスク直読（`1,506.2 MB/s`）から 2 回目以降のメモリ帯域（`10.66 GB/s` / `263K IOPS`）、さらに Step 4 の Dentry キャッシュ・`FspGetDirInfoByName` による高速な Explorer / シェルメタデータ応答までそのまま最高性能を発揮する。
+- **`--rw` / `--no-direct-io` / `--file-info-timeout <ms>` を検討すべきケース**:
+  - 直接書き込み（`--rw`）や互換性確認のための `--no-direct-io` でも、`v0.9.0` のバッチ連続エクステント I/O により実 SSD Cold `1,433.5 MB/s`・VFS RW 書込最大 `4,184.5 MB/s` で高速に動作する（`--rw` では整合性のため `FileInfoTimeout = 1000 ms`・Direct Extent I/O 無効を維持）。
+  - 外部プロセスからイメージを同時更新するような特殊用途でカーネルキャッシュを抑制したい場合は `--file-info-timeout 1000` を指定できる。
 
 > [!NOTE]
 > Step 1〜4 の各段階における Perfetto トレース定量的効果およびメタデータ最適化（`FspGetSecurityByName` **11.97x**、`FspOpen` **27.62x**、`FspReadDirectory` **14.51x**）の詳細は [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md) を参照。
@@ -220,6 +234,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_and_test.ps1
 
 ```powershell
 .\build\zeroext4_bench.exe
+.\build\zeroext4_bench.exe --rw-bench
 ```
 
 ### 4.3 WinFsp 実マウントベンチマークの実行

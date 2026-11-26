@@ -354,10 +354,105 @@ static int run_winfsp_live_read(const char *file_path, uint32_t chunk_kb,
     return rc;
 }
 
+static int run_rw_write_bench(const char *label, ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
+                              uint32_t chunk_sz, uint64_t ops, int write_to_eof) {
+    LARGE_INTEGER freq, t0, t1;
+    uint8_t *buf = (uint8_t *)_aligned_malloc(chunk_sz, 4096);
+    uint64_t total_bytes = 0;
+    int any_err = 0;
+    double secs, mbps, iops, us_per_op;
+
+    if (!buf) return 1;
+    for (uint32_t i = 0; i < chunk_sz; i++) {
+        buf[i] = (uint8_t)((i * 31U + 7U) & 0xFFU);
+    }
+
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t0);
+    for (uint64_t i = 0; i < ops; i++) {
+        uint32_t w = 0;
+        uint64_t off = write_to_eof ? 0ULL : (i * (uint64_t)chunk_sz);
+        int rc = ext4_vfs_write(ctx, ino, buf, off, chunk_sz, write_to_eof, &w, NULL);
+        if (rc != 0 || w != chunk_sz) {
+            fprintf(stderr, "Write error in %s at op %llu: rc=%d w=%u\n",
+                    label, (unsigned long long)i, rc, w);
+            any_err = 1;
+            break;
+        }
+        total_bytes += w;
+    }
+    QueryPerformanceCounter(&t1);
+    _aligned_free(buf);
+
+    secs = qpc_sec(t0, t1, freq);
+    mbps = ((double)total_bytes / (1024.0 * 1024.0)) / secs;
+    iops = (double)ops / secs;
+    us_per_op = (secs * 1e6) / (double)ops;
+    printf("%-42s | %8.3f s | %9.1f MB/s | %10.0f IOPS | %8.2f us/op\n",
+           label, secs, mbps, iops, us_per_op);
+    fflush(stdout);
+    return any_err;
+}
+
+static int run_rw_mode_suite(void) {
+    char tmp_dir[MAX_PATH];
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext2_ino_t ino_1m = 0, ino_64k = 0, ino_4k = 0;
+    int failed = 0;
+
+    GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+    snprintf(img_path, sizeof(img_path), "%szeroext4_rw_bench_%lu.img", tmp_dir, GetCurrentProcessId());
+    DeleteFileA(img_path);
+
+    printf("Preparing 256MB ext4 image for --rw-bench...\n");
+    if (ext4_vfs_mkfs(img_path, 256ULL * 1024ULL * 1024ULL, "RWBENCH") != 0) {
+        fprintf(stderr, "mkfs failed for --rw-bench\n");
+        return 1;
+    }
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.max_cache_blocks = 2048;
+    cfg.case_insensitive = 1;
+    if (ext4_vfs_mount(&cfg, &ctx) != 0) {
+        fprintf(stderr, "RW mount failed\n");
+        DeleteFileA(img_path);
+        return 1;
+    }
+
+    if (ext4_vfs_create(ctx, "/rw_1m.bin", 0, 0644, 0, &ino_1m) != 0 ||
+        ext4_vfs_create(ctx, "/rw_64k.bin", 0, 0644, 0, &ino_64k) != 0 ||
+        ext4_vfs_create(ctx, "/rw_4k.bin", 0, 0644, 0, &ino_4k) != 0) {
+        fprintf(stderr, "Failed to create benchmark files\n");
+        ext4_vfs_unmount(ctx);
+        DeleteFileA(img_path);
+        return 1;
+    }
+
+    printf("\n=== Mode: --rw (Standard libext2fs + Batched Extent I/O) ===\n");
+    failed |= run_rw_write_bench("RW 1T Write Seq  1MB (64MB)", ctx, ino_1m, 1024U * 1024U, 64, 0);
+    failed |= run_rw_write_bench("RW 1T Write Seq 64KB (64MB)", ctx, ino_64k, 64U * 1024U, 1024, 0);
+    failed |= run_rw_write_bench("RW 1T Overwrite 64KB (64MB)", ctx, ino_64k, 64U * 1024U, 1024, 0);
+    failed |= run_rw_write_bench("RW 1T Write Seq  4KB (16MB)", ctx, ino_4k, 4096U, 4096, 1);
+
+    failed |= run_vfs_bench("RW 1T Read  Seq  1MB (256MB)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 1024U * 1024U, 256, 1, 0);
+    failed |= run_vfs_bench("RW 8T Read  Seq 64KB (1024MB)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 64U * 1024U, 2048, 8, 0);
+    failed |= run_vfs_bench("RW 8T Read  Rnd  4KB (65K ops)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 4096U, 8192, 8, 1);
+
+    ext4_vfs_unmount(ctx);
+    DeleteFileA(img_path);
+    return failed ? 1 : 0;
+}
+
 static void print_usage(const char *prog) {
     printf("Usage:\n");
     printf("  %s [--trace <output_json>] [--trace-events <N>]\n", prog);
     printf("      Run in-process VFS read benchmark (enable_direct_io=0 vs 1)\n");
+    printf("  %s --rw-bench [--trace <output_json>] [--trace-events <N>]\n", prog);
+    printf("      Run in-process --rw write/read benchmark\n");
     printf("  %s --read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops] [--trace <output_json>]\n", prog);
     printf("  %s --winfsp-read <file_path> <chunk_kb> [unbuf|cached] [seq|rnd] [warm|cold] [ops] [--trace <output_json>]\n", prog);
     printf("      Benchmark Win32 ReadFile throughput against NTFS, WinFsp, or UNC paths\n");
@@ -372,12 +467,16 @@ int main(int argc, char **argv) {
     int tracing = 0;
     int failed = 0;
 
+    int rw_bench = 0;
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
         }
-        if (strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--rw-bench") == 0) {
+            rw_bench = 1;
+        } else if (strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
             trace_path = argv[++i];
         } else if (strcmp(argv[i], "--trace-events") == 0 && i + 1 < argc) {
             trace_events = (uint32_t)strtoul(argv[++i], NULL, 10);
@@ -392,6 +491,19 @@ int main(int argc, char **argv) {
         }
         ztrace_set_thread_name("Bench-Main");
         tracing = 1;
+    }
+
+    if (rw_bench) {
+        int rc = run_rw_mode_suite();
+        if (tracing) {
+            ztrace_summary_t sum;
+            if (ztrace_shutdown(&sum) == 0) {
+                printf("\nPerfetto trace written to '%s' (events=%llu, dropped=%llu, threads=%u). Open at https://ui.perfetto.dev/\n",
+                       trace_path, (unsigned long long)sum.events_written,
+                       (unsigned long long)sum.dropped_events, sum.threads_seen);
+            }
+        }
+        return rc;
     }
 
     if (argc >= 2 && (strcmp(argv[1], "--winfsp-read") == 0 || strcmp(argv[1], "--read") == 0)) {

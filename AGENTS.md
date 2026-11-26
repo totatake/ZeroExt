@@ -15,7 +15,7 @@ This file provides concise repository context, build/test commands, and non-nego
 - `src/common/` — `libext2fs` / errno / `NTSTATUS` translation helpers and UTF-8/UTF-16 conversion
 - `compat/` — Non-invasive MSVC C11 & POSIX header shims (`msvc_compat.h`, `msvc_public_compat.h`, `compat/include/`)
 - `third_party/` — Bundled upstream `e2fsprogs` `1.47.4` and standalone WinFsp ABI headers (`winfsp.h`)
-- `tests/` — CTest suite (`test_main.c` + 6 suites / 32 tests) and `bench_direct_io.c` (`zeroext4_bench.exe`)
+- `tests/` — CTest suite (`test_main.c` + 6 suites / 33 tests) and `bench_direct_io.c` (`zeroext4_bench.exe`)
 - `gui/` — `.NET 10` WPF desktop manager (`ZeroExt4.Gui`, zero NuGet deps) and automated tests (`ZeroExt4.Gui.Tests`)
 - `scripts/` — PowerShell build/test/sanitizer/benchmark/upstream-sync scripts and `generate_e2fsprogs_headers.py`
 - `docs/` — Engineering documentation (Japanese default, lowercase `kebab-case`)

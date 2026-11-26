@@ -1,5 +1,6 @@
 #include "test_common.h"
 #include "../src/vfs/ext4_vfs.h"
+#include "../src/extent/extent_map.h"
 #include "../src/io/win32_io.h"
 #include <errno.h>
 
@@ -924,6 +925,256 @@ static int test_case_sensitive_coexistence(void) {
     return 0;
 }
 
+typedef struct {
+    ext4_vfs_ctx_t *ctx;
+    ext2_ino_t      ino;
+    const uint8_t  *expected;
+    size_t          total_size;
+    int             tid;
+    int             error;
+} rw_parallel_read_arg_t;
+
+static DWORD WINAPI rw_parallel_read_worker(LPVOID param) {
+    rw_parallel_read_arg_t *a = (rw_parallel_read_arg_t *)param;
+    uint8_t buf[65536];
+    const size_t chunk = sizeof(buf);
+    size_t chunks = a->total_size / chunk;
+    for (size_t iter = 0; iter < 16; iter++) {
+        size_t idx = (iter + (size_t)a->tid * 3U) % chunks;
+        uint64_t off = (uint64_t)idx * chunk;
+        uint32_t got = 0;
+        if (ext4_vfs_read(a->ctx, a->ino, buf, off, (uint32_t)chunk, &got) != 0 ||
+            got != chunk ||
+            memcmp(buf, a->expected + off, chunk) != 0) {
+            a->error = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int test_rw_batched_extent_write_and_read_coherence(void) {
+    char img_path[MAX_PATH];
+    char small_img[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st_init, st_after, st_ro;
+    ext4_extent_map_t *map = NULL;
+    const size_t total_sz = 2U * 1024U * 1024U;
+    const size_t chunk_sz = 256U * 1024U;
+    uint8_t *ref_buf = (uint8_t *)malloc(total_sz + 8192U);
+    uint8_t *read_buf = (uint8_t *)malloc(total_sz + 8192U);
+    uint8_t *sparse_ref = (uint8_t *)calloc(1, 140000U);
+    uint8_t *sparse_read = (uint8_t *)malloc(140000U);
+    uint32_t w = 0, r = 0;
+    uint64_t new_sz = 0;
+
+    TEST_ASSERT(ref_buf && read_buf && sparse_ref && sparse_read);
+    memset(&st_init, 0, sizeof(st_init));
+    memset(&st_after, 0, sizeof(st_after));
+    memset(&st_ro, 0, sizeof(st_ro));
+    for (size_t i = 0; i < total_sz + 8192U; i++) {
+        ref_buf[i] = (uint8_t)((i * 131U + 17U) & 0xFFU);
+    }
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_rw_batched.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 16ULL * 1024ULL * 1024ULL, "RWBATCH"));
+
+    /* --rw + --direct-io must still be rejected with -EINVAL */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.enable_direct_io = 1;
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx == NULL);
+
+    /* Mount RW */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ctx->enable_direct_io);
+
+    /* 1. Contiguous batched 2 MB write in 256 KB chunks -> minimal extent runs */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/batched.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/batched.bin", 1, &h, &st_init));
+    for (size_t off = 0; off < total_sz; off += chunk_sz) {
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write_stat(ctx, h->ino, ref_buf + off, off,
+                                                  (uint32_t)chunk_sz, 0, "batched.bin",
+                                                  &w, &new_sz, &st_after));
+        TEST_ASSERT_EQ_INT((long long)chunk_sz, (long long)w);
+    }
+    TEST_ASSERT_EQ_INT((long long)total_sz, (long long)new_sz);
+    TEST_ASSERT_EQ_INT(st_init.creation_time, st_after.creation_time);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_get_extents(ctx, "/batched.bin", &map));
+    TEST_ASSERT(map != NULL);
+    TEST_ASSERT(map->run_count >= 1 && map->run_count <= 2);
+    ext4_extent_map_release(map);
+    map = NULL;
+
+    /* Single-thread RW readback */
+    memset(read_buf, 0, total_sz);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, h->ino, read_buf, 0, (uint32_t)total_sz, &r));
+    TEST_ASSERT_EQ_INT((long long)total_sz, (long long)r);
+    TEST_ASSERT(memcmp(ref_buf, read_buf, total_sz) == 0);
+
+    /* 4-thread parallel RW reads */
+    {
+        HANDLE threads[4];
+        rw_parallel_read_arg_t args[4];
+        for (int t = 0; t < 4; t++) {
+            args[t].ctx = ctx;
+            args[t].ino = h->ino;
+            args[t].expected = ref_buf;
+            args[t].total_size = total_sz;
+            args[t].tid = t;
+            args[t].error = 0;
+            threads[t] = CreateThread(NULL, 0, rw_parallel_read_worker, &args[t], 0, NULL);
+            TEST_ASSERT(threads[t] != NULL);
+        }
+        WaitForMultipleObjects(4, threads, TRUE, INFINITE);
+        for (int t = 0; t < 4; t++) {
+            CloseHandle(threads[t]);
+            TEST_ASSERT_EQ_INT(0, args[t].error);
+        }
+    }
+
+    /* 2. Unaligned partial writes & cross-block overwrite + EOF append */
+    {
+        uint8_t patch1[9000];
+        uint8_t patch2[16];
+        uint8_t eof_tail[5000];
+        for (size_t i = 0; i < sizeof(patch1); i++) patch1[i] = (uint8_t)(0xA0U ^ (i & 0x3FU));
+        for (size_t i = 0; i < sizeof(patch2); i++) patch2[i] = (uint8_t)(0x5CU + i);
+        for (size_t i = 0; i < sizeof(eof_tail); i++) eof_tail[i] = (uint8_t)(0x7EU ^ (i & 0x1FU));
+
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, patch1, 137ULL, sizeof(patch1), 0, &w, &new_sz));
+        TEST_ASSERT_EQ_INT((long long)sizeof(patch1), (long long)w);
+        memcpy(ref_buf + 137, patch1, sizeof(patch1));
+
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, patch2, 4090ULL, sizeof(patch2), 0, &w, &new_sz));
+        TEST_ASSERT_EQ_INT((long long)sizeof(patch2), (long long)w);
+        memcpy(ref_buf + 4090, patch2, sizeof(patch2));
+
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, eof_tail, 0ULL, sizeof(eof_tail), 1, &w, &new_sz));
+        TEST_ASSERT_EQ_INT((long long)sizeof(eof_tail), (long long)w);
+        TEST_ASSERT_EQ_INT((long long)(total_sz + sizeof(eof_tail)), (long long)new_sz);
+        memcpy(ref_buf + total_sz, eof_tail, sizeof(eof_tail));
+
+        memset(read_buf, 0, total_sz + sizeof(eof_tail));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, h->ino, read_buf, 0, (uint32_t)(total_sz + sizeof(eof_tail)), &r));
+        TEST_ASSERT_EQ_INT((long long)(total_sz + sizeof(eof_tail)), (long long)r);
+        TEST_ASSERT(memcmp(ref_buf, read_buf, total_sz + sizeof(eof_tail)) == 0);
+    }
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* 3. Sparse hole write and middle-of-hole fill between two extents */
+    {
+        ext2_ino_t sp_ino = 0;
+        uint8_t head_p[100];
+        uint8_t tail_p[6000];
+        uint8_t mid_p[12288];
+        for (size_t i = 0; i < sizeof(head_p); i++) head_p[i] = (uint8_t)(0x11U + i);
+        for (size_t i = 0; i < sizeof(tail_p); i++) tail_p[i] = (uint8_t)(0x22U + (i & 0x7FU));
+        for (size_t i = 0; i < sizeof(mid_p); i++) mid_p[i] = (uint8_t)(0x33U + (i & 0x3FU));
+
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/sparse.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &sp_ino));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, sp_ino, head_p, 0ULL, sizeof(head_p), 0, &w, NULL));
+        memcpy(sparse_ref, head_p, sizeof(head_p));
+
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, sp_ino, tail_p, 131072ULL, sizeof(tail_p), 0, &w, &new_sz));
+        TEST_ASSERT_EQ_INT(131072ULL + sizeof(tail_p), new_sz);
+        memcpy(sparse_ref + 131072, tail_p, sizeof(tail_p));
+
+        memset(sparse_read, 0xAA, 131072U + sizeof(tail_p));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, sp_ino, sparse_read, 0, 131072U + sizeof(tail_p), &r));
+        TEST_ASSERT_EQ_INT((long long)(131072U + sizeof(tail_p)), (long long)r);
+        TEST_ASSERT(memcmp(sparse_ref, sparse_read, 131072U + sizeof(tail_p)) == 0);
+
+        /* Fill middle of hole between [0..4096) and [131072..139264) */
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, sp_ino, mid_p, 65536ULL, sizeof(mid_p), 0, &w, NULL));
+        memcpy(sparse_ref + 65536, mid_p, sizeof(mid_p));
+
+        memset(sparse_read, 0xAA, 131072U + sizeof(tail_p));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, sp_ino, sparse_read, 0, 131072U + sizeof(tail_p), &r));
+        TEST_ASSERT_EQ_INT((long long)(131072U + sizeof(tail_p)), (long long)r);
+        TEST_ASSERT(memcmp(sparse_ref, sparse_read, 131072U + sizeof(tail_p)) == 0);
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 4. Remount RO (Direct I/O ON) and verify persisted data + crtime + csum */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/batched.bin", 0, &h, &st_ro));
+    TEST_ASSERT_EQ_INT((long long)(total_sz + 5000U), (long long)st_ro.size);
+    TEST_ASSERT_EQ_INT(st_init.creation_time, st_ro.creation_time);
+    memset(read_buf, 0, total_sz + 5000U);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, read_buf, 0, (uint32_t)(total_sz + 5000U), &r));
+    TEST_ASSERT_EQ_INT((long long)(total_sz + 5000U), (long long)r);
+    TEST_ASSERT(memcmp(ref_buf, read_buf, total_sz + 5000U) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/sparse.bin", &st_ro));
+    memset(sparse_read, 0xAA, 131072U + 6000U);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st_ro.ino, sparse_read, 0, 131072U + 6000U, &r));
+    TEST_ASSERT(memcmp(sparse_ref, sparse_read, 131072U + 6000U) == 0);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 5. ENOSPC safety check on a small 4 MB image */
+    test_make_temp_path(small_img, sizeof(small_img), "vfs_rw_enospc.img");
+    DeleteFileA(small_img);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(small_img, 4ULL * 1024ULL * 1024ULL, "SMALL"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = small_img;
+    cfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    {
+        ext2_ino_t fill_ino = 0;
+        int hit_enospc = 0;
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/fill.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &fill_ino));
+        for (int i = 0; i < 16; i++) {
+            int wrc = ext4_vfs_write(ctx, fill_ino, ref_buf, (uint64_t)i * (512U * 1024U),
+                                     512U * 1024U, 0, &w, NULL);
+            if (wrc == -ENOSPC) {
+                hit_enospc = 1;
+                break;
+            }
+            TEST_ASSERT_EQ_INT(0, wrc);
+        }
+        TEST_ASSERT(hit_enospc);
+    }
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Verify small image remounts cleanly RO with intact metadata */
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/fill.bin", &st_ro));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+
+    DeleteFileA(small_img);
+    DeleteFileA(img_path);
+    free(ref_buf);
+    free(read_buf);
+    free(sparse_ref);
+    free(sparse_read);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -937,5 +1188,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_multi_group_backup_superblock_flush);
     RUN_TEST(test_concurrent_rw_and_dentry_invalidation_stress);
     RUN_TEST(test_case_sensitive_coexistence);
+    RUN_TEST(test_rw_batched_extent_write_and_read_coherence);
     return suite_failures;
 }

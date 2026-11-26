@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added technical source-level comparison report against `Ext4Windows` (`v1.3.0` / `31b83e2`) in [`docs/reports/ext4windows-comparison.md`](docs/reports/ext4windows-comparison.md), linked from `README.md`, `README.ja.md`, `docs/README.md`, `docs/overview.md`, and `docs/reports/README.md`.
+- Added `--rw-bench` mode to `zeroext4_bench.exe` (`tests/bench_direct_io.c`) and `test_rw_batched_extent_write_and_read_coherence` in `tests/test_vfs_operations.c` (33 CTest functions total).
 
 ### Changed
 - **Breaking**: Renamed the project, executables, build targets, CMake options, GUI solution/projects, and settings path from `ZeroExt` to `ZeroExt4` (`zeroext.exe` -> `zeroext4.exe`, `zeroext_bench.exe` -> `zeroext4_bench.exe`, `zeroext_tests.exe` -> `zeroext4_tests.exe`, `zeroext_core` -> `zeroext4_core`, `ZEROEXT_*` -> `ZEROEXT4_*` CMake options, `ZeroExtGui.exe` -> `ZeroExt4Gui.exe`, `gui/ZeroExt.sln` -> `gui/ZeroExt4.sln`, `gui/ZeroExt.Gui*` -> `gui/ZeroExt4.Gui*`, `%LOCALAPPDATA%\ZeroExt\gui_settings.json` -> `%LOCALAPPDATA%\ZeroExt4\gui_settings.json`, `ZeroExt-<tag>-win-x64.zip` -> `ZeroExt4-<tag>-win-x64.zip`, `zeroext_crash.dmp` -> `zeroext4_crash.dmp`).
-- Synchronized version references (`v0.9.0`), supported versions in `SECURITY.md`, issue template examples, and documentation indices across `README.md`, `README.ja.md`, `docs/README.md`, `docs/roadmap.md`, `docs/design/detailed-design.md`, and `docs/reports/ext4windows-comparison.md`.
+- Accelerated `--rw` and standard (`--no-direct-io`) extent I/O while keeping Direct Extent I/O strictly RO/Overlay-only: added contiguous extent-batched multi-block writes (`src/vfs/op_write.c`), parallel multi-block standard reads releasing `ctx->fs_lock` across `io_channel_read_blk64` under `ctx->rwlock (Shared)` (`src/vfs/op_read.c`), zero-copy aligned writes and batched `win32_zeroout` (`src/io/win32_io.c`), 64-slot `libext2fs` `icache`, and acquire loads for `cached_extents` / `dentry_cache->epoch` (`src/vfs/op_init.c`, `src/vfs/op_read.c`) — improving Standard Cold NVMe Seq 1MB from `75.2` to `1,433.5 MB/s` (19.1x) and VFS 8T Seq 64KB from `838.7` to `23,314.0 MB/s` (27.8x), with RW 1MB Seq writes reaching `4,184.5 MB/s`.
+- Re-evaluated same-SSD / VFS / `--rw` benchmarks and synchronized version references (`v0.9.0`), supported versions in `SECURITY.md`, issue template examples, and documentation indices across `README.md`, `README.ja.md`, `docs/README.md`, `docs/overview.md`, `docs/roadmap.md`, `docs/testing.md`, `docs/design/detailed-design.md`, `docs/reports/performance-evaluation.md`, and `docs/reports/ext4windows-comparison.md`.
 
 ## [0.8.1] - 2026-11-25
 
