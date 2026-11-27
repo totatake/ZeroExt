@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **35 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **36 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -69,6 +69,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_rw_batched_extent_write_and_read_coherence` | RO＋`--rw-fast-io` 拒否 (`-EINVAL`)、既定 `--rw` (`e2fsprogs` 準拠) 書込／読込、オプトイン `--rw --rw-fast-io` バッチ連続エクステント書込・並列読取・非アライメント/スパースホール/EOF追記整合性・`ENOSPC` 安全境界・メタデータ整合性・RO 再マウント検証 |
 | `test_rw_extent_tree_split_reverse_and_fsck_integrity` | `--rw --rw-fast-io` における 420 断片書込の多段エクステント木分割 (`depth 0 -> 1 -> 2`)、逆順スパース挿入 (`insert_before`)＋親インデックス更新、ブロック重複／`i_blocks`／空きブロック／チェックサム全件検査 |
 | `test_rw_uninit_extent_fallback_and_truncate_stress` | `--rw --rw-fast-io` における初期化済＋`UNINIT`＋スパースホール横断書込時の標準フォールバック切替、`truncate`＋再伸長ゼロ埋め、削除後ブロック再利用混合ストレス＋全件整合性検査 |
+| `test_rw_fast_io_multileaf_hole_boundary_write_and_read` | 1KB ブロック＋3,800 断片で構築した `eh_depth == 2`（複数 `level-1` サブツリー）の境界ホール横断読取・書込および EOF 追記（`find_next_leaf_after` 重複／ゼロ読込防止＋`verify_ext4_image_integrity` 検証） |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 

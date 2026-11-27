@@ -16,6 +16,40 @@ static int is_extent_end_err_w(errcode_t retval) {
     return 0;
 }
 
+static errcode_t find_next_leaf_after(ext2_extent_handle_t ehandle,
+                                      struct ext2fs_extent *out_next) {
+    struct ext2fs_extent ext;
+    errcode_t rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_NEXT_SIB, &ext);
+    if (rc == 0) {
+        *out_next = ext;
+        return 0;
+    }
+    if (rc != EXT2_ET_EXTENT_NO_NEXT) {
+        return rc;
+    }
+    for (;;) {
+        rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_UP, &ext);
+        if (rc == EXT2_ET_EXTENT_NO_UP) {
+            return EXT2_ET_EXTENT_NO_NEXT;
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_NEXT_SIB, &ext);
+        if (rc == 0) {
+            while (!(ext.e_flags & EXT2_EXTENT_FLAGS_LEAF)) {
+                rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_DOWN, &ext);
+                if (rc != 0) return rc;
+            }
+            *out_next = ext;
+            return 0;
+        }
+        if (rc != EXT2_ET_EXTENT_NO_NEXT) {
+            return rc;
+        }
+    }
+}
+
 static errcode_t write_data_blocks(ext2_filsys fs, blk64_t pblk, const uint8_t *src,
                                    uint32_t in_blk, uint32_t byte_len,
                                    int already_initialized, uint8_t *blk_buf) {
@@ -171,18 +205,18 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                 errcode_t ret_next;
                 has_left = 1;
                 left_ext = cur_ext;
-                ret_next = ext2fs_extent_get(ehandle, EXT2_EXTENT_NEXT_LEAF, &next_ext);
+                ret_next = find_next_leaf_after(ehandle, &next_ext);
                 if (ret_next == 0) {
                     if (next_ext.e_lblk > cur_lblk &&
                         next_ext.e_lblk - cur_lblk < max_hole_blks) {
                         max_hole_blks = next_ext.e_lblk - cur_lblk;
                     }
-                    retval = ext2fs_extent_goto(ehandle, left_ext.e_lblk);
-                    if (retval != 0) break;
                 } else if (!is_extent_end_err_w(ret_next)) {
                     retval = ret_next;
                     break;
                 }
+                retval = ext2fs_extent_goto(ehandle, left_ext.e_lblk);
+                if (retval != 0) break;
             }
 
             if (max_hole_blks > EXT_INIT_MAX_LEN) {
@@ -242,6 +276,7 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                     &newex);
                 if (retval != 0) {
                     ext2fs_block_alloc_stats_range(fs, pblk, (blk_t)plen, -1);
+                    inode_dirty = 1;
                     break;
                 }
                 ext2fs_iblk_add_blocks(fs, (struct ext2_inode *)full_ino, plen);

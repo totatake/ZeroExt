@@ -27,6 +27,40 @@ static int is_extent_end_err(errcode_t retval) {
     return 0;
 }
 
+static errcode_t find_next_leaf_after(ext2_extent_handle_t ehandle,
+                                      struct ext2fs_extent *out_next) {
+    struct ext2fs_extent ext;
+    errcode_t rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_NEXT_SIB, &ext);
+    if (rc == 0) {
+        *out_next = ext;
+        return 0;
+    }
+    if (rc != EXT2_ET_EXTENT_NO_NEXT) {
+        return rc;
+    }
+    for (;;) {
+        rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_UP, &ext);
+        if (rc == EXT2_ET_EXTENT_NO_UP) {
+            return EXT2_ET_EXTENT_NO_NEXT;
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_NEXT_SIB, &ext);
+        if (rc == 0) {
+            while (!(ext.e_flags & EXT2_EXTENT_FLAGS_LEAF)) {
+                rc = ext2fs_extent_get(ehandle, EXT2_EXTENT_DOWN, &ext);
+                if (rc != 0) return rc;
+            }
+            *out_next = ext;
+            return 0;
+        }
+        if (rc != EXT2_ET_EXTENT_NO_NEXT) {
+            return rc;
+        }
+    }
+}
+
 static int ext4_vfs_standard_read_fallback_locked(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                                                   void *buf, uint64_t offset,
                                                   uint32_t length, uint32_t *out_read) {
@@ -208,7 +242,7 @@ static int ext4_vfs_standard_read_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, v
                     hole_bytes = hole_blks * (uint64_t)bsz - (uint64_t)in_blk;
                 } else {
                     struct ext2fs_extent next_ext;
-                    retval = ext2fs_extent_get(ehandle, EXT2_EXTENT_NEXT_LEAF, &next_ext);
+                    retval = find_next_leaf_after(ehandle, &next_ext);
                     if (retval == 0 && next_ext.e_lblk > lblk) {
                         blk64_t hole_blks = next_ext.e_lblk - lblk;
                         hole_bytes = hole_blks * (uint64_t)bsz - (uint64_t)in_blk;

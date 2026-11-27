@@ -1592,6 +1592,192 @@ static int test_rw_uninit_extent_fallback_and_truncate_stress(void) {
     return 0;
 }
 
+static int test_mkfs_1k_ext4(const char *path_utf8, uint64_t size_bytes, const char *label) {
+    struct ext2_super_block param;
+    ext2_filsys fs = NULL;
+    win32_io_config_t io_cfg;
+    wchar_t wpath[1024];
+    HANDLE h;
+    LARGE_INTEGER li;
+    errcode_t retval;
+    blk64_t blocks_count = size_bytes / 1024ULL;
+
+    if (MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, wpath, (int)_countof(wpath)) <= 0) return -EINVAL;
+    h = CreateFileW(wpath, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return -EIO;
+    li.QuadPart = (LONGLONG)(blocks_count * 1024ULL);
+    if (!SetFilePointerEx(h, li, NULL, FILE_BEGIN) || !SetEndOfFile(h)) {
+        CloseHandle(h);
+        return -EIO;
+    }
+    CloseHandle(h);
+
+    memset(&param, 0, sizeof(param));
+    param.s_rev_level = EXT2_DYNAMIC_REV;
+    param.s_log_block_size = 0; /* 1024B block -> eh_max=84 -> multi-subtree depth=2 with ~3800 extents */
+    param.s_inode_size = 256;
+    param.s_desc_size = EXT2_MIN_DESC_SIZE_64BIT;
+    param.s_feature_compat = EXT2_FEATURE_COMPAT_DIR_INDEX | EXT2_FEATURE_COMPAT_EXT_ATTR;
+    param.s_feature_incompat = EXT2_FEATURE_INCOMPAT_FILETYPE |
+                               EXT3_FEATURE_INCOMPAT_EXTENTS |
+                               EXT4_FEATURE_INCOMPAT_64BIT;
+    param.s_feature_ro_compat = EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER |
+                                EXT2_FEATURE_RO_COMPAT_LARGE_FILE |
+                                EXT4_FEATURE_RO_COMPAT_HUGE_FILE |
+                                EXT4_FEATURE_RO_COMPAT_DIR_NLINK |
+                                EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE |
+                                EXT4_FEATURE_RO_COMPAT_METADATA_CSUM;
+    ext2fs_blocks_count_set(&param, blocks_count);
+
+    memset(&io_cfg, 0, sizeof(io_cfg));
+    io_cfg.partition_size_bytes = blocks_count * 1024ULL;
+    io_cfg.sector_size = 4096;
+    win32_io_set_next_config(&io_cfg);
+
+    retval = ext2fs_initialize(path_utf8, EXT2_FLAG_64BITS | EXT2_FLAG_RW, &param, win32_io_manager, &fs);
+    if (retval) return -EIO;
+    {
+        uint8_t uuid_bytes[16] = { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0x4D, 0xEF, 0x81, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF };
+        memcpy(fs->super->s_uuid, uuid_bytes, sizeof(uuid_bytes));
+        if (label) {
+            strncpy((char *)fs->super->s_volume_name, label, sizeof(fs->super->s_volume_name));
+        }
+        fs->super->s_checksum_type = EXT2_CRC32C_CHKSUM;
+        ext2fs_init_csum_seed(fs);
+    }
+    if (ext2fs_allocate_tables(fs) != 0) { ext2fs_free(fs); return -EIO; }
+    for (ext2_ino_t r = 1; r < fs->super->s_first_ino; r++) {
+        if (r != EXT2_ROOT_INO) ext2fs_inode_alloc_stats2(fs, r, 1, 0);
+    }
+    if (ext2fs_mkdir(fs, EXT2_ROOT_INO, EXT2_ROOT_INO, NULL) != 0 ||
+        ext2fs_mkdir(fs, EXT2_ROOT_INO, 0, "lost+found") != 0) {
+        ext2fs_free(fs);
+        return -EIO;
+    }
+    for (dgrp_t g = 0; g < fs->group_desc_count; g++) {
+        ext2fs_group_desc_csum_set(fs, g);
+    }
+    ext2fs_mark_super_dirty(fs);
+    return (ext2fs_close_free(&fs) == 0) ? 0 : -EIO;
+}
+
+static int test_rw_fast_io_multileaf_hole_boundary_write_and_read(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext2_ino_t target_ino = 0;
+    ext4_stat_t st;
+    const uint32_t num_extents = 3800U; /* 1KB blocks (eh_max=84): ~90 leaves -> >=2 level-1 subtrees (eh_depth=2) */
+    const uint32_t anchor_idx = 5000U;
+    const size_t buf_bytes = ((size_t)anchor_idx * 2U + 16U) * 1024U;
+    uint8_t *ref_buf = (uint8_t *)calloc(buf_bytes, 1);
+    uint8_t *read_buf = (uint8_t *)calloc(buf_bytes, 1);
+    uint8_t blk_data[1024];
+    uint8_t span_buf[4096];
+    uint32_t w = 0, r = 0;
+    uint64_t expected_size = (uint64_t)anchor_idx * 2048ULL + 1024ULL + 4096ULL;
+
+    TEST_ASSERT(ref_buf != NULL && read_buf != NULL);
+    memset(&st, 0, sizeof(st));
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_rw_multileaf_hole.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, test_mkfs_1k_ext4(img_path, 16ULL * 1024ULL * 1024ULL, "MLEAFH"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_rw_fast_io);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/multileaf_hole.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &target_ino));
+
+    /* Anchor ahead so non-EOF 50% splits create multiple level-1 index subtrees (Node A -> Node B) */
+    memset(blk_data, 0x77, sizeof(blk_data));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, target_ino, blk_data, (uint64_t)anchor_idx * 2048ULL, 1024U, 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(1024, (int)w);
+    memcpy(ref_buf + (size_t)anchor_idx * 2048U, blk_data, 1024U);
+
+    /* 1. Build 3800 disjoint 1KB extents at 2KB stride (each followed by a 1KB hole) */
+    for (uint32_t i = 0; i < num_extents; i++) {
+        uint64_t off = (uint64_t)i * 2048ULL;
+        for (size_t b = 0; b < sizeof(blk_data); b++) {
+            blk_data[b] = (uint8_t)((i * 29U + b * 7U + 3U) & 0xFFU);
+        }
+        blk_data[0] = (uint8_t)(i & 0xFFU);
+        blk_data[1] = (uint8_t)((i >> 8) & 0xFFU);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, target_ino, blk_data, off, 1024U, 0, &w, NULL));
+        TEST_ASSERT_EQ_INT(1024, (int)w);
+        memcpy(ref_buf + off, blk_data, 1024U);
+    }
+
+    /* 2. Read across all level-1 subtree boundary holes in 32KB chunks under --rw-fast-io */
+    {
+        uint64_t init_sz = (uint64_t)anchor_idx * 2048ULL + 1024ULL;
+        memset(read_buf, 0xCC, buf_bytes);
+        for (uint64_t off = 0; off < init_sz; off += 32768ULL) {
+            uint32_t req = (init_sz - off < 32768ULL) ? (uint32_t)(init_sz - off) : 32768U;
+            TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, target_ino, read_buf + off, off, req, &r));
+            TEST_ASSERT_EQ_INT((long long)req, (long long)r);
+        }
+        TEST_ASSERT(memcmp(ref_buf, read_buf, (size_t)init_sz) == 0);
+    }
+
+    /* 3. Write 4KB spans starting inside holes covering the Node A -> Node B subtree split boundary (around i=3486 / blk=6971) */
+    for (uint32_t i = 3460U; i <= 3510U; i += 2U) {
+        uint64_t off = (uint64_t)i * 2048ULL + 1024ULL;
+        for (size_t b = 0; b < sizeof(span_buf); b++) {
+            span_buf[b] = (uint8_t)((0x50U + i + b * 13U) & 0xFFU);
+        }
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, target_ino, span_buf, off, sizeof(span_buf), 0, &w, NULL));
+        TEST_ASSERT_EQ_INT((long long)sizeof(span_buf), (long long)w);
+        memcpy(ref_buf + off, span_buf, sizeof(span_buf));
+    }
+
+    /* 4. Append 4KB past EOF in eh_depth == 2 tree (exercises EXT2_ET_EXTENT_NO_NEXT at EOF) */
+    {
+        uint64_t eof_off = (uint64_t)anchor_idx * 2048ULL + 1024ULL;
+        uint64_t new_sz = 0;
+        for (size_t b = 0; b < sizeof(span_buf); b++) {
+            span_buf[b] = (uint8_t)((0xD0U ^ b) & 0xFFU);
+        }
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, target_ino, span_buf, eof_off, sizeof(span_buf), 0, &w, &new_sz));
+        TEST_ASSERT_EQ_INT((long long)sizeof(span_buf), (long long)w);
+        TEST_ASSERT_EQ_INT((long long)expected_size, (long long)new_sz);
+        memcpy(ref_buf + eof_off, span_buf, sizeof(span_buf));
+    }
+
+    /* 5. Verify full readback in --rw-fast-io mode */
+    memset(read_buf, 0xCC, buf_bytes);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, target_ino, read_buf, 0, (uint32_t)expected_size, &r));
+    TEST_ASSERT_EQ_INT((long long)expected_size, (long long)r);
+    TEST_ASSERT(memcmp(ref_buf, read_buf, (size_t)expected_size) == 0);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 6. Full fsck-style metadata integrity check (non-overlapping extents, i_blocks, free_blocks, csum) */
+    TEST_ASSERT_EQ_INT(0, verify_ext4_image_integrity(img_path));
+
+    /* 7. Remount RO (Direct I/O ON) and verify persisted data */
+    cfg.enable_rw_fast_io = 0;
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/multileaf_hole.bin", &st));
+    TEST_ASSERT_EQ_INT((long long)expected_size, (long long)st.size);
+    memset(read_buf, 0xCC, buf_bytes);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, read_buf, 0, (uint32_t)expected_size, &r));
+    TEST_ASSERT_EQ_INT((long long)expected_size, (long long)r);
+    TEST_ASSERT(memcmp(ref_buf, read_buf, (size_t)expected_size) == 0);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    DeleteFileA(img_path);
+    free(ref_buf);
+    free(read_buf);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -1608,5 +1794,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_rw_batched_extent_write_and_read_coherence);
     RUN_TEST(test_rw_extent_tree_split_reverse_and_fsck_integrity);
     RUN_TEST(test_rw_uninit_extent_fallback_and_truncate_stress);
+    RUN_TEST(test_rw_fast_io_multileaf_hole_boundary_write_and_read);
     return suite_failures;
 }
