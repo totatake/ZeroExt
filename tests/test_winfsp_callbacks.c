@@ -173,6 +173,23 @@ static int test_winfsp_interface_e2e(void) {
     TEST_ASSERT_EQ_INT(STATUS_OBJECT_NAME_NOT_FOUND,
                        iface->GetSecurityByName(fs, L"\\docs\\Renamed.txt", &attrs, NULL, NULL));
 
+    /* Replacing an existing directory via Rename(ReplaceIfExists=TRUE) must fail with STATUS_ACCESS_DENIED */
+    {
+        PVOID d1_ctx = NULL, d2_ctx = NULL;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                           iface->Create(fs, L"\\ren_d1", FILE_DIRECTORY_FILE, DELETE | FILE_GENERIC_WRITE,
+                                         FILE_ATTRIBUTE_DIRECTORY, NULL, 0, &d1_ctx, &fi));
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                           iface->Create(fs, L"\\ren_d2", FILE_DIRECTORY_FILE, DELETE | FILE_GENERIC_WRITE,
+                                         FILE_ATTRIBUTE_DIRECTORY, NULL, 0, &d2_ctx, &fi));
+        TEST_ASSERT_EQ_INT(STATUS_ACCESS_DENIED,
+                           iface->Rename(fs, d2_ctx, L"\\ren_d2", L"\\ren_d1", TRUE));
+        iface->Cleanup(fs, d1_ctx, L"\\ren_d1", FspCleanupDelete);
+        iface->Close(fs, d1_ctx);
+        iface->Cleanup(fs, d2_ctx, L"\\ren_d2", FspCleanupDelete);
+        iface->Close(fs, d2_ctx);
+    }
+
     winfsp_driver_destroy_test_fs(fs);
     TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
     DeleteFileA(img_path);

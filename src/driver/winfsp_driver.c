@@ -615,6 +615,15 @@ static NTSTATUS FspRename_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, P
         return STATUS_OBJECT_NAME_INVALID;
     }
 
+    if (ReplaceIfExists) {
+        ext4_stat_t src_st, dst_st;
+        if (ext4_vfs_stat(ctx, old_utf8, &src_st) == 0 &&
+            ext4_vfs_stat(ctx, new_utf8, &dst_st) == 0 &&
+            dst_st.is_dir && dst_st.ino != src_st.ino) {
+            return STATUS_ACCESS_DENIED;
+        }
+    }
+
     rc = ext4_vfs_rename(ctx, old_utf8, new_utf8, ReplaceIfExists ? 1 : 0);
     if (rc == 0 && handle) {
         if (ext4_vfs_normalize_path(new_utf8, norm_new, sizeof(norm_new)) == 0) {
