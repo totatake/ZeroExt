@@ -13,19 +13,19 @@ if (-not (Test-Path $ZeroExt4Exe)) {
     throw "zeroext4.exe not found at $ZeroExt4Exe. Build first with scripts\build_and_test.ps1."
 }
 
-# Verify WSL2 and e2fsck availability
+# Verify WSL2 and required ext4/loop tools availability
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
-    $e2fsckCheck = (& wsl.exe -- which e2fsck 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $toolCheck = (& wsl.exe -u root -- which e2fsck mkfs.ext4 mount umount fallocate sha256sum 2>&1 | ForEach-Object { "$_" }) -join "`n"
     $whichExit = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $prevEap
 }
 if ($whichExit -ne 0) {
-    throw "e2fsck is not available inside WSL2: $e2fsckCheck"
+    throw "Required WSL2 Linux tools (e2fsck/mkfs.ext4/mount/umount/fallocate/sha256sum) are not available: $toolCheck"
 }
-Write-Host "Using WSL2 e2fsck: $e2fsckCheck"
+Write-Host "Verified WSL2 tools: e2fsck, mkfs.ext4, mount, umount, fallocate, sha256sum"
 
 # Pick an unused drive letter
 $usedDrives = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -331,27 +331,79 @@ function Invoke-Workload {
         [System.IO.File]::WriteAllBytes($freshPath, $data)
     }
 
-    # Snapshot all surviving files (Length + SHA-256)
+    $manifest = Get-WindowsTreeManifest -RootPath $RootPath -ExpectedCount 50 -Label "Windows workload"
+    return $manifest
+}
+
+function Invoke-WslRootBash {
+    param([Parameter(Mandatory = $true)][string]$Script)
+
+    $normalized = $Script.Replace("`r`n", "`n")
+    $shPath = Join-Path $env:TEMP ("zeroext4_wsl_{0}_{1}.sh" -f $PID, ([Guid]::NewGuid().ToString("N").Substring(0, 8)))
+    try {
+        [System.IO.File]::WriteAllText($shPath, $normalized, (New-Object System.Text.UTF8Encoding $false))
+        $wslShPath = ConvertTo-WslPath -WindowsPath $shPath
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $lines = @(& wsl.exe -u root -- bash -euo pipefail $wslShPath 2>&1 | ForEach-Object { "$_" })
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
+        return @{
+            ExitCode = $exitCode
+            Lines    = $lines
+        }
+    } finally {
+        if (Test-Path $shPath) {
+            Remove-Item -Force $shPath -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Parse-WslFileManifestLines {
+    param([Parameter(Mandatory = $true)][string[]]$Lines)
+
+    $manifest = [ordered]@{}
+    foreach ($line in $Lines) {
+        if ($line -match '^FILE\|([^|]+)\|([0-9]+)\|([0-9a-fA-F]{64})$') {
+            $rel = $matches[1].TrimStart('./').Replace('\', '/')
+            $manifest[$rel] = @{
+                Length = [int64]$matches[2]
+                Sha256 = $matches[3].ToLowerInvariant()
+            }
+        }
+    }
+    return $manifest
+}
+
+function Get-WindowsTreeManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$RootPath,
+        [int]$ExpectedCount = -1,
+        [string]$Label = "Windows tree"
+    )
+
     $manifest = [ordered]@{}
     $allFiles = [System.IO.Directory]::GetFiles($RootPath, "*", [System.IO.SearchOption]::AllDirectories) | Sort-Object
     foreach ($fullPath in $allFiles) {
         $rel = $fullPath.Substring($RootPath.Length).TrimStart('\')
-        if ($rel -match '^(System Volume Information|\$RECYCLE\.BIN)([\\/]|$)') {
+        if ($rel -match '^(System Volume Information|\$RECYCLE\.BIN|lost\+found)([\\/]|$)') {
             continue
         }
+        $relKey = $rel.Replace('\', '/')
         $info = New-Object System.IO.FileInfo $fullPath
         $sha = Get-FileSha256Hex -Path $fullPath
-        $manifest[$rel] = @{
+        $manifest[$relKey] = @{
             Length = $info.Length
             Sha256 = $sha
         }
     }
-
-    # Expected: seq_8mb.bin + sparse.bin + 16 renamed + 16 remaining (48..63) + 16 fresh = 50 files
-    if ($manifest.Count -ne 50) {
-        throw "Expected 50 surviving workload files on $RootPath, got $($manifest.Count)."
+    if ($ExpectedCount -ge 0 -and $manifest.Count -ne $ExpectedCount) {
+        throw "Expected $ExpectedCount surviving files in $Label on $RootPath, got $($manifest.Count)."
     }
-    Write-Host "  Recorded $($manifest.Count) surviving files with SHA-256 digests."
+    Write-Host "  Recorded $($manifest.Count) surviving files ($Label) with SHA-256 digests."
     return $manifest
 }
 
@@ -365,7 +417,7 @@ function Test-ReadOnlyManifest {
     $actualUserCount = 0
     foreach ($f in $actualFiles) {
         $relPath = $f.Substring($RootPath.Length).TrimStart('\')
-        if ($relPath -notmatch '^(System Volume Information|\$RECYCLE\.BIN)([\\/]|$)') {
+        if ($relPath -notmatch '^(System Volume Information|\$RECYCLE\.BIN|lost\+found)([\\/]|$)') {
             $actualUserCount++
         }
     }
@@ -375,7 +427,8 @@ function Test-ReadOnlyManifest {
 
     $checked = 0
     foreach ($rel in $ExpectedManifest.Keys) {
-        $fullPath = Join-Path $RootPath $rel
+        $winRel = $rel.Replace('/', '\')
+        $fullPath = Join-Path $RootPath $winRel
         if (-not (Test-Path -LiteralPath $fullPath)) {
             throw "Missing file on RO remount: $rel"
         }
@@ -393,6 +446,220 @@ function Test-ReadOnlyManifest {
     Write-Host "  Verified $checked/$($ExpectedManifest.Count) files on RO remount (100% length + SHA-256 match)."
 }
 
+function Test-WslKernelLoopManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$WindowsImgPath,
+        [Parameter(Mandatory = $true)]$ExpectedManifest,
+        [Parameter(Mandatory = $true)][string]$Tag
+    )
+
+    $wslSrc = ConvertTo-WslPath -WindowsPath $WindowsImgPath
+    $bashScript = @'
+src="__WSL_SRC__"
+tmpimg="/tmp/zeroext4_loop___TAG___$$.img"
+mnt="/tmp/zeroext4_mnt___TAG___$$"
+cleanup() {
+    umount "$mnt" 2>/dev/null || true
+    rm -rf "$mnt" "$tmpimg"
+}
+trap cleanup EXIT
+cp "$src" "$tmpimg"
+mkdir -p "$mnt"
+mount -t ext4 -o loop,ro "$tmpimg" "$mnt"
+(
+    cd "$mnt"
+    while IFS= read -r f; do
+        rel="${f#./}"
+        sz=$(stat -c '%s' "$f")
+        sha=$(sha256sum "$f" | awk '{print $1}')
+        echo "FILE|$rel|$sz|$sha"
+    done < <(find . -type f ! -path './lost+found/*' | sort)
+)
+umount "$mnt"
+'@
+    $bashScript = $bashScript.Replace("__WSL_SRC__", $wslSrc).Replace("__TAG__", $Tag)
+    $res = Invoke-WslRootBash -Script $bashScript
+    if ($res.ExitCode -ne 0) {
+        $res.Lines | ForEach-Object { Write-Host "  [wsl-loop] $_" }
+        throw "WSL2 Linux kernel mount -o loop,ro failed for ${Tag} (exit $($res.ExitCode))."
+    }
+
+    $linuxManifest = Parse-WslFileManifestLines -Lines $res.Lines
+    if ($linuxManifest.Count -ne $ExpectedManifest.Count) {
+        throw "Linux kernel loop mount file count mismatch for ${Tag}: expected $($ExpectedManifest.Count), got $($linuxManifest.Count)."
+    }
+
+    $checked = 0
+    foreach ($rel in $ExpectedManifest.Keys) {
+        if (-not $linuxManifest.Contains($rel)) {
+            throw "Missing file in Linux kernel loop mount for ${Tag}: $rel"
+        }
+        $exp = $ExpectedManifest[$rel]
+        $act = $linuxManifest[$rel]
+        if ($act.Length -ne $exp.Length) {
+            throw "Size mismatch in Linux kernel loop mount (${Tag}) for ${rel}: expected $($exp.Length), got $($act.Length)"
+        }
+        if ($act.Sha256 -ne $exp.Sha256) {
+            throw "SHA-256 mismatch in Linux kernel loop mount (${Tag}) for ${rel}: expected $($exp.Sha256), got $($act.Sha256)"
+        }
+        $checked++
+    }
+    Write-Host "  Verified $checked/$($ExpectedManifest.Count) files via Linux kernel mount -o loop,ro (100% length + SHA-256 match)."
+}
+
+function New-WslKernelExt4Image {
+    param(
+        [Parameter(Mandatory = $true)][string]$WindowsDestPath,
+        [Parameter(Mandatory = $true)][int]$SizeMb,
+        [Parameter(Mandatory = $true)][string]$Tag
+    )
+
+    $wslDest = ConvertTo-WslPath -WindowsPath $WindowsDestPath
+    $bashScript = @'
+dest="__WSL_DEST__"
+tmpimg="/tmp/zeroext4_src___TAG___$$.img"
+mnt="/tmp/zeroext4_srcmnt___TAG___$$"
+cleanup() {
+    umount "$mnt" 2>/dev/null || true
+    rm -rf "$mnt" "$tmpimg"
+}
+trap cleanup EXIT
+
+truncate -s "__SIZE_MB__M" "$tmpimg"
+mkfs.ext4 -q -F -L LINUXEXT4 "$tmpimg"
+mkdir -p "$mnt"
+mount -t ext4 -o loop "$tmpimg" "$mnt"
+
+# 1. 4 MB sequential random file
+dd if=/dev/urandom of="$mnt/linux_seq.bin" bs=1M count=4 status=none
+
+# 2. Sparse file with holes
+dd if=/dev/urandom of="$mnt/linux_sparse.bin" bs=4096 count=2 status=none
+dd if=/dev/urandom of="$mnt/linux_sparse.bin" bs=4096 count=2 seek=64 conv=notrunc status=none
+dd if=/dev/urandom of="$mnt/linux_sparse.bin" bs=4096 count=3 seek=128 conv=notrunc status=none
+
+# 3. Genuine Linux UNINIT extents via fallocate + partial overwrites
+fallocate -l 262144 "$mnt/linux_uninit.bin"
+dd if=/dev/urandom of="$mnt/linux_uninit.bin" bs=5000 count=1 conv=notrunc status=none
+dd if=/dev/urandom of="$mnt/linux_uninit.bin" bs=1 count=5000 seek=131072 conv=notrunc status=none
+
+# 4. Fragmented file interleaved with sibling temp allocations
+for i in $(seq 0 15); do
+    dd if=/dev/urandom bs=8192 count=1 status=none >> "$mnt/linux_frag.bin"
+    dd if=/dev/urandom of="$mnt/frag_pad_$i.tmp" bs=16384 count=1 status=none
+done
+rm -f "$mnt"/frag_pad_*.tmp
+
+# 5. Nested directory tree (16 files across sub_0..3)
+for i in $(seq 0 15); do
+    sub=$((i % 4))
+    mkdir -p "$mnt/linux_dir/sub_$sub"
+    flen=$((137 + i * 503))
+    fname=$(printf "f_%02d.bin" "$i")
+    head -c "$flen" /dev/urandom > "$mnt/linux_dir/sub_$sub/$fname"
+done
+
+sync
+(
+    cd "$mnt"
+    while IFS= read -r f; do
+        rel="${f#./}"
+        sz=$(stat -c '%s' "$f")
+        sha=$(sha256sum "$f" | awk '{print $1}')
+        echo "FILE|$rel|$sz|$sha"
+    done < <(find . -type f ! -path './lost+found/*' | sort)
+)
+umount "$mnt"
+e2fsck -fn "$tmpimg" >/dev/null
+cp "$tmpimg" "$dest"
+'@
+    $bashScript = $bashScript.Replace("__WSL_DEST__", $wslDest).Replace("__SIZE_MB__", "$SizeMb").Replace("__TAG__", $Tag)
+    $res = Invoke-WslRootBash -Script $bashScript
+    if ($res.ExitCode -ne 0) {
+        $res.Lines | ForEach-Object { Write-Host "  [wsl-mkfs] $_" }
+        throw "WSL2 Linux kernel mkfs.ext4 + populate failed for ${Tag} (exit $($res.ExitCode))."
+    }
+
+    $manifest = Parse-WslFileManifestLines -Lines $res.Lines
+    if ($manifest.Count -ne 20) {
+        throw "Expected 20 files in WSL2 Linux kernel image for ${Tag}, got $($manifest.Count)."
+    }
+    Write-Host "  Created 64MB Linux kernel ext4 image with $($manifest.Count) files (incl. fallocate UNINIT, holes, fragmented extents)."
+    return $manifest
+}
+
+function Invoke-LinuxImageModifications {
+    param([Parameter(Mandatory = $true)][string]$RootPath)
+
+    Write-Host "  Applying Windows Win32 RW modifications to Linux-created ext4 files..."
+
+    # Overwrite linux_uninit.bin across UNINIT boundary (offset 4096, len 16384)
+    $uninitPath = Join-Path $RootPath "linux_uninit.bin"
+    $fsU = [System.IO.File]::Open($uninitPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
+    try {
+        [void]$fsU.Seek(4096, [System.IO.SeekOrigin]::Begin)
+        $bufU = New-DeterministicBytes -Length 16384 -Seed 7001
+        $fsU.Write($bufU, 0, $bufU.Length)
+        $fsU.Flush()
+    } finally {
+        $fsU.Dispose()
+    }
+
+    # Overwrite inside linux_sparse.bin hole (offset 65536, len 12288) + append 4096 bytes
+    $sparsePath = Join-Path $RootPath "linux_sparse.bin"
+    $fsS = [System.IO.File]::Open($sparsePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
+    try {
+        [void]$fsS.Seek(65536, [System.IO.SeekOrigin]::Begin)
+        $bufS = New-DeterministicBytes -Length 12288 -Seed 7002
+        $fsS.Write($bufS, 0, $bufS.Length)
+        $fsS.Flush()
+    } finally {
+        $fsS.Dispose()
+    }
+    $fsSApp = [System.IO.File]::Open($sparsePath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write)
+    try {
+        $bufApp = New-DeterministicBytes -Length 4096 -Seed 7003
+        $fsSApp.Write($bufApp, 0, $bufApp.Length)
+        $fsSApp.Flush()
+    } finally {
+        $fsSApp.Dispose()
+    }
+
+    # Overwrite linux_seq.bin at unaligned offset 12345 (len 7777)
+    $seqPath = Join-Path $RootPath "linux_seq.bin"
+    $fsQ = [System.IO.File]::Open($seqPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
+    try {
+        [void]$fsQ.Seek(12345, [System.IO.SeekOrigin]::Begin)
+        $bufQ = New-DeterministicBytes -Length 7777 -Seed 7004
+        $fsQ.Write($bufQ, 0, $bufQ.Length)
+        $fsQ.Flush()
+    } finally {
+        $fsQ.Dispose()
+    }
+
+    # Delete f_00..03.bin and rename f_04..07.bin -> win_renamed_04..07.bin
+    $linuxDir = Join-Path $RootPath "linux_dir"
+    for ($i = 0; $i -lt 4; $i++) {
+        $sub = "sub_$($i % 4)"
+        $delTarget = Join-Path (Join-Path $linuxDir $sub) ("f_{0:D2}.bin" -f $i)
+        [System.IO.File]::Delete($delTarget)
+    }
+    for ($i = 4; $i -lt 8; $i++) {
+        $subDir = Join-Path $linuxDir ("sub_{0}" -f ($i % 4))
+        $oldP = Join-Path $subDir ("f_{0:D2}.bin" -f $i)
+        $newP = Join-Path $subDir ("win_renamed_{0:D2}.bin" -f $i)
+        [System.IO.File]::Move($oldP, $newP)
+    }
+
+    # Add 512 KB new file from Windows
+    $addedPath = Join-Path $RootPath "win_added.bin"
+    $addedData = New-DeterministicBytes -Length (512 * 1024) -Seed 7005
+    [System.IO.File]::WriteAllBytes($addedPath, $addedData)
+
+    # Expected: 20 - 4 deleted + 1 added = 17 surviving files
+    return Get-WindowsTreeManifest -RootPath $RootPath -ExpectedCount 17 -Label "Windows-modified Linux image"
+}
+
 $modes = @(
     @{ Name = "rw-default"; ExtraArgs = @("--rw") },
     @{ Name = "rw-fast-io"; ExtraArgs = @("--rw", "--rw-fast-io") }
@@ -402,7 +669,7 @@ foreach ($mode in $modes) {
     $modeName = $mode.Name
     Write-Host ""
     Write-Host "============================================================"
-    Write-Host "Running WinFsp + WSL2 e2fsck -fn verification: $modeName"
+    Write-Host "Direction A (ZeroExt4 -> e2fsck + Linux loop + RO): $modeName"
     Write-Host "============================================================"
 
     $imgPath = Join-Path $env:TEMP ("zeroext4_e2fsck_{0}_{1}.img" -f $modeName, $PID)
@@ -412,25 +679,25 @@ foreach ($mode in $modes) {
     $currentEvName = $null
 
     try {
-        Write-Host "[1/6] Creating ${SizeMb}MB ext4 image: $imgPath"
+        Write-Host "[1/7] Creating ${SizeMb}MB ext4 image: $imgPath"
         & $ZeroExt4Exe mkfs $imgPath --size-mb $SizeMb --label E2FSCK
         if ($LASTEXITCODE -ne 0) {
             throw "mkfs failed with exit code $LASTEXITCODE"
         }
 
         $currentEvName = "Local\ZeroExt4_Verify_RW_${modeName}_$PID"
-        Write-Host "[2/6] Mounting $DriveLetter ($($mode.ExtraArgs -join ' '))..."
+        Write-Host "[2/7] Mounting $DriveLetter ($($mode.ExtraArgs -join ' '))..."
         $mountHandle = Start-ZeroExt4Mount -ExePath $ZeroExt4Exe -ImagePath $imgPath -MountPoint $DriveLetter -StopEventName $currentEvName -ExtraArgs $mode.ExtraArgs
 
-        Write-Host "[3/6] Executing Win32 file/directory workload..."
+        Write-Host "[3/7] Executing Win32 file/directory workload..."
         $manifest = Invoke-Workload -RootPath "$DriveLetter\"
 
-        Write-Host "[4/6] Unmounting cleanly via stop event..."
+        Write-Host "[4/7] Unmounting cleanly via stop event..."
         Stop-ZeroExt4Mount -MountHandle $mountHandle -StopEventName $currentEvName -MountPoint $DriveLetter
         $mountHandle = $null
 
         $wslImgPath = ConvertTo-WslPath -WindowsPath $imgPath
-        Write-Host "[5/6] Running upstream e2fsck -fn $wslImgPath ..."
+        Write-Host "[5/7] Running upstream e2fsck -fn $wslImgPath ..."
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
@@ -445,14 +712,17 @@ foreach ($mode in $modes) {
         }
         Write-Host "  [e2fsck] PASSED (exit code 0)."
 
+        Write-Host "[6/7] Cross-verifying via real WSL2 Linux kernel mount -t ext4 -o loop,ro..."
+        Test-WslKernelLoopManifest -WindowsImgPath $imgPath -ExpectedManifest $manifest -Tag "dirA_${modeName}"
+
         $currentEvName = "Local\ZeroExt4_Verify_RO_${modeName}_$PID"
-        Write-Host "[6/6] Remounting Read-Only (Direct Extent I/O) and verifying SHA-256 digests..."
+        Write-Host "[7/7] Remounting Read-Only (Direct Extent I/O) and verifying SHA-256 digests..."
         $mountHandle = Start-ZeroExt4Mount -ExePath $ZeroExt4Exe -ImagePath $imgPath -MountPoint $DriveLetter -StopEventName $currentEvName
         Test-ReadOnlyManifest -RootPath "$DriveLetter\" -ExpectedManifest $manifest
         Stop-ZeroExt4Mount -MountHandle $mountHandle -StopEventName $currentEvName -MountPoint $DriveLetter
         $mountHandle = $null
 
-        Write-Host "RESULT [$modeName]: PASS"
+        Write-Host "RESULT [Direction A / $modeName]: PASS"
     } finally {
         if ($null -ne $mountHandle -and $null -ne $mountHandle.Process -and -not $mountHandle.Process.HasExited) {
             try {
@@ -472,7 +742,77 @@ foreach ($mode in $modes) {
             Remove-Item -Force $imgPath -ErrorAction SilentlyContinue
         }
     }
+
+    Write-Host ""
+    Write-Host "============================================================"
+    Write-Host "Direction B (Linux mkfs.ext4/loop -> ZeroExt4 RO & RW -> Linux loop): $modeName"
+    Write-Host "============================================================"
+
+    $linuxImgPath = Join-Path $env:TEMP ("zeroext4_linux_src_{0}_{1}.img" -f $modeName, $PID)
+    if (Test-Path $linuxImgPath) { Remove-Item -Force $linuxImgPath }
+    $mountHandle = $null
+    $currentEvName = $null
+
+    try {
+        Write-Host "[1/6] Creating & populating ${SizeMb}MB ext4 image in WSL2 Linux kernel (mount -o loop)..."
+        $linuxManifest = New-WslKernelExt4Image -WindowsDestPath $linuxImgPath -SizeMb $SizeMb -Tag "dirB_${modeName}"
+
+        $currentEvName = "Local\ZeroExt4_Verify_DirB_RO_${modeName}_$PID"
+        Write-Host "[2/6] Mounting Linux-created image Read-Only (Direct Extent I/O) and verifying 20/20 files..."
+        $mountHandle = Start-ZeroExt4Mount -ExePath $ZeroExt4Exe -ImagePath $linuxImgPath -MountPoint $DriveLetter -StopEventName $currentEvName
+        Test-ReadOnlyManifest -RootPath "$DriveLetter\" -ExpectedManifest $linuxManifest
+        Stop-ZeroExt4Mount -MountHandle $mountHandle -StopEventName $currentEvName -MountPoint $DriveLetter
+        $mountHandle = $null
+
+        $currentEvName = "Local\ZeroExt4_Verify_DirB_RW_${modeName}_$PID"
+        Write-Host "[3/6] Mounting $DriveLetter ($($mode.ExtraArgs -join ' ')) and modifying Linux-created files from Windows..."
+        $mountHandle = Start-ZeroExt4Mount -ExePath $ZeroExt4Exe -ImagePath $linuxImgPath -MountPoint $DriveLetter -StopEventName $currentEvName -ExtraArgs $mode.ExtraArgs
+        $modifiedManifest = Invoke-LinuxImageModifications -RootPath "$DriveLetter\"
+
+        Write-Host "[4/6] Unmounting cleanly via stop event..."
+        Stop-ZeroExt4Mount -MountHandle $mountHandle -StopEventName $currentEvName -MountPoint $DriveLetter
+        $mountHandle = $null
+
+        $wslLinuxImgPath = ConvertTo-WslPath -WindowsPath $linuxImgPath
+        Write-Host "[5/6] Running upstream e2fsck -fn $wslLinuxImgPath ..."
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $e2fsckOut = & wsl.exe -- e2fsck -fn $wslLinuxImgPath 2>&1 | ForEach-Object { "$_" }
+            $e2fsckExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
+        $e2fsckOut | ForEach-Object { Write-Host "  [e2fsck] $_" }
+        if ($e2fsckExit -ne 0) {
+            throw "e2fsck -fn FAILED for Direction B $modeName with exit code $e2fsckExit!"
+        }
+        Write-Host "  [e2fsck] PASSED (exit code 0)."
+
+        Write-Host "[6/6] Cross-verifying modified image via real WSL2 Linux kernel mount -t ext4 -o loop,ro..."
+        Test-WslKernelLoopManifest -WindowsImgPath $linuxImgPath -ExpectedManifest $modifiedManifest -Tag "dirB_after_${modeName}"
+
+        Write-Host "RESULT [Direction B / $modeName]: PASS"
+    } finally {
+        if ($null -ne $mountHandle -and $null -ne $mountHandle.Process -and -not $mountHandle.Process.HasExited) {
+            try {
+                if ($null -ne $currentEvName) {
+                    $ev = [System.Threading.EventWaitHandle]::OpenExisting($currentEvName)
+                    try { [void]$ev.Set() } finally { $ev.Dispose() }
+                }
+            } catch {}
+            if (-not $mountHandle.Process.WaitForExit(3000)) {
+                & $ZeroExt4Exe unmount $DriveLetter 2>&1 | Out-Null
+                if (-not $mountHandle.Process.WaitForExit(3000)) {
+                    $mountHandle.Process.Kill()
+                }
+            }
+        }
+        if (-not $KeepImage -and (Test-Path $linuxImgPath)) {
+            Remove-Item -Force $linuxImgPath -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Write-Host ""
-Write-Host "ALL MODES PASSED (rw-default + rw-fast-io): e2fsck -fn clean & RO SHA-256 verified."
+Write-Host "ALL MODES PASSED (Direction A & Direction B for rw-default + rw-fast-io): e2fsck -fn, Linux kernel loop mount & RO SHA-256 verified."
