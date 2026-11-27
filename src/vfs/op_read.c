@@ -139,9 +139,11 @@ static int ext4_vfs_standard_read_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, v
         goto out;
     }
 
-    if (!(inode.i_flags & EXT4_EXTENTS_FL) ||
+    if (!LINUX_S_ISREG(inode.i_mode) ||
+        !(inode.i_flags & EXT4_EXTENTS_FL) ||
         (inode.i_flags & EXT4_INLINE_DATA_FL) ||
-        LINUX_S_ISLNK(inode.i_mode)) {
+        ext2fs_has_feature_bigalloc(ctx->fs->super) ||
+        (ctx->fs->flags & EXT2_FLAG_SHARE_DUP)) {
         rc = ext4_vfs_standard_read_fallback_locked(ctx, ino, buf, offset, length, out_read);
         goto out;
     }
@@ -216,6 +218,7 @@ static int ext4_vfs_standard_read_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, v
                     blk64_t off_in_ext = lblk - ext.e_lblk;
                     blk64_t avail_blks = (blk64_t)ext.e_len - off_in_ext;
                     uint64_t max_bytes = avail_blks * (uint64_t)bsz - (uint64_t)in_blk;
+                    /* Bound batch size to STD_READ_MAX_RUN_SIZE (4 MiB) to prevent uint32_t truncation */
                     uint64_t cap_bytes = (uint64_t)STD_READ_MAX_RUN_SIZE - (uint64_t)in_blk;
                     uint64_t take64 = (rem < max_bytes) ? rem : max_bytes;
                     if (take64 > cap_bytes) take64 = cap_bytes;
@@ -253,6 +256,7 @@ static int ext4_vfs_standard_read_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, v
                     }
                 }
                 {
+                    /* Bound batch size to STD_READ_MAX_RUN_SIZE (4 MiB) to prevent uint32_t truncation */
                     uint64_t take64 = (rem < hole_bytes) ? rem : hole_bytes;
                     if (take64 > STD_READ_MAX_RUN_SIZE) take64 = STD_READ_MAX_RUN_SIZE;
                     take = (uint32_t)take64;

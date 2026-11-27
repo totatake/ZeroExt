@@ -897,6 +897,9 @@ static errcode_t win32_write_blk64(io_channel channel, unsigned long long block,
         } else {
             cache_invalidate_range(priv, logical_off, len, channel->block_size);
         }
+    } else {
+        /* Invalidate even on partial/failed write so stale cached data cannot survive */
+        cache_invalidate_range(priv, logical_off, len, channel->block_size);
     }
     return retval;
 }
@@ -914,9 +917,7 @@ static errcode_t win32_write_byte(io_channel channel, unsigned long offset, int 
     if (count < 0) return EXT2_ET_INVALID_ARGUMENT;
 
     retval = win32_aligned_write(priv, (uint64_t)offset, buf, (size_t)count);
-    if (retval == 0) {
-        cache_invalidate_range(priv, (uint64_t)offset, (size_t)count, channel->block_size);
-    }
+    cache_invalidate_range(priv, (uint64_t)offset, (size_t)count, channel->block_size);
     return retval;
 }
 

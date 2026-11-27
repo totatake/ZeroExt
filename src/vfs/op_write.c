@@ -237,8 +237,21 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                                                            want_pblk, grow_ask, NULL,
                                                            &pblk, &plen);
                     if (ret_alloc == 0 && pblk == want_pblk && plen > 0) {
+                        uint64_t max_bytes;
+                        uint32_t take;
                         if (plen > grow_ask) plen = grow_ask;
+                        max_bytes = plen * (uint64_t)bsz - (uint64_t)in_blk;
+                        take = (rem_bytes < max_bytes) ? (uint32_t)rem_bytes : (uint32_t)max_bytes;
+
+                        /* Keep blocks marked in bitmap while writing data before committing metadata */
                         ext2fs_block_alloc_stats_range(fs, pblk, (blk_t)plen, +1);
+                        retval = write_data_blocks(fs, pblk, (const uint8_t *)buf + done,
+                                                   in_blk, take, 0, blk_buf);
+                        if (retval != 0) {
+                            ext2fs_block_alloc_stats_range(fs, pblk, (blk_t)plen, -1);
+                            break;
+                        }
+
                         left_ext.e_len += (__u32)plen;
                         retval = ext2fs_extent_replace(ehandle, 0, &left_ext);
                         if (retval != 0) {
@@ -247,6 +260,7 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                         }
                         ext2fs_iblk_add_blocks(fs, (struct ext2_inode *)full_ino, plen);
                         inode_dirty = 1;
+                        done += take;
                         extended_left = 1;
                     }
                 }
@@ -257,12 +271,24 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                     ? (left_ext.e_pblk + (blk64_t)left_ext.e_len)
                     : ext2fs_find_inode_goal(fs, ino, (struct ext2_inode *)full_ino, cur_lblk);
                 struct ext2fs_extent newex;
+                uint64_t max_bytes;
+                uint32_t take;
 
                 retval = ext2fs_new_range(fs, 0, goal, max_hole_blks, NULL, &pblk, &plen);
                 if (retval != 0) break;
                 if (plen > max_hole_blks) plen = max_hole_blks;
 
+                max_bytes = plen * (uint64_t)bsz - (uint64_t)in_blk;
+                take = (rem_bytes < max_bytes) ? (uint32_t)rem_bytes : (uint32_t)max_bytes;
+
+                /* Keep blocks marked in bitmap first so extent-tree splits cannot reuse them */
                 ext2fs_block_alloc_stats_range(fs, pblk, (blk_t)plen, +1);
+                retval = write_data_blocks(fs, pblk, (const uint8_t *)buf + done,
+                                           in_blk, take, 0, blk_buf);
+                if (retval != 0) {
+                    ext2fs_block_alloc_stats_range(fs, pblk, (blk_t)plen, -1);
+                    break;
+                }
 
                 memset(&newex, 0, sizeof(newex));
                 newex.e_lblk = cur_lblk;
@@ -282,14 +308,6 @@ static errcode_t ext4_vfs_write_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                 ext2fs_iblk_add_blocks(fs, (struct ext2_inode *)full_ino, plen);
                 inode_dirty = 1;
                 retval = ext2fs_extent_fix_parents(ehandle);
-                if (retval != 0) break;
-            }
-
-            {
-                uint64_t max_bytes = plen * (uint64_t)bsz - (uint64_t)in_blk;
-                uint32_t take = (rem_bytes < max_bytes) ? (uint32_t)rem_bytes : (uint32_t)max_bytes;
-                retval = write_data_blocks(fs, pblk, (const uint8_t *)buf + done,
-                                           in_blk, take, 0, blk_buf);
                 if (retval != 0) break;
                 done += take;
             }
@@ -360,6 +378,7 @@ int ext4_vfs_write_stat(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, ui
 
             if (ctx->enable_rw_fast_io &&
                 cur_len > 0 &&
+                LINUX_S_ISREG(full_ino.i_mode) &&
                 (full_ino.i_flags & EXT4_EXTENTS_FL) &&
                 !(full_ino.i_flags & EXT4_INLINE_DATA_FL) &&
                 !ext2fs_has_feature_bigalloc(ctx->fs->super) &&
