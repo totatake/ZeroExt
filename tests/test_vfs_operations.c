@@ -1995,6 +1995,399 @@ static int test_rw_fast_io_fsx_fuzzer(void) {
     return 0;
 }
 
+static void mt_fill_stripe(uint8_t *buf, size_t len, uint32_t seed) {
+    uint32_t state = seed ? seed : 1U;
+    for (size_t i = 0; i < len; i++) {
+        state = state * 1664525U + 1013904223U;
+        buf[i] = (uint8_t)((state >> 16) & 0xFFU);
+    }
+}
+
+static uint32_t mt_stripe_seed(int tid, int iter, int band) {
+    return 0xA1000001U + (uint32_t)tid * 0x01000000U + (uint32_t)iter * 0x00010001U + (uint32_t)band * 0x00100000U;
+}
+
+typedef struct mt_fast_stress_ctx {
+    ext4_vfs_ctx_t *ctx;
+    ext2_ino_t      shared_ino;
+    ext2_ino_t      trunc_ino;
+    volatile LONG   stop_flag;
+} mt_fast_stress_ctx_t;
+
+typedef struct mt_fast_worker_arg {
+    mt_fast_stress_ctx_t *sc;
+    int                   tid;
+    uint8_t              *wbuf;
+    uint8_t              *rbuf;
+    size_t                buf_sz;
+    int                   error;
+} mt_fast_worker_arg_t;
+
+static DWORD WINAPI mt_fast_stripe_writer(LPVOID param) {
+    mt_fast_worker_arg_t *a = (mt_fast_worker_arg_t *)param;
+    mt_fast_stress_ctx_t *sc = a->sc;
+    const uint64_t low_base = (uint64_t)a->tid * 16384ULL;
+    const uint64_t mid_base = 65536ULL + (uint64_t)a->tid * 16384ULL;
+    const uint64_t high_base = 262144ULL + (uint64_t)a->tid * 16384ULL;
+
+    for (int iter = 0; iter < 60; iter++) {
+        uint32_t w = 0, got = 0;
+        uint64_t off_low = low_base;
+        uint32_t len_low = 16384U;
+        if (iter < 59 && (iter & 1) != 0) {
+            off_low = low_base + 333ULL;
+            len_low = 15000U;
+        }
+
+        mt_fill_stripe(a->wbuf, len_low, mt_stripe_seed(a->tid, iter, 0));
+        if (ext4_vfs_write(sc->ctx, sc->shared_ino, a->wbuf, off_low, len_low, 0, &w, NULL) != 0 || w != len_low) {
+            a->error = 1;
+            return 1;
+        }
+
+        mt_fill_stripe(a->wbuf, 16384U, mt_stripe_seed(a->tid, iter, 1));
+        if (ext4_vfs_write(sc->ctx, sc->shared_ino, a->wbuf, mid_base, 16384U, 0, &w, NULL) != 0 || w != 16384U) {
+            a->error = 2;
+            return 1;
+        }
+
+        mt_fill_stripe(a->wbuf, 12288U, mt_stripe_seed(a->tid, iter, 2));
+        if (ext4_vfs_write(sc->ctx, sc->shared_ino, a->wbuf, high_base, 12288U, 0, &w, NULL) != 0 || w != 12288U) {
+            a->error = 3;
+            return 1;
+        }
+
+        if (iter == 59) {
+            /* Read-After-Write coherence verification while sibling writers/readers remain active */
+            mt_fill_stripe(a->wbuf, 16384U, mt_stripe_seed(a->tid, 59, 0));
+            if (ext4_vfs_read(sc->ctx, sc->shared_ino, a->rbuf, low_base, 16384U, &got) != 0 ||
+                got != 16384U || memcmp(a->rbuf, a->wbuf, 16384U) != 0) {
+                a->error = 4;
+                return 1;
+            }
+            mt_fill_stripe(a->wbuf, 16384U, mt_stripe_seed(a->tid, 59, 1));
+            if (ext4_vfs_read(sc->ctx, sc->shared_ino, a->rbuf, mid_base, 16384U, &got) != 0 ||
+                got != 16384U || memcmp(a->rbuf, a->wbuf, 16384U) != 0) {
+                a->error = 5;
+                return 1;
+            }
+            mt_fill_stripe(a->wbuf, 12288U, mt_stripe_seed(a->tid, 59, 2));
+            if (ext4_vfs_read(sc->ctx, sc->shared_ino, a->rbuf, high_base, 12288U, &got) != 0 ||
+                got != 12288U || memcmp(a->rbuf, a->wbuf, 12288U) != 0) {
+                a->error = 6;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static DWORD WINAPI mt_fast_trunc_writer(LPVOID param) {
+    mt_fast_worker_arg_t *a = (mt_fast_worker_arg_t *)param;
+    mt_fast_stress_ctx_t *sc = a->sc;
+    uint32_t rng = 0x9E3779B9U;
+
+    for (int iter = 0; iter < 100; iter++) {
+        uint32_t w = 0;
+        uint64_t off = (uint64_t)((iter % 5) * 32768U + (iter & 1 ? 517U : 0U));
+        uint32_t len = (uint32_t)(4096U + ((iter * 1777U) % 16384U));
+        rng = rng * 1664525U + 1013904223U;
+        mt_fill_stripe(a->wbuf, len, rng);
+
+        if (ext4_vfs_write(sc->ctx, sc->trunc_ino, a->wbuf, off, len, 0, &w, NULL) != 0 || w != len) {
+            a->error = 10;
+            return 1;
+        }
+
+        if ((iter % 3) == 0) {
+            uint64_t new_sz = (iter & 1) ? 163840ULL : (uint64_t)(8192U + (iter % 7) * 11000U);
+            if (ext4_vfs_truncate(sc->ctx, sc->trunc_ino, new_sz) != 0) {
+                a->error = 11;
+                return 1;
+            }
+        }
+
+        if ((iter % 20) == 19) {
+            if (ext4_vfs_flush(sc->ctx) != 0) {
+                a->error = 12;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static DWORD WINAPI mt_fast_churn_writer(LPVOID param) {
+    mt_fast_worker_arg_t *a = (mt_fast_worker_arg_t *)param;
+    mt_fast_stress_ctx_t *sc = a->sc;
+
+    for (int k = 0; k < 60; k++) {
+        char p1[128], p2[128];
+        ext2_ino_t ino = 0;
+        uint32_t len = (uint32_t)(12288U + (k & 3) * 2048U);
+        uint32_t w = 0;
+
+        snprintf(p1, sizeof(p1), "/mt/churn_%02d.bin", k % 16);
+        snprintf(p2, sizeof(p2), "/mt/churn_ren_%02d.bin", k % 16);
+        mt_fill_stripe(a->wbuf, len, 0x55000000U + (uint32_t)k);
+
+        if (ext4_vfs_create(sc->ctx, p1, 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &ino) != 0) {
+            a->error = 20;
+            return 1;
+        }
+        if (ext4_vfs_write(sc->ctx, ino, a->wbuf, 0, len, 0, &w, NULL) != 0 || w != len) {
+            a->error = 21;
+            return 1;
+        }
+        if (ext4_vfs_rename(sc->ctx, p1, p2, 1) != 0) {
+            a->error = 22;
+            return 1;
+        }
+        if (ext4_vfs_unlink(sc->ctx, p2) != 0) {
+            a->error = 23;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static DWORD WINAPI mt_fast_parallel_reader(LPVOID param) {
+    mt_fast_worker_arg_t *a = (mt_fast_worker_arg_t *)param;
+    mt_fast_stress_ctx_t *sc = a->sc;
+    int iter = 0;
+
+    while (InterlockedCompareExchange(&sc->stop_flag, 0, 0) == 0) {
+        uint32_t got = 0;
+        ext4_stat_t st;
+        char p[128];
+
+        /* Read low region */
+        if (ext4_vfs_read(sc->ctx, sc->shared_ino, a->rbuf, 0, 65536U, &got) != 0) {
+            a->error = 30;
+            return 1;
+        }
+
+        /* Read 128 KB sparse hole [131072..262144); any bytes returned must strictly be 0x00 */
+        got = 0;
+        memset(a->rbuf, 0xAA, 131072U);
+        if (ext4_vfs_read(sc->ctx, sc->shared_ino, a->rbuf, 131072ULL, 131072U, &got) != 0) {
+            a->error = 31;
+            return 1;
+        }
+        for (uint32_t i = 0; i < got; i++) {
+            if (a->rbuf[i] != 0) {
+                a->error = 32;
+                return 1;
+            }
+        }
+
+        /* Read high region */
+        got = 0;
+        if (ext4_vfs_read(sc->ctx, sc->shared_ino, a->rbuf, 262144ULL, 61440U, &got) != 0) {
+            a->error = 33;
+            return 1;
+        }
+
+        /* Read concurrently truncated file */
+        got = 0;
+        if (ext4_vfs_read(sc->ctx, sc->trunc_ino, a->rbuf, 0, 16384U, &got) != 0) {
+            a->error = 34;
+            return 1;
+        }
+        got = 0;
+        if (ext4_vfs_read(sc->ctx, sc->trunc_ino, a->rbuf, 65536ULL, 16384U, &got) != 0) {
+            a->error = 35;
+            return 1;
+        }
+
+        /* Stat churned paths across dentry invalidations */
+        snprintf(p, sizeof(p), "/mt/churn_%02d.bin", (a->tid + iter) % 16);
+        int rc = ext4_vfs_stat(sc->ctx, p, &st);
+        if (rc != 0 && rc != -ENOENT) {
+            a->error = 36;
+            return 1;
+        }
+        iter++;
+    }
+    return 0;
+}
+
+typedef struct mt_fast_res {
+    char img_path[MAX_PATH];
+    mt_fast_stress_ctx_t *sc;
+    HANDLE writers[6];
+    HANDLE readers[4];
+    mt_fast_worker_arg_t wargs[6];
+    mt_fast_worker_arg_t rargs[4];
+    uint8_t *full_buf;
+    uint8_t *exp_buf;
+} mt_fast_res_t;
+
+static int test_rw_fast_io_concurrent_rw_stress_impl(mt_fast_res_t *r) {
+    enum { SHARED_FINAL_LEN = 262144 + 3 * 16384 + 12288 };
+    ext4_mount_config_t cfg;
+    ext4_stat_t st;
+    uint32_t got = 0;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(r->img_path, 32ULL * 1024ULL * 1024ULL, "FASTMT"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = r->img_path;
+    cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &r->sc->ctx));
+    TEST_ASSERT_EQ_INT(1, r->sc->ctx->enable_rw_fast_io);
+    TEST_ASSERT_EQ_INT(0, r->sc->ctx->enable_direct_io);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(r->sc->ctx, "/mt", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(r->sc->ctx, "/mt/shared.bin", 0, 0644,
+                                          FILE_ATTRIBUTE_ARCHIVE, &r->sc->shared_ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(r->sc->ctx, "/mt/hot_trunc.bin", 0, 0644,
+                                          FILE_ATTRIBUTE_ARCHIVE, &r->sc->trunc_ino));
+
+    /* Launch 4 parallel readers first, then 6 concurrent writers (4 shared stripe + 1 trunc + 1 churn) */
+    for (int t = 0; t < 4; t++) {
+        r->readers[t] = CreateThread(NULL, 0, mt_fast_parallel_reader, &r->rargs[t], 0, NULL);
+        TEST_ASSERT(r->readers[t] != NULL);
+    }
+    for (int t = 0; t < 4; t++) {
+        r->writers[t] = CreateThread(NULL, 0, mt_fast_stripe_writer, &r->wargs[t], 0, NULL);
+        TEST_ASSERT(r->writers[t] != NULL);
+    }
+    r->writers[4] = CreateThread(NULL, 0, mt_fast_trunc_writer, &r->wargs[4], 0, NULL);
+    TEST_ASSERT(r->writers[4] != NULL);
+    r->writers[5] = CreateThread(NULL, 0, mt_fast_churn_writer, &r->wargs[5], 0, NULL);
+    TEST_ASSERT(r->writers[5] != NULL);
+
+    for (int t = 0; t < 6; t++) {
+        WaitForSingleObject(r->writers[t], INFINITE);
+    }
+    InterlockedExchange(&r->sc->stop_flag, 1);
+    for (int t = 0; t < 4; t++) {
+        WaitForSingleObject(r->readers[t], INFINITE);
+    }
+
+    for (int t = 0; t < 6; t++) {
+        CloseHandle(r->writers[t]);
+        r->writers[t] = NULL;
+        TEST_ASSERT_EQ_INT(0, r->wargs[t].error);
+    }
+    for (int t = 0; t < 4; t++) {
+        CloseHandle(r->readers[t]);
+        r->readers[t] = NULL;
+        TEST_ASSERT_EQ_INT(0, r->rargs[t].error);
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(r->sc->ctx));
+    r->sc->ctx = NULL;
+
+    /* Full filesystem structural consistency check (metadata + block bitmap + extent tree + csum) */
+    TEST_ASSERT_EQ_INT(0, verify_ext4_image_integrity(r->img_path));
+
+    /* Remount Read-Only (default Direct Extent I/O ON) and verify final stripes + 128 KB hole */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = r->img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &r->sc->ctx));
+    TEST_ASSERT_EQ_INT(1, r->sc->ctx->enable_direct_io);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(r->sc->ctx, "/mt/shared.bin", &st));
+    TEST_ASSERT_EQ_INT(SHARED_FINAL_LEN, st.size);
+    memset(r->full_buf, 0xCC, SHARED_FINAL_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->sc->ctx, st.ino, r->full_buf, 0, SHARED_FINAL_LEN, &got));
+    TEST_ASSERT_EQ_INT(SHARED_FINAL_LEN, got);
+
+    for (int t = 0; t < 4; t++) {
+        size_t low_off = (size_t)t * 16384U;
+        size_t mid_off = 65536U + (size_t)t * 16384U;
+        size_t high_off = 262144U + (size_t)t * 16384U;
+
+        mt_fill_stripe(r->exp_buf, 16384U, mt_stripe_seed(t, 59, 0));
+        TEST_ASSERT_EQ_INT(0, memcmp(r->full_buf + low_off, r->exp_buf, 16384U));
+
+        mt_fill_stripe(r->exp_buf, 16384U, mt_stripe_seed(t, 59, 1));
+        TEST_ASSERT_EQ_INT(0, memcmp(r->full_buf + mid_off, r->exp_buf, 16384U));
+
+        mt_fill_stripe(r->exp_buf, 12288U, mt_stripe_seed(t, 59, 2));
+        TEST_ASSERT_EQ_INT(0, memcmp(r->full_buf + high_off, r->exp_buf, 12288U));
+    }
+
+    for (size_t i = 131072U; i < 262144U; i++) {
+        if (r->full_buf[i] != 0) {
+            TEST_ASSERT_EQ_INT(0, r->full_buf[i]);
+        }
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(r->sc->ctx));
+    r->sc->ctx = NULL;
+    return 0;
+}
+
+static int test_rw_fast_io_concurrent_rw_stress(void) {
+    mt_fast_res_t *r = (mt_fast_res_t *)calloc(1, sizeof(mt_fast_res_t));
+    int rc = 1;
+    int alloc_ok = 0;
+
+    TEST_ASSERT(r != NULL);
+    test_make_temp_path(r->img_path, sizeof(r->img_path), "vfs_fast_mt_stress.img");
+    DeleteFileA(r->img_path);
+
+    r->sc = (mt_fast_stress_ctx_t *)calloc(1, sizeof(mt_fast_stress_ctx_t));
+    r->full_buf = (uint8_t *)calloc(1, 327680U);
+    r->exp_buf = (uint8_t *)calloc(1, 32768U);
+    alloc_ok = (r->sc != NULL && r->full_buf != NULL && r->exp_buf != NULL);
+
+    for (int t = 0; t < 6; t++) {
+        r->wargs[t].sc = r->sc;
+        r->wargs[t].tid = t;
+        r->wargs[t].buf_sz = 32768U;
+        r->wargs[t].wbuf = (uint8_t *)calloc(1, r->wargs[t].buf_sz);
+        r->wargs[t].rbuf = (uint8_t *)calloc(1, r->wargs[t].buf_sz);
+        if (!r->wargs[t].wbuf || !r->wargs[t].rbuf) alloc_ok = 0;
+    }
+    for (int t = 0; t < 4; t++) {
+        r->rargs[t].sc = r->sc;
+        r->rargs[t].tid = t;
+        r->rargs[t].buf_sz = 131072U;
+        r->rargs[t].rbuf = (uint8_t *)calloc(1, r->rargs[t].buf_sz);
+        if (!r->rargs[t].rbuf) alloc_ok = 0;
+    }
+
+    if (alloc_ok) {
+        rc = test_rw_fast_io_concurrent_rw_stress_impl(r);
+    }
+
+    if (r->sc) {
+        InterlockedExchange(&r->sc->stop_flag, 1);
+    }
+    for (int t = 0; t < 6; t++) {
+        if (r->writers[t]) {
+            WaitForSingleObject(r->writers[t], INFINITE);
+            CloseHandle(r->writers[t]);
+        }
+        free(r->wargs[t].wbuf);
+        free(r->wargs[t].rbuf);
+    }
+    for (int t = 0; t < 4; t++) {
+        if (r->readers[t]) {
+            WaitForSingleObject(r->readers[t], INFINITE);
+            CloseHandle(r->readers[t]);
+        }
+        free(r->rargs[t].rbuf);
+    }
+    if (r->sc && r->sc->ctx) ext4_vfs_unmount(r->sc->ctx);
+    DeleteFileA(r->img_path);
+    free(r->sc);
+    free(r->full_buf);
+    free(r->exp_buf);
+    free(r);
+
+    TEST_ASSERT(alloc_ok);
+    return rc;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -2013,5 +2406,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_rw_uninit_extent_fallback_and_truncate_stress);
     RUN_TEST(test_rw_fast_io_multileaf_hole_boundary_write_and_read);
     RUN_TEST(test_rw_fast_io_fsx_fuzzer);
+    RUN_TEST(test_rw_fast_io_concurrent_rw_stress);
     return suite_failures;
 }

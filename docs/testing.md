@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **38 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **39 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -71,6 +71,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_rw_uninit_extent_fallback_and_truncate_stress` | `--rw --rw-fast-io` における初期化済＋`UNINIT`＋スパースホール横断書込時の標準フォールバック切替、`truncate`＋再伸長ゼロ埋め、削除後ブロック再利用混合ストレス＋全件整合性検査 |
 | `test_rw_fast_io_multileaf_hole_boundary_write_and_read` | 1KB ブロック＋3,800 断片で構築した `eh_depth == 2`（複数 `level-1` サブツリー）の境界ホール横断読取・書込および EOF 追記（`find_next_leaf_after` 重複／ゼロ読込防止＋`verify_ext4_image_integrity` 検証） |
 | `test_rw_fast_io_fsx_fuzzer` | `fsx` 型決定論的ランダムファザー（4KB 1,200回＋1KB 1,500回＋既定 `--rw` 300回、ランダム `write`/`read`/`truncate`、シャドウバッファ 1B 照合、チェックポイントごとの `verify_ext4_image_integrity`＋RO Direct I/O 再読込） |
+| `test_rw_fast_io_concurrent_rw_stress` | `--rw --rw-fast-io` 有効下での 10 スレッド同時並列 RW ストレス（同一 iノード異ストライプ 4 書込＋128KB スパースホール維持・Read-After-Write 検証、別ファイル `truncate`/`flush`、作成/リネーム/削除競合、並列 4 読込）＋ `verify_ext4_image_integrity` ＋ RO Direct I/O 全ストライプ照合 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 
