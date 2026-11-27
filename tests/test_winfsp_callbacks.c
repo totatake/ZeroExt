@@ -400,9 +400,348 @@ static int test_winfsp_safe_unmount_target(void) {
     return 0;
 }
 
+static void fill_deterministic_pattern(uint8_t *buf, size_t len, uint32_t seed) {
+    uint32_t state = seed ? seed : 1U;
+    for (size_t i = 0; i < len; i++) {
+        state = state * 1664525U + 1013904223U;
+        buf[i] = (uint8_t)((state >> 16) & 0xFFU);
+    }
+}
+
+typedef struct rw_fast_io_e2e_res {
+    char img_path[MAX_PATH];
+    ext4_vfs_ctx_t *ctx;
+    FSP_FILE_SYSTEM *fs;
+    PVOID dir_ctx;
+    PVOID file_ctx;
+    uint8_t *shadow;
+    uint8_t *io_buf;
+    uint8_t *aux_buf;
+} rw_fast_io_e2e_res_t;
+
+static int test_winfsp_rw_fast_io_e2e_impl(rw_fast_io_e2e_res_t *r) {
+    enum {
+        SEQ_INIT_LEN   = 131072,
+        PATCH_OFF      = 4093,
+        PATCH_LEN      = 5000,
+        APPEND_LEN     = 3333,
+        STREAM_LEN     = 134405,
+        CONSTR_TAIL    = 100,
+        CONSTR_REQ_LEN = 500
+    };
+    const FSP_FILE_SYSTEM_INTERFACE *iface = NULL;
+    ext4_mount_config_t cfg;
+    FSP_FSCTL_VOLUME_PARAMS vp;
+    FSP_FSCTL_FILE_INFO fi;
+    UINT8 di_buf[sizeof(FSP_FSCTL_DIR_INFO) + (EXT2_NAME_LEN + 1) * sizeof(WCHAR)];
+    FSP_FSCTL_DIR_INFO *di = (FSP_FSCTL_DIR_INFO *)di_buf;
+    ULONG transferred = 0;
+    UINT32 attrs = 0;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(r->img_path, 16ULL * 1024ULL * 1024ULL, "WINFSPFAST"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = r->img_path;
+    cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &r->ctx));
+    TEST_ASSERT_EQ_INT(1, r->ctx->enable_rw_fast_io);
+    TEST_ASSERT_EQ_INT(0, r->ctx->enable_direct_io);
+
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_create_test_fs(r->ctx, &r->fs));
+    iface = winfsp_driver_get_interface();
+    TEST_ASSERT(iface != NULL);
+
+    winfsp_driver_build_volume_params(r->ctx, &vp);
+    TEST_ASSERT_EQ_INT(0, vp.ReadOnlyVolume);
+    TEST_ASSERT_EQ_INT(1000, vp.FileInfoTimeout);
+    TEST_ASSERT_EQ_INT(1, vp.UmFileContextIsUserContext2);
+
+    /* Create \fast directory & \fast\stream.bin */
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Create(r->fs, L"\\fast", FILE_DIRECTORY_FILE, FILE_GENERIC_WRITE,
+                                     FILE_ATTRIBUTE_DIRECTORY, NULL, 0, &r->dir_ctx, &fi));
+    iface->Cleanup(r->fs, r->dir_ctx, L"\\fast", 0);
+    iface->Close(r->fs, r->dir_ctx);
+    r->dir_ctx = NULL;
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Create(r->fs, L"\\fast\\stream.bin", FILE_NON_DIRECTORY_FILE,
+                                     FILE_WRITE_DATA | FILE_READ_DATA, FILE_ATTRIBUTE_ARCHIVE,
+                                     NULL, 0, &r->file_ctx, &fi));
+
+    /* Sequential 128 KB write */
+    fill_deterministic_pattern(r->shadow, SEQ_INIT_LEN, 0x11111111U);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->shadow, 0, SEQ_INIT_LEN,
+                                    FALSE, FALSE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(SEQ_INIT_LEN, transferred);
+    TEST_ASSERT_EQ_INT(SEQ_INIT_LEN, fi.FileSize);
+
+    /* Unaligned partial overwrite at offset 4093, length 5000 */
+    fill_deterministic_pattern(r->io_buf, PATCH_LEN, 0x22222222U);
+    memcpy(r->shadow + PATCH_OFF, r->io_buf, PATCH_LEN);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->io_buf, PATCH_OFF, PATCH_LEN,
+                                    FALSE, FALSE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(PATCH_LEN, transferred);
+    TEST_ASSERT_EQ_INT(SEQ_INIT_LEN, fi.FileSize);
+
+    /* WriteToEndOfFile = TRUE append of 3333 bytes (Offset ignored) */
+    fill_deterministic_pattern(r->io_buf, APPEND_LEN, 0x33333333U);
+    memcpy(r->shadow + SEQ_INIT_LEN, r->io_buf, APPEND_LEN);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->io_buf, 0, APPEND_LEN,
+                                    TRUE, FALSE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(APPEND_LEN, transferred);
+    TEST_ASSERT_EQ_INT(STREAM_LEN, fi.FileSize);
+
+    /* ConstrainedIo = TRUE crossing EOF (must clamp to remaining 100 bytes) */
+    fill_deterministic_pattern(r->io_buf, CONSTR_REQ_LEN, 0x44444444U);
+    memcpy(r->shadow + (STREAM_LEN - CONSTR_TAIL), r->io_buf, CONSTR_TAIL);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->io_buf,
+                                    (UINT64)(STREAM_LEN - CONSTR_TAIL), CONSTR_REQ_LEN,
+                                    FALSE, TRUE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(CONSTR_TAIL, transferred);
+    TEST_ASSERT_EQ_INT(STREAM_LEN, fi.FileSize);
+
+    /* ConstrainedIo = TRUE starting at EOF (must write 0 bytes and succeed) */
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->io_buf,
+                                    (UINT64)STREAM_LEN, 256,
+                                    FALSE, TRUE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(0, transferred);
+    TEST_ASSERT_EQ_INT(STREAM_LEN, fi.FileSize);
+
+    /* Unaligned chunked readback (13000-byte chunks) + EOF check */
+    {
+        size_t off = 0;
+        while (off < STREAM_LEN) {
+            transferred = 0;
+            TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                               iface->Read(r->fs, r->file_ctx, r->io_buf, (UINT64)off, 13000, &transferred));
+            TEST_ASSERT(transferred > 0 && transferred <= 13000);
+            TEST_ASSERT(off + transferred <= STREAM_LEN);
+            TEST_ASSERT_EQ_INT(0, memcmp(r->io_buf, r->shadow + off, transferred));
+            off += transferred;
+        }
+        TEST_ASSERT_EQ_INT(STREAM_LEN, off);
+        TEST_ASSERT_EQ_INT(STATUS_END_OF_FILE,
+                           iface->Read(r->fs, r->file_ctx, r->io_buf, (UINT64)STREAM_LEN, 64, &transferred));
+    }
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->Flush(r->fs, r->file_ctx, &fi));
+    iface->Cleanup(r->fs, r->file_ctx, L"\\fast\\stream.bin", 0);
+    iface->Close(r->fs, r->file_ctx);
+    r->file_ctx = NULL;
+
+    /* Sparse hole + SetFileSize + Overwrite on \fast\sparse.bin */
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Create(r->fs, L"\\fast\\sparse.bin", FILE_NON_DIRECTORY_FILE,
+                                     FILE_WRITE_DATA | FILE_READ_DATA, FILE_ATTRIBUTE_ARCHIVE,
+                                     NULL, 0, &r->file_ctx, &fi));
+    fill_deterministic_pattern(r->aux_buf, 5000, 0x55555555U);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->aux_buf, 0, 5000,
+                                    FALSE, FALSE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(5000, transferred);
+
+    fill_deterministic_pattern(r->io_buf, 6000, 0x66666666U);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->io_buf, 131072, 6000,
+                                    FALSE, FALSE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(6000, transferred);
+
+    /* Read 131072 bytes starting at 4096 spanning [4096..5000), hole [5000..131072), [131072..135168) */
+    memset(r->io_buf, 0xAA, 131072);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Read(r->fs, r->file_ctx, r->io_buf, 4096, 131072, &transferred));
+    TEST_ASSERT_EQ_INT(131072, transferred);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->io_buf, r->aux_buf + 4096, 5000 - 4096));
+    for (size_t i = 5000 - 4096; i < 131072 - 4096; i++) {
+        if (r->io_buf[i] != 0) {
+            TEST_ASSERT_EQ_INT(0, r->io_buf[i]);
+        }
+    }
+    fill_deterministic_pattern(r->aux_buf, 6000, 0x66666666U);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->io_buf + (131072 - 4096), r->aux_buf, 4096));
+
+    /* SetFileSize truncate, allocation grow (no size change), EOF extend (zero-fill), allocation shrink */
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->SetFileSize(r->fs, r->file_ctx, 65536, FALSE, &fi));
+    TEST_ASSERT_EQ_INT(65536, fi.FileSize);
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->SetFileSize(r->fs, r->file_ctx, 90000, TRUE, &fi));
+    TEST_ASSERT_EQ_INT(65536, fi.FileSize);
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->SetFileSize(r->fs, r->file_ctx, 90000, FALSE, &fi));
+    TEST_ASSERT_EQ_INT(90000, fi.FileSize);
+    memset(r->io_buf, 0xCC, 24464);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Read(r->fs, r->file_ctx, r->io_buf, 65536, 24464, &transferred));
+    TEST_ASSERT_EQ_INT(24464, transferred);
+    for (size_t i = 0; i < 24464; i++) {
+        if (r->io_buf[i] != 0) {
+            TEST_ASSERT_EQ_INT(0, r->io_buf[i]);
+        }
+    }
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->SetFileSize(r->fs, r->file_ctx, 4000, TRUE, &fi));
+    TEST_ASSERT_EQ_INT(4000, fi.FileSize);
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Overwrite(r->fs, r->file_ctx, FILE_ATTRIBUTE_ARCHIVE, TRUE, 0, &fi));
+    TEST_ASSERT_EQ_INT(0, fi.FileSize);
+    TEST_ASSERT_EQ_INT(STATUS_END_OF_FILE,
+                       iface->Read(r->fs, r->file_ctx, r->io_buf, 0, 64, &transferred));
+
+    fill_deterministic_pattern(r->io_buf, 8192, 0x77777777U);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Write(r->fs, r->file_ctx, r->io_buf, 0, 8192,
+                                    FALSE, FALSE, &transferred, &fi));
+    TEST_ASSERT_EQ_INT(8192, transferred);
+    TEST_ASSERT_EQ_INT(8192, fi.FileSize);
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->Flush(r->fs, r->file_ctx, &fi));
+    iface->Cleanup(r->fs, r->file_ctx, L"\\fast\\sparse.bin", 0);
+    iface->Close(r->fs, r->file_ctx);
+    r->file_ctx = NULL;
+
+    /* Rename + GetDirInfoByName + SetDelete cancel & commit */
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Open(r->fs, L"\\fast\\sparse.bin", FILE_NON_DIRECTORY_FILE,
+                                   DELETE, &r->file_ctx, &fi));
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Rename(r->fs, r->file_ctx, L"\\fast\\sparse.bin",
+                                     L"\\fast\\sparse_renamed.bin", FALSE));
+    iface->Close(r->fs, r->file_ctx);
+    r->file_ctx = NULL;
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Open(r->fs, L"\\fast", FILE_DIRECTORY_FILE, FILE_LIST_DIRECTORY,
+                                   &r->dir_ctx, &fi));
+    memset(di_buf, 0, sizeof(di_buf));
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->GetDirInfoByName(r->fs, r->dir_ctx, L"SPARSE_RENAMED.BIN", di));
+    TEST_ASSERT_EQ_INT(8192, di->FileInfo.FileSize);
+    iface->Close(r->fs, r->dir_ctx);
+    r->dir_ctx = NULL;
+
+    /* SetDelete(TRUE) followed by SetDelete(FALSE) cancels delete on Cleanup */
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Open(r->fs, L"\\fast\\sparse_renamed.bin", FILE_NON_DIRECTORY_FILE,
+                                   DELETE, &r->file_ctx, &fi));
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->SetDelete(r->fs, r->file_ctx, L"\\fast\\sparse_renamed.bin", TRUE));
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->SetDelete(r->fs, r->file_ctx, L"\\fast\\sparse_renamed.bin", FALSE));
+    iface->Cleanup(r->fs, r->file_ctx, L"\\fast\\sparse_renamed.bin", 0);
+    iface->Close(r->fs, r->file_ctx);
+    r->file_ctx = NULL;
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->GetSecurityByName(r->fs, L"\\fast\\sparse_renamed.bin", &attrs, NULL, NULL));
+
+    /* SetDelete(TRUE) followed by Cleanup(..., 0) commits delete via handle->delete_on_close */
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Open(r->fs, L"\\fast\\sparse_renamed.bin", FILE_NON_DIRECTORY_FILE,
+                                   DELETE, &r->file_ctx, &fi));
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->SetDelete(r->fs, r->file_ctx, L"\\fast\\sparse_renamed.bin", TRUE));
+    iface->Cleanup(r->fs, r->file_ctx, L"\\fast\\sparse_renamed.bin", 0);
+    iface->Close(r->fs, r->file_ctx);
+    r->file_ctx = NULL;
+    TEST_ASSERT_EQ_INT(STATUS_OBJECT_NAME_NOT_FOUND,
+                       iface->GetSecurityByName(r->fs, L"\\fast\\sparse_renamed.bin", &attrs, NULL, NULL));
+
+    /* Unmount RW and remount Read-Only (default Direct Extent I/O ON) */
+    winfsp_driver_destroy_test_fs(r->fs);
+    r->fs = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(r->ctx));
+    r->ctx = NULL;
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = r->img_path;
+    cfg.read_only = 1;
+    cfg.enable_rw_fast_io = 0;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &r->ctx));
+    TEST_ASSERT_EQ_INT(1, r->ctx->enable_direct_io);
+    TEST_ASSERT_EQ_INT(0, r->ctx->enable_rw_fast_io);
+    TEST_ASSERT_EQ_INT(0, winfsp_driver_create_test_fs(r->ctx, &r->fs));
+
+    TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                       iface->Open(r->fs, L"\\fast\\stream.bin", FILE_NON_DIRECTORY_FILE,
+                                   FILE_READ_DATA, &r->file_ctx, &fi));
+    TEST_ASSERT_EQ_INT(STREAM_LEN, fi.FileSize);
+
+    {
+        size_t off = 0;
+        memset(r->io_buf, 0, STREAM_LEN);
+        while (off < STREAM_LEN) {
+            transferred = 0;
+            TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                               iface->Read(r->fs, r->file_ctx, r->io_buf + off,
+                                           (UINT64)off, (ULONG)(STREAM_LEN - off), &transferred));
+            TEST_ASSERT(transferred > 0);
+            off += transferred;
+        }
+        TEST_ASSERT_EQ_INT(STREAM_LEN, off);
+        TEST_ASSERT_EQ_INT(0, memcmp(r->io_buf, r->shadow, STREAM_LEN));
+    }
+
+    TEST_ASSERT_EQ_INT(STATUS_MEDIA_WRITE_PROTECTED,
+                       iface->Write(r->fs, r->file_ctx, r->io_buf, 0, 16,
+                                    FALSE, FALSE, &transferred, &fi));
+    iface->Close(r->fs, r->file_ctx);
+    r->file_ctx = NULL;
+
+    TEST_ASSERT_EQ_INT(STATUS_OBJECT_NAME_NOT_FOUND,
+                       iface->GetSecurityByName(r->fs, L"\\fast\\sparse_renamed.bin", &attrs, NULL, NULL));
+
+    winfsp_driver_destroy_test_fs(r->fs);
+    r->fs = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(r->ctx));
+    r->ctx = NULL;
+    return 0;
+}
+
+static int test_winfsp_rw_fast_io_e2e(void) {
+    rw_fast_io_e2e_res_t res;
+    const FSP_FILE_SYSTEM_INTERFACE *iface = winfsp_driver_get_interface();
+    int rc;
+
+    memset(&res, 0, sizeof(res));
+    test_make_temp_path(res.img_path, sizeof(res.img_path), "winfsp_rw_fast_io.img");
+    res.shadow = (uint8_t *)malloc(134405);
+    res.io_buf = (uint8_t *)malloc(134405);
+    res.aux_buf = (uint8_t *)malloc(6000);
+    if (!res.shadow || !res.io_buf || !res.aux_buf) {
+        int alloc_ok = (res.shadow != NULL && res.io_buf != NULL && res.aux_buf != NULL);
+        free(res.shadow);
+        free(res.io_buf);
+        free(res.aux_buf);
+        TEST_ASSERT(alloc_ok);
+        return 1;
+    }
+
+    rc = test_winfsp_rw_fast_io_e2e_impl(&res);
+
+    if (iface) {
+        if (res.file_ctx) iface->Close(res.fs, res.file_ctx);
+        if (res.dir_ctx) iface->Close(res.fs, res.dir_ctx);
+    }
+    if (res.fs) winfsp_driver_destroy_test_fs(res.fs);
+    if (res.ctx) ext4_vfs_unmount(res.ctx);
+    DeleteFileA(res.img_path);
+    free(res.shadow);
+    free(res.io_buf);
+    free(res.aux_buf);
+    return rc;
+}
+
 int run_suite_winfsp_callbacks(void) {
     int suite_failures = 0;
     RUN_TEST(test_winfsp_interface_e2e);
+    RUN_TEST(test_winfsp_rw_fast_io_e2e);
     RUN_TEST(test_winfsp_volume_params_ro_cache_timeout);
     RUN_TEST(test_winfsp_get_dir_info_by_name_and_large_readdir);
     RUN_TEST(test_winfsp_safe_unmount_target);

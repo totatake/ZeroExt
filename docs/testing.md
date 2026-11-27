@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **37 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **38 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -77,6 +77,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | テスト関数 | 主な検証内容 |
 | :--- | :--- |
 | `test_winfsp_interface_e2e` | `FSP_FILE_SYSTEM_INTERFACE` 全主要コールバック（`GetVolumeInfo`, `SetVolumeLabel`, `GetSecurityByName`, `Create`, `Open`, `Overwrite`, `Read`/`EOF`, `Write`, `Flush`, `SetBasicInfo`, `SetFileSize`, `CanDelete`, `SetDelete`, `Rename`, `ReadDirectory` Marker ページング, `Cleanup`, `Close`） |
+| `test_winfsp_rw_fast_io_e2e` | `--rw --rw-fast-io` 有効時の `FSP_FILE_SYSTEM_INTERFACE` E2E（128KB 書込・非アライン上書・`WriteToEndOfFile`・`ConstrainedIo` クランプ/EOF・スパース読取・`SetFileSize` 伸縮/`SetAllocationSize`・`Overwrite`・`Rename`・`GetDirInfoByName`・`SetDelete` 取消/確定・RO Direct Extent I/O 再読込照合） |
 | `test_winfsp_volume_params_ro_cache_timeout` | RO マウント時 `FileInfoTimeout = INFINITE` と RW/Overlay 時有限タイムアウト設定の検証 |
 | `test_winfsp_get_dir_info_by_name_and_large_readdir` | `PassQueryDirectoryFileName = 1` ＋ `FspGetDirInfoByName` 単一検索および多件数ディレクトリページネーション検証 |
 | `test_winfsp_safe_unmount_target` | `zeroext4 unmount` 時のターゲット対象検証（非 ZeroExt4 / 非 WinFsp ドライブの誤解除抑止） |
@@ -154,3 +155,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1 -Mode anal
 3. **WinFsp Overlay マウント (`--overlay`)**: Lower ファイル読取・Upper 新規作成・Copy-up 書込後に Lower イメージが 1 バイトも変更されていないこと、および別 UUID イメージに対する `.wh.__ext4_lower_id` 拒否を確認。
 4. **Upstream Zero-Patch 分離検証**: `third_party/e2fsprogs/` 配下に `_MSC_VER` / `_WIN32` / `windows.h` 等の Windows 固有記述が混入していないことを確認（[ADR-0005](adr/0005-zero-patch-e2fsprogs-compat-layer.md)）。
 5. **非破壊ヘッダ生成確認（クロスプラットフォーム可）**: `python3 scripts/generate_e2fsprogs_headers.py ...` が警告・エラーなしで終了することを確認。
+6. **WSL2 `e2fsck -fn` 実マウントクロス検証（任意・WSL2 環境）**: [scripts/verify_e2fsck_wsl.ps1](../scripts/verify_e2fsck_wsl.ps1) により、`--rw` および `--rw --rw-fast-io` の WinFsp 実マウント上で I/O ワークロードを実行後、WSL2 本家 `e2fsck -fn` 検査（Pass 1–5）および RO Direct Extent I/O 再マウント時の SHA-256 100% 一致を確認。

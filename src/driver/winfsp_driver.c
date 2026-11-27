@@ -400,7 +400,7 @@ static NTSTATUS FspWrite_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PV
             if (FileInfo) fill_fsp_file_info(&cur_st, FileInfo);
             return STATUS_SUCCESS;
         }
-        if (Offset + effective_len > cur_st.size) {
+        if ((UINT64)effective_len > cur_st.size - Offset) {
             effective_len = (ULONG)(cur_st.size - Offset);
         }
     }
