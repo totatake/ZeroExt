@@ -19,7 +19,7 @@
 | `v0.8.1` | 2026-11-25 | ドキュメント体系整理（H1 タイトル・章番号・リンク名統一、`docs/guides/development.md`・`guides/README.md` 分離、要件 ID の `REQ-F-*`/`REQ-NF-*` 移行、`README`/`overview.md` 実測値同期・重複整理） |
 | `v0.9.0` | 2026-11-26 | プロジェクト名・バイナリ・CMake ターゲット／オプション・WPF GUI・設定パスを `ZeroExt4` へ全面リネーム（破壊的変更）、[Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) 追加 |
 | `v0.10.0` | 2026-11-27 | `--rw` / 標準経路のバッチ連続エクステント書込・`fs_lock` 外並列読込・整列ゼロコピー書込最適化、`--rw-bench` ＆一貫性テスト追加、同一 SSD / WinFsp 実マウント / VFS ベンチマーク再評価 |
-| `v0.10.1` | 2026-11-27 | 独自バッチ連続エクステント読込／書込を新オプトイン **`--rw-fast-io`** へ分離し、既定 `--rw` / `--no-direct-io` を `e2fsprogs` 準拠（`ext2fs_file_read`/`write`）へ復元（GUI / `--rw-bench` 比較・ドキュメント整合含む） |
+| `v0.10.1` | 2026-11-27 | 独自バッチ連続エクステント読込／書込を新オプトイン **`--rw-fast-io`** へ分離し、既定 `--rw` / `--no-direct-io` を `e2fsprogs` 準拠へ復元（GUI / `--rw-bench` 比較含む）、多段エクステント境界ホール修正、`FspRename` 既存ディレクトリ上書拒否修正、`fsx` 型ファザー・10 スレッド並列 RW ストレス・WSL2 Linux カーネル双方向検証・WinFsp 公式 `winfsp-tests`（45/45 PASS）整備およびドキュメント整合 |
 
 ---
 
