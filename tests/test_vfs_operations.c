@@ -1778,6 +1778,223 @@ static int test_rw_fast_io_multileaf_hole_boundary_write_and_read(void) {
     return 0;
 }
 
+static uint64_t fsx_next_u64(uint64_t *state) {
+    uint64_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    return x;
+}
+
+static int run_fsx_session(const char *tag, int use_1k_blocks, int enable_fast_io,
+                           uint32_t max_file_size, uint32_t num_ops, uint64_t seed) {
+    char img_path[MAX_PATH];
+    char tmp_name[96];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext2_ino_t ino = 0;
+    ext4_stat_t st;
+    uint8_t *shadow = (uint8_t *)calloc(max_file_size, 1);
+    uint8_t *wbuf = (uint8_t *)malloc(32768U);
+    uint8_t *rbuf = (uint8_t *)malloc(65536U);
+    uint8_t *full_rbuf = (uint8_t *)malloc(max_file_size);
+    uint64_t rng = seed;
+    uint64_t shadow_size = 0;
+
+    TEST_ASSERT(shadow != NULL && wbuf != NULL && rbuf != NULL && full_rbuf != NULL);
+    memset(&st, 0, sizeof(st));
+    snprintf(tmp_name, sizeof(tmp_name), "vfs_fsx_%s.img", tag);
+    test_make_temp_path(img_path, sizeof(img_path), tmp_name);
+    DeleteFileA(img_path);
+
+    if (use_1k_blocks) {
+        TEST_ASSERT_EQ_INT(0, test_mkfs_1k_ext4(img_path, 16ULL * 1024ULL * 1024ULL, "FSX1K"));
+    } else {
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 16ULL * 1024ULL * 1024ULL, "FSX4K"));
+    }
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    cfg.enable_rw_fast_io = enable_fast_io;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(enable_fast_io, ctx->enable_rw_fast_io);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/fsx.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &ino));
+
+    for (uint32_t op = 0; op < num_ops; op++) {
+        uint64_t kind = fsx_next_u64(&rng) % 100ULL;
+
+        if (kind < 50ULL) {
+            /* Write (~50%): mix of EOF append, aligned, unaligned, overwrite, sparse */
+            int write_to_eof = (shadow_size < max_file_size && (fsx_next_u64(&rng) % 10ULL) == 0ULL) ? 1 : 0;
+            uint64_t off;
+            uint64_t eff_off;
+            uint32_t max_len;
+            uint32_t len;
+            uint32_t w = 0;
+            uint64_t new_sz = 0;
+            int wrc;
+
+            if (write_to_eof) {
+                off = 0ULL;
+                eff_off = shadow_size;
+            } else {
+                off = fsx_next_u64(&rng) % (uint64_t)max_file_size;
+                if ((fsx_next_u64(&rng) % 4ULL) == 0ULL) {
+                    off &= ~4095ULL;
+                }
+                eff_off = off;
+            }
+            max_len = (uint32_t)(max_file_size - eff_off);
+            if (max_len > 32768U) max_len = 32768U;
+            len = (uint32_t)(fsx_next_u64(&rng) % max_len) + 1U;
+            if ((fsx_next_u64(&rng) % 4ULL) == 0ULL && len >= 1024U) {
+                len &= ~1023U;
+            }
+
+            for (uint32_t b = 0; b < len; b++) {
+                wbuf[b] = (uint8_t)(((op * 131U) + b + (uint32_t)(fsx_next_u64(&rng) & 0xFFU)) & 0xFFU);
+            }
+
+            wrc = ext4_vfs_write(ctx, ino, wbuf, off, len, write_to_eof, &w, &new_sz);
+            if (wrc != 0 || w != len) {
+                fprintf(stderr, "FSX[%s] op=%u write failed: eof=%d off=%llu len=%u rc=%d w=%u\n",
+                        tag, op, write_to_eof, (unsigned long long)eff_off, len, wrc, w);
+                TEST_ASSERT_EQ_INT(0, wrc);
+                TEST_ASSERT_EQ_INT((long long)len, (long long)w);
+            }
+
+            if (eff_off > shadow_size) {
+                memset(shadow + shadow_size, 0, (size_t)(eff_off - shadow_size));
+            }
+            memcpy(shadow + eff_off, wbuf, len);
+            if (eff_off + (uint64_t)len > shadow_size) {
+                shadow_size = eff_off + (uint64_t)len;
+            }
+            if (new_sz != shadow_size) {
+                fprintf(stderr, "FSX[%s] op=%u size mismatch after write: expected=%llu got=%llu\n",
+                        tag, op, (unsigned long long)shadow_size, (unsigned long long)new_sz);
+                TEST_ASSERT_EQ_INT((long long)shadow_size, (long long)new_sz);
+            }
+        } else if (kind < 85ULL) {
+            /* Read & verify (~35%): random offset & length including past-EOF clamping */
+            uint64_t off = (shadow_size > 0ULL) ? (fsx_next_u64(&rng) % (shadow_size + 1024ULL)) : 0ULL;
+            uint32_t len = (uint32_t)(fsx_next_u64(&rng) % 65536ULL) + 1U;
+            uint32_t r = 0;
+            uint64_t exp_r = (off >= shadow_size) ? 0ULL
+                : (((uint64_t)len < shadow_size - off) ? (uint64_t)len : (shadow_size - off));
+            int rrc;
+
+            memset(rbuf, 0xCC, len);
+            rrc = ext4_vfs_read(ctx, ino, rbuf, off, len, &r);
+            if (rrc != 0 || (uint64_t)r != exp_r) {
+                fprintf(stderr, "FSX[%s] op=%u read failed: off=%llu len=%u size=%llu rc=%d got=%u exp=%llu\n",
+                        tag, op, (unsigned long long)off, len, (unsigned long long)shadow_size,
+                        rrc, r, (unsigned long long)exp_r);
+                TEST_ASSERT_EQ_INT(0, rrc);
+                TEST_ASSERT_EQ_INT((long long)exp_r, (long long)r);
+            }
+            if (r > 0 && memcmp(rbuf, shadow + off, r) != 0) {
+                for (uint32_t b = 0; b < r; b++) {
+                    if (rbuf[b] != shadow[off + b]) {
+                        fprintf(stderr, "FSX[%s] op=%u read data mismatch at off=%llu+%u (abs=%llu): exp=%02x got=%02x\n",
+                                tag, op, (unsigned long long)off, b, (unsigned long long)(off + b),
+                                shadow[off + b], rbuf[b]);
+                        break;
+                    }
+                }
+                TEST_ASSERT(0);
+            }
+        } else {
+            /* Truncate (~15%): shrink, zero, or extend */
+            uint64_t new_len = ((fsx_next_u64(&rng) % 20ULL) == 0ULL)
+                ? 0ULL
+                : (fsx_next_u64(&rng) % ((uint64_t)max_file_size + 1ULL));
+            int trc = ext4_vfs_truncate(ctx, ino, new_len);
+            if (trc != 0) {
+                fprintf(stderr, "FSX[%s] op=%u truncate(%llu) failed: rc=%d\n",
+                        tag, op, (unsigned long long)new_len, trc);
+                TEST_ASSERT_EQ_INT(0, trc);
+            }
+            if (new_len > shadow_size) {
+                memset(shadow + shadow_size, 0, (size_t)(new_len - shadow_size));
+            }
+            shadow_size = new_len;
+        }
+
+        if (((op + 1U) % 400U) == 0U || (op + 1U) == num_ops) {
+            /* Checkpoint: full RW readback + unmount + integrity verify + RO Direct I/O readback */
+            if (shadow_size > 0) {
+                uint64_t pos = 0;
+                memset(full_rbuf, 0xCC, (size_t)shadow_size);
+                while (pos < shadow_size) {
+                    uint32_t chunk = (shadow_size - pos > 65536ULL) ? 65536U : (uint32_t)(shadow_size - pos);
+                    uint32_t got = 0;
+                    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, ino, full_rbuf + pos, pos, chunk, &got));
+                    TEST_ASSERT_EQ_INT((long long)chunk, (long long)got);
+                    pos += chunk;
+                }
+                if (memcmp(full_rbuf, shadow, (size_t)shadow_size) != 0) {
+                    fprintf(stderr, "FSX[%s] checkpoint RW full readback mismatch at op=%u (size=%llu)\n",
+                            tag, op, (unsigned long long)shadow_size);
+                    TEST_ASSERT(0);
+                }
+            }
+
+            TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+            ctx = NULL;
+
+            TEST_ASSERT_EQ_INT(0, verify_ext4_image_integrity(img_path));
+
+            cfg.enable_rw_fast_io = 0;
+            cfg.read_only = 1;
+            TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+            TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
+            TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/fsx.bin", &st));
+            TEST_ASSERT_EQ_INT((long long)shadow_size, (long long)st.size);
+            if (shadow_size > 0) {
+                uint32_t got = 0;
+                memset(full_rbuf, 0xCC, (size_t)shadow_size);
+                TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, full_rbuf, 0, (uint32_t)shadow_size, &got));
+                TEST_ASSERT_EQ_INT((long long)shadow_size, (long long)got);
+                if (memcmp(full_rbuf, shadow, (size_t)shadow_size) != 0) {
+                    fprintf(stderr, "FSX[%s] checkpoint RO Direct I/O readback mismatch at op=%u\n", tag, op);
+                    TEST_ASSERT(0);
+                }
+            }
+            TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+            ctx = NULL;
+
+            if (op + 1U < num_ops) {
+                cfg.read_only = 0;
+                cfg.enable_rw_fast_io = enable_fast_io;
+                TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+                TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/fsx.bin", &st));
+                ino = st.ino;
+            }
+        }
+    }
+
+    DeleteFileA(img_path);
+    free(shadow);
+    free(wbuf);
+    free(rbuf);
+    free(full_rbuf);
+    return 0;
+}
+
+static int test_rw_fast_io_fsx_fuzzer(void) {
+    /* 1. 4KB blocks with --rw-fast-io (1200 randomized write/read/truncate ops) */
+    TEST_ASSERT_EQ_INT(0, run_fsx_session("4k_fast", 0, 1, 512U * 1024U, 1200U, 0x5A3F109C7B2E4D11ULL));
+    /* 2. 1KB blocks with --rw-fast-io (1500 ops -> dense splits, holes, truncates) */
+    TEST_ASSERT_EQ_INT(0, run_fsx_session("1k_fast", 1, 1, 256U * 1024U, 1500U, 0xC0FFEE42DEADBEEFULL));
+    /* 3. 4KB blocks with default e2fsprogs --rw (300 ops baseline) */
+    TEST_ASSERT_EQ_INT(0, run_fsx_session("4k_std", 0, 0, 256U * 1024U, 300U, 0x123456789ABCDEF0ULL));
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -1795,5 +2012,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_rw_extent_tree_split_reverse_and_fsck_integrity);
     RUN_TEST(test_rw_uninit_extent_fallback_and_truncate_stress);
     RUN_TEST(test_rw_fast_io_multileaf_hole_boundary_write_and_read);
+    RUN_TEST(test_rw_fast_io_fsx_fuzzer);
     return suite_failures;
 }
