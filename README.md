@@ -82,7 +82,7 @@ zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
 # Non-destructive Overlay mount (ext4 stays RO; changes saved to NTFS Upperdir)
 zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 
-# Direct Read-Write mount and safe unmount
+# Direct Read-Write mount (upstream e2fsprogs default; add --rw-fast-io for opt-in batched I/O) and safe unmount
 zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
 zeroext4.exe unmount L:
 ```

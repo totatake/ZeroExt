@@ -101,7 +101,7 @@ static void print_usage(void) {
         "  zeroext4 mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
         "  zeroext4 extents <image_or_disk> <ext4_path> [--partition <N>]\n"
         "  zeroext4 mount --source <image_or_disk> --mountpoint <L:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
-        "                [--case-sensitive] [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>]\n"
+        "                [--rw-fast-io] [--case-sensitive] [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>]\n"
         "                [--ro-fallback] [--force-dirty] [--cache-blocks <N>] [--debug] [--stop-event <name>]\n"
         "                [--json-events] [--stats-interval <ms>] [--trace <output_json>] [--trace-events <N>]\n"
         "  zeroext4 unmount <L:>     (remove a stale drive letter left by a terminated mount)\n"
@@ -808,6 +808,7 @@ static int cmd_mount(int argc, char **argv) {
     int has_fi_timeout = 0;
     uint32_t fi_timeout_ms = 0;
     int rw = has_flag(argc, argv, "--rw");
+    int rw_fast_io = has_flag(argc, argv, "--rw-fast-io");
     int ro_fallback = has_flag(argc, argv, "--ro-fallback");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
     int direct_io = has_flag(argc, argv, "--direct-io");
@@ -845,6 +846,13 @@ static int cmd_mount(int argc, char **argv) {
 
     if (direct_io && rw) {
         const char *msg = "Error: --direct-io is only supported in Read-Only (default) or --overlay mode.";
+        fprintf(stderr, "%s\n", msg);
+        emit_mount_error_json(json_events, "args", -EINVAL, msg);
+        return 1;
+    }
+
+    if (rw_fast_io && !rw) {
+        const char *msg = "Error: --rw-fast-io is only supported with --rw.";
         fprintf(stderr, "%s\n", msg);
         emit_mount_error_json(json_events, "args", -EINVAL, msg);
         return 1;
@@ -921,6 +929,7 @@ static int cmd_mount(int argc, char **argv) {
     cfg.case_insensitive = case_sensitive ? 0 : 1;
     cfg.enable_direct_io = direct_io ? 1 : 0;
     cfg.disable_direct_io = no_direct_io ? 1 : 0;
+    cfg.enable_rw_fast_io = rw_fast_io ? 1 : 0;
     cfg.has_file_info_timeout = has_fi_timeout;
     cfg.file_info_timeout = fi_timeout_ms;
 
@@ -974,14 +983,16 @@ static int cmd_mount(int argc, char **argv) {
         printf(",\"read_only\":%s", ctx->read_only ? "true" : "false");
         printf(",\"lower_read_only\":%s", ctx->lower_read_only ? "true" : "false");
         printf(",\"direct_io\":%s", ctx->enable_direct_io ? "true" : "false");
+        printf(",\"rw_fast_io\":%s", ctx->enable_rw_fast_io ? "true" : "false");
         printf(",\"fell_back_to_ro\":%s", ctx->fell_back_to_ro ? "true" : "false");
         printf(",\"overlay_upper\":"); print_json_str(overlay_dir ? overlay_dir : "");
         printf(",\"volume_label\":"); print_json_str(ctx->volume_label);
         printf("}\n");
         fflush(stdout);
     } else {
-        printf("Mounted '%s' (partition=%u, mode=%s, direct_io=%s%s%s) at %s. Press Ctrl+C to unmount...\n",
+        printf("Mounted '%s' (partition=%u, mode=%s, direct_io=%s%s%s%s) at %s. Press Ctrl+C to unmount...\n",
                src, part, mode_str, ctx->enable_direct_io ? "on" : "off",
+               ctx->enable_rw_fast_io ? ", rw_fast_io=on" : "",
                overlay_dir ? ", upper=" : "", overlay_dir ? overlay_dir : "", mp);
         if (tracing) {
             printf("Perfetto tracing active -> %s\n", trace_path);

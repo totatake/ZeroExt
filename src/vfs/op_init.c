@@ -517,6 +517,12 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
         return -EINVAL;
     }
 
+    if (cfg->enable_rw_fast_io && lower_ro) {
+        ext4_log(EXT4_LOG_ERROR,
+                 "--rw-fast-io is only supported in direct Read-Write (--rw) mode.");
+        return -EINVAL;
+    }
+
     if (!lower_ro && dirty && !cfg->force_rw_on_dirty) {
         if (cfg->ro_fallback_on_dirty) {
             ext4_log(EXT4_LOG_WARN,
@@ -545,6 +551,7 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     ctx->case_insensitive = cfg->case_insensitive;
     /* Direct Extent I/O is enabled by default whenever Lower ext4 is Read-Only unless explicitly disabled */
     ctx->enable_direct_io = (lower_ro && !cfg->disable_direct_io) ? 1 : 0;
+    ctx->enable_rw_fast_io = (!lower_ro && cfg->enable_rw_fast_io) ? 1 : 0;
     ctx->has_file_info_timeout = cfg->has_file_info_timeout ? 1 : 0;
     ctx->file_info_timeout = cfg->file_info_timeout;
     ctx->journal_state = probe.journal_state;

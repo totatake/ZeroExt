@@ -66,9 +66,9 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_multi_group_backup_superblock_flush` | 複数ブロックグループ（140MB 規模）環境でのバックアップスーパーブロック／BGD フラッシュ安全検証 |
 | `test_concurrent_rw_and_dentry_invalidation_stress` | 並列 RW アクセスと Dentry 世代無効化・`fs_lock` が混在する高負荷ストレステスト（ASan 対象） |
 | `test_case_sensitive_coexistence` | `case_insensitive = 0` 時における `/Foo.txt` / `/foo.txt`・`/Sub` / `/sub` 共存・リネーム・削除・RO 再マウント永続性検証 |
-| `test_rw_batched_extent_write_and_read_coherence` | `--rw` バッチ連続エクステント書込・並列読取・非アライメント/スパースホール/EOF追記整合性・`ENOSPC` 安全境界・メタデータ整合性・RO 再マウント検証 |
-| `test_rw_extent_tree_split_reverse_and_fsck_integrity` | 420 断片書込による多段エクステント木分割 (`depth 0 -> 1 -> 2`)、逆順スパース挿入 (`insert_before`)＋親インデックス更新、ブロック重複／`i_blocks`／空きブロック／チェックサム全件検査 |
-| `test_rw_uninit_extent_fallback_and_truncate_stress` | 初期化済＋`UNINIT`＋スパースホール横断書込時の標準フォールバック切替、`truncate`＋再伸長ゼロ埋め、削除後ブロック再利用混合ストレス＋全件整合性検査 |
+| `test_rw_batched_extent_write_and_read_coherence` | RO＋`--rw-fast-io` 拒否 (`-EINVAL`)、既定 `--rw` (`e2fsprogs` 準拠) 書込／読込、オプトイン `--rw --rw-fast-io` バッチ連続エクステント書込・並列読取・非アライメント/スパースホール/EOF追記整合性・`ENOSPC` 安全境界・メタデータ整合性・RO 再マウント検証 |
+| `test_rw_extent_tree_split_reverse_and_fsck_integrity` | `--rw --rw-fast-io` における 420 断片書込の多段エクステント木分割 (`depth 0 -> 1 -> 2`)、逆順スパース挿入 (`insert_before`)＋親インデックス更新、ブロック重複／`i_blocks`／空きブロック／チェックサム全件検査 |
+| `test_rw_uninit_extent_fallback_and_truncate_stress` | `--rw --rw-fast-io` における初期化済＋`UNINIT`＋スパースホール横断書込時の標準フォールバック切替、`truncate`＋再伸長ゼロ埋め、削除後ブロック再利用混合ストレス＋全件整合性検査 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 

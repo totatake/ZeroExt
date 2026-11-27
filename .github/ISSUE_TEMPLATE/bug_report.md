@@ -11,7 +11,7 @@ A concise description of the bug.
 
 ## Environment
 
-- **ZeroExt4 version / commit**: (e.g., `v0.10.0` or commit SHA)
+- **ZeroExt4 version / commit**: (e.g., `v0.10.1` or commit SHA)
 - **Windows version & architecture**: (e.g., Windows 11 Pro 24H2 x64)
 - **WinFsp version**: (e.g., `2025` / `2.1.x` or Not Installed)
 - **Interface**: `zeroext4.exe` (CLI) / `ZeroExt4Gui.exe` (GUI)

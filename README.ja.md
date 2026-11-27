@@ -82,7 +82,7 @@ zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L:
 # 非破壊 Overlay マウント（Lower ext4 は RO 保護・変更だけ NTFS フォルダへ保存）
 zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --overlay D:\ext4_upper
 
-# Direct Read-Write マウントと安全なアンマウント
+# Direct Read-Write マウント（既定 e2fsprogs 準拠、高速バッチは --rw-fast-io を併用）と安全なアンマウント
 zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
 zeroext4.exe unmount L:
 ```

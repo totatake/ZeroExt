@@ -102,8 +102,11 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 # Direct I/O を無効化して標準の 8MB ブロック LRU キャッシュ経路のみでマウント
 .\build\zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --no-direct-io
 
-# Read-Write マウント（明示的に --rw を指定、Dirty Journal 検出時は自動拒否、Direct I/O は自動無効）
+# Read-Write マウント（既定は上流 libext2fs 準拠、Dirty Journal 検出時は自動拒否、Direct I/O は自動無効）
 .\build\zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw
+
+# Read-Write + バッチ連続エクステント高速 I/O（実験的オプトイン・独自経路のためテスト用途等向け）
+.\build\zeroext4.exe mount --source \\.\PhysicalDrive2 --partition 2 --mountpoint L: --rw --rw-fast-io
 
 # 非破壊 Overlay マウント（Lower の ext4 は常に RO＋Direct I/O 既定 ON、作成/変更は NTFS Upperdir へ保存）
 # ※ 初回利用時に Upperdir に .wh.__ext4_lower_id を記録し、別の ext4 への誤再利用を自動ブロックします
@@ -115,7 +118,8 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 ```
 
 主なオプション一覧：
-- `--rw`: ext4 への直接 Read-Write マウントを有効化（未指定時は Read-Only、`--overlay` とは併用不可）
+- `--rw`: ext4 への直接 Read-Write マウントを有効化（未指定時は Read-Only、`--overlay` とは併用不可、既定は上流 `e2fsprogs` 準拠）
+- `--rw-fast-io`: `--rw` 併用時のみ有効な実験的オプション。`ext2fs_file_read`/`write` をバイパスし、独自のバッチ連続エクステント書込・`fs_lock` 外並列読込を有効化（想定外の不具合リスクを避けるため既定は無効）
 - `--overlay <dir>`: NTFS Upperdir を指定して非破壊 Overlay RW マウント（Lower ext4 は厳密 RO、`--rw` とは併用不可）
 - `--case-sensitive`: ファイル名・ディレクトリ名の大文字・小文字を区別してマウント（`--overlay` 併用時は空の NTFS Upperdir に `FileCaseSensitiveInfo` 属性を設定し、`.wh.__ext4_lower_id` に `:cs` 識別子を記録）
 - `--no-direct-io`: RO / `--overlay` 時の既定 Direct Extent I/O を無効化し、標準ブロックキャッシュ経路を使用

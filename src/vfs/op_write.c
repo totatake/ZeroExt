@@ -323,7 +323,8 @@ int ext4_vfs_write_stat(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const void *buf, ui
             uint32_t cur_len = length;
             int need_fallback = 1;
 
-            if (cur_len > 0 &&
+            if (ctx->enable_rw_fast_io &&
+                cur_len > 0 &&
                 (full_ino.i_flags & EXT4_EXTENTS_FL) &&
                 !(full_ino.i_flags & EXT4_INLINE_DATA_FL) &&
                 !ext2fs_has_feature_bigalloc(ctx->fs->super) &&

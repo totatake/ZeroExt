@@ -2,7 +2,7 @@
 
 > **一言でいうと**: `ZeroExt4` は、Windows 上から Linux の ext2 / ext3 / ext4 パーティション・イメージを **BSOD リスクゼロのユーザー空間ドライバ** でありながら **Windows Native NTFS 並み（Warm 読取 10.7 GB/s / 263K IOPS・Cold 実 SSD 読取 1.51 GB/s）** で直接共有できるファイルシステムドライバです。
 
-- 本書の前提となるベンチマーク実測値・検証環境は [性能評価レポート](reports/performance-evaluation.md)（`v0.10.0` / `2026-11-27` 計測）および [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) に基づきます。
+- 本書の前提となるベンチマーク実測値・検証環境は [性能評価レポート](reports/performance-evaluation.md)（`v0.10.0`〜`v0.10.1` / `2026-11-27` 計測）および [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) に基づきます。
 - コンポーネント構成・ADR（設計判断記録）は [アーキテクチャ設計書](architecture.md) を参照してください。
 
 ---
@@ -97,7 +97,7 @@ sequenceDiagram
 1. **Hot / Warm バイパス（[winfsp_driver.c](../src/driver/winfsp_driver.c#L880-L885)）**:
    Read-Only マウント時に WinFsp の `FileInfoTimeout` 既定値を `(UINT32)-1` (`INFINITE`) に設定し、Windows NT カーネルの Cache Manager (`CcCopyRead`) / Memory Manager (`Mm`) と完全に協調させます。これにより 2 回目以降の読取では `FspRead` コールバック呼び出し自体が **99.3% 削減**（64 MB 計測時 `17,736` → `131` 回）され、`ZeroExt4` は **`10,664.4 MB/s`**（`Native NTFS` `10,265.3 MB/s` の `1.04x`、`4KB Rnd` も `1,026.7 MB/s` で `1.06x`）を達成します。
 2. **Cold / Unbuffered バイパス（[extent_map.c](../src/extent/extent_map.c), [op_read.c](../src/vfs/op_read.c)）**:
-   RO / `--overlay` 時の初回アクセスでは `ext2fs_file_read` の 4 KB 分割＋CRC/ブロックキャッシュ経路をバイパスし、`ext4_file_handle_t` に保持したエクステント配列へ `O(log N)` 二分探索を行い、`win32_io_pread_direct` で最大 1 MB（あるいは 64 MiB）単位の連続範囲を一括読み出しします。これにより同一 SSD の実物理ディスク直読でも **`1,506.2 MB/s`**（`WSL2 9P` の **9.11 倍**）に達します（`v0.10.0` 以降は標準/`--rw` 経路もバッチ連続エクステント I/O により `1,433.5 MB/s` まで高速化）。
+   RO / `--overlay` 時の初回アクセスでは `ext2fs_file_read` の 4 KB 分割＋CRC/ブロックキャッシュ経路をバイパスし、`ext4_file_handle_t` に保持したエクステント配列へ `O(log N)` 二分探索を行い、`win32_io_pread_direct` で最大 1 MB（あるいは 64 MiB）単位の連続範囲を一括読み出しします。これにより同一 SSD の実物理ディスク直読でも **`1,506.2 MB/s`**（`WSL2 9P` の **9.11 倍**）に達します（`v0.10.1` 以降、既定の `--rw` / `--no-direct-io` は安全性のため上流 `e2fsprogs` 準拠を維持し、`--rw --rw-fast-io` オプトイン時に同様のバッチ連続エクステント I/O を有効化します）。
 
 ---
 

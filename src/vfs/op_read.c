@@ -52,6 +52,26 @@ static int ext4_vfs_standard_read_fallback_locked(ext4_vfs_ctx_t *ctx, ext2_ino_
     return 0;
 }
 
+static int ext4_vfs_e2fsprogs_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf,
+                                   uint64_t offset, uint32_t length, uint32_t *out_read) {
+    int rc;
+    uint64_t t_vfs = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
+    ztrace_lock_guard_t lg = ztrace_srw_acquire_shared(
+        &ctx->rwlock, "ctx->rwlock wait (S)", "ctx->rwlock hold (S)");
+
+    EnterCriticalSection(&ctx->fs_lock);
+    rc = ext4_vfs_standard_read_fallback_locked(ctx, ino, buf, offset, length, out_read);
+    LeaveCriticalSection(&ctx->fs_lock);
+    ztrace_srw_release_shared(&ctx->rwlock, &lg);
+
+    if (t_vfs) {
+        uint64_t end = ztrace_now_qpc();
+        ztrace_record_complete("vfs", "ext2fs_file_read", t_vfs, end - t_vfs,
+                               (uint64_t)ino, (uint64_t)(*out_read), (int64_t)rc, ZTRACE_ARGS_RW_OP);
+    }
+    return rc;
+}
+
 static int ext4_vfs_standard_read_extents(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf,
                                           uint64_t offset, uint32_t length, uint32_t *out_read) {
     struct ext2_inode inode;
@@ -344,7 +364,11 @@ int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t
         }
     }
 
-    return ext4_vfs_standard_read_extents(ctx, ino, buf, offset, length, out_read);
+    if (ctx->enable_rw_fast_io && !ctx->lower_read_only) {
+        return ext4_vfs_standard_read_extents(ctx, ino, buf, offset, length, out_read);
+    }
+
+    return ext4_vfs_e2fsprogs_read(ctx, ino, buf, offset, length, out_read);
 }
 
 int ext4_vfs_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t offset,

@@ -181,6 +181,7 @@ namespace ZeroExt4.Gui.ViewModels
             CanMount = false,
         };
         private bool _enableDirectIo = true;
+        private bool _enableRwFastIo;
         private bool _caseSensitive;
         private string _cacheBlocksText = "2048";
         private bool _roFallbackOnDirty = true;
@@ -592,6 +593,18 @@ namespace ZeroExt4.Gui.ViewModels
                 if (SetProperty(ref _enableDirectIo, value))
                 {
                     OnPropertyChanged(nameof(EffectiveDirectIo));
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
+        public bool EnableRwFastIo
+        {
+            get => _enableRwFastIo;
+            set
+            {
+                if (SetProperty(ref _enableRwFastIo, value))
+                {
                     NotifyMountStateChanged();
                 }
             }
@@ -1145,6 +1158,7 @@ namespace ZeroExt4.Gui.ViewModels
                 Mode = SelectedMode,
                 OverlayUpperDir = OverlayUpperDir.Trim(),
                 EnableDirectIo = DirectIoEditable && EnableDirectIo,
+                EnableRwFastIo = SelectedMode == MountMode.ReadWrite && EnableRwFastIo,
                 CaseSensitive = CaseSensitive,
                 CacheBlocks = cacheBlocks,
                 RoFallbackOnDirty = RoFallbackOnDirty,
@@ -1309,6 +1323,7 @@ namespace ZeroExt4.Gui.ViewModels
                 }
                 _overlayUpperDir = preset.OverlayUpperDir;
                 _enableDirectIo = preset.EnableDirectIo;
+                _enableRwFastIo = preset.EnableRwFastIo;
                 _caseSensitive = preset.CaseSensitive;
                 _cacheBlocksText = (preset.CacheBlocks > 0 ? preset.CacheBlocks : 2048).ToString();
                 _roFallbackOnDirty = preset.RoFallbackOnDirty;
@@ -1326,6 +1341,7 @@ namespace ZeroExt4.Gui.ViewModels
                 OnPropertyChanged(nameof(MountFolderPath));
                 OnPropertyChanged(nameof(OverlayUpperDir));
                 OnPropertyChanged(nameof(EnableDirectIo));
+                OnPropertyChanged(nameof(EnableRwFastIo));
                 OnPropertyChanged(nameof(CaseSensitive));
                 OnPropertyChanged(nameof(CacheBlocksText));
                 OnPropertyChanged(nameof(RoFallbackOnDirty));
@@ -1334,6 +1350,7 @@ namespace ZeroExt4.Gui.ViewModels
             {
                 _selectedMode = MountMode.ReadOnly;
                 _enableDirectIo = true;
+                _enableRwFastIo = false;
                 _caseSensitive = false;
                 _roFallbackOnDirty = true;
                 _forceDirty = false;
@@ -1345,6 +1362,7 @@ namespace ZeroExt4.Gui.ViewModels
                 OnPropertyChanged(nameof(EffectiveDirectIo));
                 OnPropertyChanged(nameof(ShowDirtyRwWarning));
                 OnPropertyChanged(nameof(EnableDirectIo));
+                OnPropertyChanged(nameof(EnableRwFastIo));
                 OnPropertyChanged(nameof(CaseSensitive));
                 OnPropertyChanged(nameof(RoFallbackOnDirty));
                 OnPropertyChanged(nameof(ForceDirty));
@@ -1363,6 +1381,7 @@ namespace ZeroExt4.Gui.ViewModels
                 MountPoint = ActiveMountPointTarget,
                 OverlayUpperDir = OverlayUpperDir.Trim(),
                 EnableDirectIo = EnableDirectIo,
+                EnableRwFastIo = EnableRwFastIo,
                 CaseSensitive = CaseSensitive,
                 CacheBlocks = cb,
                 RoFallbackOnDirty = RoFallbackOnDirty,

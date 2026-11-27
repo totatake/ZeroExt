@@ -9,6 +9,7 @@ namespace ZeroExt4.Gui.Models
         public bool UseFolderMountPoint { get; set; }
         public string OverlayUpperDir { get; set; } = string.Empty;
         public bool EnableDirectIo { get; set; } = true;
+        public bool EnableRwFastIo { get; set; }
         public bool CaseSensitive { get; set; }
         public uint CacheBlocks { get; set; } = 2048;
         public bool RoFallbackOnDirty { get; set; } = true;

@@ -103,6 +103,8 @@
     <sys:String x:Key="Str_AdvancedExpanderHeader">Advanced Options &amp; CLI Command Preview</sys:String>
     <sys:String x:Key="Str_DirectIoCheck">Enable Direct Extent I/O (Default ON for RO / Overlay)</sys:String>
     <sys:String x:Key="Str_RwDirectIoNote">* Direct I/O is automatically disabled in Read-Write mode to preserve filesystem consistency.</sys:String>
+    <sys:String x:Key="Str_RwFastIoCheck">Enable batched extent fast I/O in RW mode (--rw-fast-io, Experimental)</sys:String>
+    <sys:String x:Key="Str_RwFastIoNote">* Default --rw uses upstream e2fsprogs (libext2fs) I/O for maximum compatibility. Enabling --rw-fast-io uses custom batched extent allocation/reads and increases metadata-bug risk on unexpected edges.</sys:String>
     <sys:String x:Key="Str_CaseSensitiveCheck">Case-sensitive filenames (--case-sensitive)</sys:String>
     <sys:String x:Key="Str_CaseSensitiveOverlayNote">* In Overlay mode, enables NTFS per-directory case sensitivity on the Upperdir (fails on non-NTFS volumes or non-empty dirs without the attribute).</sys:String>
     <sys:String x:Key="Str_CacheBlocksLabel">LRU Block Cache Size:</sys:String>

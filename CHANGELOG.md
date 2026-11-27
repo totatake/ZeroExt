@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-27
+
+### Added
+- Added opt-in `--rw-fast-io` mount option across VFS (`ext4_mount_config_t.enable_rw_fast_io`), CLI (`zeroext4 mount --rw --rw-fast-io`, rejected outside `--rw`), WPF GUI (`MainWindow.xaml` / `MainViewModel` / `ZeroExt4ArgBuilder` / `VolumePreset` / localized strings / `ArgBuilder` tests), and unit tests (`test_rw_batched_extent_write_and_read_coherence`, `test_rw_extent_tree_split_reverse_and_fsck_integrity`, `test_rw_uninit_extent_fallback_and_truncate_stress`).
+
+### Changed
+- Restored strict upstream `e2fsprogs` (`ext2fs_file_read` / `ext2fs_file_write`) behavior by default for `--rw` and `--no-direct-io` mounts so custom extent read/write logic is only active when `--rw --rw-fast-io` is explicitly requested (aligned zero-copy `win32_aligned_write`, batched `win32_zeroout`, and 64-slot `icache` remain active within the standard `libext2fs` I/O layer).
+- Updated `zeroext4_bench.exe --rw-bench` to benchmark both default `--rw` (`e2fsprogs`: `241.4 MB/s` Seq 1MB write, `887.2 MB/s` 8T read) and `--rw --rw-fast-io` (`4,091.9 MB/s` Seq 1MB write, `32,879.9 MB/s` 8T read), and synchronized documentation and version references to `v0.10.1`.
+
 ## [0.10.0] - 2026-11-27
 
 ### Added
@@ -106,7 +115,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt4 / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/totatake/ZeroExt4/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/totatake/ZeroExt4/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/totatake/ZeroExt4/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/totatake/ZeroExt4/compare/v0.8.0...v0.8.1

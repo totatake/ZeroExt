@@ -103,6 +103,8 @@
     <sys:String x:Key="Str_AdvancedExpanderHeader">詳細設定・CLI コマンドプレビュー</sys:String>
     <sys:String x:Key="Str_DirectIoCheck">ダイレクト・エクステント I/O (Direct I/O) を有効にする（RO / Overlay 時は既定 ON）</sys:String>
     <sys:String x:Key="Str_RwDirectIoNote">※ Read-Write モードでは整合性維持のため Direct I/O は自動的に無効化されます。</sys:String>
+    <sys:String x:Key="Str_RwFastIoCheck">RW モードでバッチ連続エクステント高速 I/O を有効にする (--rw-fast-io・実験的)</sys:String>
+    <sys:String x:Key="Str_RwFastIoNote">※ 既定の --rw は上流 e2fsprogs (libext2fs) 準拠の標準経路で動作します。--rw-fast-io を有効にすると独自のバッチ処理を使用するため、想定外の不具合による破損リスクが高まります。</sys:String>
     <sys:String x:Key="Str_CaseSensitiveCheck">ファイル名の大文字・小文字を区別する (--case-sensitive)</sys:String>
     <sys:String x:Key="Str_CaseSensitiveOverlayNote">※ Overlay モードでは Upperdir に NTFS の大文字・小文字区別属性を設定します（未対応ボリュームや非空フォルダでは失敗します）。</sys:String>
     <sys:String x:Key="Str_CacheBlocksLabel">LRU ブロックキャッシュ数:</sys:String>

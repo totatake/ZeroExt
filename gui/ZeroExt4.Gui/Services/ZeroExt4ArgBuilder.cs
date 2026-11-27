@@ -114,6 +114,10 @@ namespace ZeroExt4.Gui.Services
 
                 case MountMode.ReadWrite:
                     args.Add("--rw");
+                    if (req.EnableRwFastIo)
+                    {
+                        args.Add("--rw-fast-io");
+                    }
                     if (req.RoFallbackOnDirty)
                     {
                         args.Add("--ro-fallback");

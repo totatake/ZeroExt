@@ -404,46 +404,56 @@ static int run_rw_mode_suite(void) {
 
     GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
     snprintf(img_path, sizeof(img_path), "%szeroext4_rw_bench_%lu.img", tmp_dir, GetCurrentProcessId());
-    DeleteFileA(img_path);
 
-    printf("Preparing 256MB ext4 image for --rw-bench...\n");
-    if (ext4_vfs_mkfs(img_path, 256ULL * 1024ULL * 1024ULL, "RWBENCH") != 0) {
-        fprintf(stderr, "mkfs failed for --rw-bench\n");
-        return 1;
-    }
-
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.source_path = img_path;
-    cfg.read_only = 0;
-    cfg.max_cache_blocks = 2048;
-    cfg.case_insensitive = 1;
-    if (ext4_vfs_mount(&cfg, &ctx) != 0) {
-        fprintf(stderr, "RW mount failed\n");
+    for (int fast = 0; fast <= 1; fast++) {
         DeleteFileA(img_path);
-        return 1;
-    }
+        printf("Preparing 256MB ext4 image for --rw-bench (enable_rw_fast_io=%d)...\n", fast);
+        if (ext4_vfs_mkfs(img_path, 256ULL * 1024ULL * 1024ULL, "RWBENCH") != 0) {
+            fprintf(stderr, "mkfs failed for --rw-bench\n");
+            return 1;
+        }
 
-    if (ext4_vfs_create(ctx, "/rw_1m.bin", 0, 0644, 0, &ino_1m) != 0 ||
-        ext4_vfs_create(ctx, "/rw_64k.bin", 0, 0644, 0, &ino_64k) != 0 ||
-        ext4_vfs_create(ctx, "/rw_4k.bin", 0, 0644, 0, &ino_4k) != 0) {
-        fprintf(stderr, "Failed to create benchmark files\n");
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.source_path = img_path;
+        cfg.read_only = 0;
+        cfg.max_cache_blocks = 2048;
+        cfg.case_insensitive = 1;
+        cfg.enable_rw_fast_io = fast;
+        if (ext4_vfs_mount(&cfg, &ctx) != 0) {
+            fprintf(stderr, "RW mount failed (enable_rw_fast_io=%d)\n", fast);
+            DeleteFileA(img_path);
+            return 1;
+        }
+
+        ino_1m = 0;
+        ino_64k = 0;
+        ino_4k = 0;
+        if (ext4_vfs_create(ctx, "/rw_1m.bin", 0, 0644, 0, &ino_1m) != 0 ||
+            ext4_vfs_create(ctx, "/rw_64k.bin", 0, 0644, 0, &ino_64k) != 0 ||
+            ext4_vfs_create(ctx, "/rw_4k.bin", 0, 0644, 0, &ino_4k) != 0) {
+            fprintf(stderr, "Failed to create benchmark files\n");
+            ext4_vfs_unmount(ctx);
+            DeleteFileA(img_path);
+            return 1;
+        }
+
+        printf("\n=== Mode: %s ===\n",
+               fast ? "--rw --rw-fast-io (Batched Extent I/O)"
+                    : "--rw (Default e2fsprogs ext2fs_file_read/write)");
+        failed |= run_rw_write_bench("RW 1T Write Seq  1MB (64MB)", ctx, ino_1m, 1024U * 1024U, 64, 0);
+        failed |= run_rw_write_bench("RW 1T Write Seq 64KB (64MB)", ctx, ino_64k, 64U * 1024U, 1024, 0);
+        failed |= run_rw_write_bench("RW 1T Overwrite 64KB (64MB)", ctx, ino_64k, 64U * 1024U, 1024, 0);
+        failed |= run_rw_write_bench("RW 1T Write Seq  4KB (16MB)", ctx, ino_4k, 4096U, 4096, 1);
+
+        failed |= run_vfs_bench("RW 1T Read  Seq  1MB (256MB)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 1024U * 1024U, 256, 1, 0);
+        failed |= run_vfs_bench("RW 8T Read  Seq 64KB (1024MB)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 64U * 1024U, 2048, 8, 0);
+        failed |= run_vfs_bench("RW 8T Read  Rnd  4KB (65K ops)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 4096U, 8192, 8, 1);
+
         ext4_vfs_unmount(ctx);
+        ctx = NULL;
         DeleteFileA(img_path);
-        return 1;
     }
 
-    printf("\n=== Mode: --rw (Standard libext2fs + Batched Extent I/O) ===\n");
-    failed |= run_rw_write_bench("RW 1T Write Seq  1MB (64MB)", ctx, ino_1m, 1024U * 1024U, 64, 0);
-    failed |= run_rw_write_bench("RW 1T Write Seq 64KB (64MB)", ctx, ino_64k, 64U * 1024U, 1024, 0);
-    failed |= run_rw_write_bench("RW 1T Overwrite 64KB (64MB)", ctx, ino_64k, 64U * 1024U, 1024, 0);
-    failed |= run_rw_write_bench("RW 1T Write Seq  4KB (16MB)", ctx, ino_4k, 4096U, 4096, 1);
-
-    failed |= run_vfs_bench("RW 1T Read  Seq  1MB (256MB)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 1024U * 1024U, 256, 1, 0);
-    failed |= run_vfs_bench("RW 8T Read  Seq 64KB (1024MB)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 64U * 1024U, 2048, 8, 0);
-    failed |= run_vfs_bench("RW 8T Read  Rnd  4KB (65K ops)", ctx, ino_1m, 64ULL * 1024ULL * 1024ULL, 4096U, 8192, 8, 1);
-
-    ext4_vfs_unmount(ctx);
-    DeleteFileA(img_path);
     return failed ? 1 : 0;
 }
 

@@ -248,6 +248,16 @@ namespace ZeroExt4.Gui.Tests
             Assert(rwArgs.Contains("--rw"), "RW must include --rw");
             Assert(rwArgs.Contains("--ro-fallback"), "RW with fallback must include --ro-fallback");
             Assert(!rwArgs.Contains("--direct-io") && !rwArgs.Contains("--no-direct-io"), "RW must not pass direct-io flags");
+            Assert(!rwArgs.Contains("--rw-fast-io"), "Default RW must not pass --rw-fast-io");
+
+            rwReq.EnableRwFastIo = true;
+            List<string> rwFastArgs = ZeroExt4ArgBuilder.BuildMountArgs(rwReq);
+            Assert(rwFastArgs.Contains("--rw-fast-io"), "RW with EnableRwFastIo must pass --rw-fast-io");
+
+            roReq.EnableRwFastIo = true;
+            ovReq.EnableRwFastIo = true;
+            Assert(!ZeroExt4ArgBuilder.BuildMountArgs(roReq).Contains("--rw-fast-io"), "RO must not pass --rw-fast-io");
+            Assert(!ZeroExt4ArgBuilder.BuildMountArgs(ovReq).Contains("--rw-fast-io"), "Overlay must not pass --rw-fast-io");
         }
 
         private static void Test_DriveLetterAndOverlayValidation()

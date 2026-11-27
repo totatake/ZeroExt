@@ -34,6 +34,7 @@ typedef struct ext4_mount_config {
     const char *overlay_upper_dir;    /* Optional NTFS upperdir for Overlay mount (lower opens RO) */
     int         enable_direct_io;     /* 1 = require direct extent I/O (default ON in RO/Overlay; error on RW) */
     int         disable_direct_io;    /* 1 = disable direct extent I/O in RO/Overlay (use ext2fs_file_read) */
+    int         enable_rw_fast_io;    /* 1 = opt-in batched extent read/write in --rw mode (default 0: upstream e2fsprogs) */
     int         has_file_info_timeout; /* 1 = use explicit file_info_timeout below */
     uint32_t    file_info_timeout;     /* WinFsp FileInfoTimeout ms, or (uint32_t)-1 for INFINITE */
 } ext4_mount_config_t;
@@ -48,6 +49,7 @@ typedef struct ext4_vfs_ctx {
     int                       fell_back_to_ro;
     int                       case_insensitive;
     int                       enable_direct_io;
+    int                       enable_rw_fast_io;
     int                       has_file_info_timeout;
     uint32_t                  file_info_timeout;
     ext4_journal_state_t      journal_state;

@@ -992,13 +992,48 @@ static int test_rw_batched_extent_write_and_read_coherence(void) {
     TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT(ctx == NULL);
 
-    /* Mount RW */
+    /* RO + --rw-fast-io must be rejected with -EINVAL */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.enable_rw_fast_io = 1;
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx == NULL);
+
+    /* Default --rw uses upstream e2fsprogs path (enable_rw_fast_io=0) */
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
     cfg.case_insensitive = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT_EQ_INT(0, ctx->enable_direct_io);
+    TEST_ASSERT_EQ_INT(0, ctx->enable_rw_fast_io);
+    {
+        ext2_ino_t def_ino = 0;
+        uint8_t def_buf[8192];
+        uint8_t def_read[8192];
+        for (size_t i = 0; i < sizeof(def_buf); i++) def_buf[i] = (uint8_t)(i ^ 0x3AU);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/default_rw.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &def_ino));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, def_ino, def_buf, 0, sizeof(def_buf), 0, &w, NULL));
+        TEST_ASSERT_EQ_INT((long long)sizeof(def_buf), (long long)w);
+        memset(def_read, 0, sizeof(def_read));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, def_ino, def_read, 0, sizeof(def_read), &r));
+        TEST_ASSERT_EQ_INT((long long)sizeof(def_read), (long long)r);
+        TEST_ASSERT(memcmp(def_buf, def_read, sizeof(def_buf)) == 0);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/default_rw.bin"));
+    }
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Mount RW with opt-in --rw-fast-io */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    cfg.enable_rw_fast_io = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ctx->enable_direct_io);
+    TEST_ASSERT_EQ_INT(1, ctx->enable_rw_fast_io);
 
     /* 1. Contiguous batched 2 MB write in 256 KB chunks -> minimal extent runs */
     TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/batched.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
@@ -1143,6 +1178,7 @@ static int test_rw_batched_extent_write_and_read_coherence(void) {
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = small_img;
     cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     {
         ext2_ino_t fill_ino = 0;
@@ -1163,6 +1199,7 @@ static int test_rw_batched_extent_write_and_read_coherence(void) {
     ctx = NULL;
 
     /* Verify small image remounts cleanly RO with intact metadata */
+    cfg.enable_rw_fast_io = 0;
     cfg.read_only = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/fill.bin", &st_ro));
@@ -1311,7 +1348,9 @@ static int test_rw_extent_tree_split_reverse_and_fsck_integrity(void) {
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_rw_fast_io);
 
     /* 1. Force 420 disjoint extents via interleaved writes with /sep.bin */
     TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/frag_split.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &frag_ino));
@@ -1358,6 +1397,7 @@ static int test_rw_extent_tree_split_reverse_and_fsck_integrity(void) {
     TEST_ASSERT_EQ_INT(0, verify_ext4_image_integrity(img_path));
 
     /* 4. RO Direct I/O readback verification */
+    cfg.enable_rw_fast_io = 0;
     cfg.read_only = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     verify_buf = (uint8_t *)malloc((size_t)num_extents * 4096U);
@@ -1413,7 +1453,9 @@ static int test_rw_uninit_extent_fallback_and_truncate_stress(void) {
     memset(&cfg, 0, sizeof(cfg));
     cfg.source_path = img_path;
     cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_rw_fast_io);
 
     /* 1. Construct a file with [blk 0..1 init] [blk 2..5 UNINIT] [blk 6..7 hole] */
     memset(ref, 0, sizeof(ref));
@@ -1533,6 +1575,7 @@ static int test_rw_uninit_extent_fallback_and_truncate_stress(void) {
     TEST_ASSERT_EQ_INT(0, verify_ext4_image_integrity(img_path));
 
     /* 4. RO remount readback check of /uninit.bin */
+    cfg.enable_rw_fast_io = 0;
     cfg.read_only = 1;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     {
