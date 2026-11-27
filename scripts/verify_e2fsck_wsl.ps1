@@ -2,6 +2,8 @@
 param(
     [string]$DriveLetter = "",
     [int]$SizeMb = 64,
+    [int]$RandOps = 250,
+    [int]$RandSeed = 20261128,
     [switch]$KeepImage
 )
 
@@ -331,7 +333,81 @@ function Invoke-Workload {
         [System.IO.File]::WriteAllBytes($freshPath, $data)
     }
 
-    $manifest = Get-WindowsTreeManifest -RootPath $RootPath -ExpectedCount 50 -Label "Windows workload"
+    # 4. Randomized fsx-style Win32 FileStream workload (\rand_fsx.bin)
+    $randPath = Join-Path $RootPath "rand_fsx.bin"
+    $maxRandSize = 512 * 1024
+    $shadow = New-Object byte[] $maxRandSize
+    [int]$shadowSize = 0
+    $rng = New-Object System.Random $RandSeed
+
+    $fsRand = [System.IO.File]::Open($randPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::ReadWrite)
+    try {
+        for ($op = 0; $op -lt $RandOps; $op++) {
+            $roll = if ($shadowSize -eq 0) { 0 } else { $rng.Next(100) }
+            if ($roll -lt 55) {
+                # Randomized write (aligned/unaligned/sparse extend/overwrite)
+                $off = $rng.Next($maxRandSize - 1)
+                $maxW = [Math]::Min(32768, $maxRandSize - $off)
+                $len = $rng.Next(1, $maxW + 1)
+                $wbuf = New-Object byte[] $len
+                $rng.NextBytes($wbuf)
+                [void]$fsRand.Seek([long]$off, [System.IO.SeekOrigin]::Begin)
+                $fsRand.Write($wbuf, 0, $len)
+                if ($off -gt $shadowSize) {
+                    [System.Array]::Clear($shadow, $shadowSize, $off - $shadowSize)
+                }
+                [System.Array]::Copy($wbuf, 0, $shadow, $off, $len)
+                if ($off + $len -gt $shadowSize) {
+                    $shadowSize = $off + $len
+                }
+            } elseif ($roll -lt 85) {
+                # Randomized read & byte-for-byte shadow comparison
+                $off = $rng.Next($shadowSize)
+                $maxR = [Math]::Min(32768, $shadowSize - $off)
+                $len = $rng.Next(1, $maxR + 1)
+                $rbuf = New-Object byte[] $len
+                [void]$fsRand.Seek([long]$off, [System.IO.SeekOrigin]::Begin)
+                $totalRead = 0
+                while ($totalRead -lt $len) {
+                    $n = $fsRand.Read($rbuf, $totalRead, $len - $totalRead)
+                    if ($n -le 0) {
+                        throw "rand_fsx.bin unexpected EOF at op=$op (off=$off, read=$totalRead/$len)"
+                    }
+                    $totalRead += $n
+                }
+                for ($b = 0; $b -lt $len; $b++) {
+                    if ($rbuf[$b] -ne $shadow[$off + $b]) {
+                        throw "rand_fsx.bin data mismatch at op=$op offset=$($off + $b): expected $($shadow[$off + $b]), got $($rbuf[$b])"
+                    }
+                }
+            } else {
+                # Truncate or extend via SetLength
+                $newLen = $rng.Next(0, $maxRandSize + 1)
+                $fsRand.SetLength([long]$newLen)
+                if ($newLen -gt $shadowSize) {
+                    [System.Array]::Clear($shadow, $shadowSize, $newLen - $shadowSize)
+                }
+                $shadowSize = $newLen
+            }
+        }
+        $fsRand.Flush()
+    } finally {
+        $fsRand.Dispose()
+    }
+
+    # Verify rand_fsx.bin final SHA-256 matches shadow[0..shadowSize)
+    $shaObj = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $expectedRandSha = ([System.BitConverter]::ToString($shaObj.ComputeHash($shadow, 0, $shadowSize))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $shaObj.Dispose()
+    }
+    $actualRandSha = Get-FileSha256Hex -Path $randPath
+    if ($actualRandSha -ne $expectedRandSha) {
+        throw "rand_fsx.bin final SHA-256 mismatch: expected $expectedRandSha, got $actualRandSha"
+    }
+
+    $manifest = Get-WindowsTreeManifest -RootPath $RootPath -ExpectedCount 51 -Label "Windows workload"
     return $manifest
 }
 

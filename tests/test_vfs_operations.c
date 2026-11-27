@@ -1986,12 +1986,42 @@ static int run_fsx_session(const char *tag, int use_1k_blocks, int enable_fast_i
 }
 
 static int test_rw_fast_io_fsx_fuzzer(void) {
-    /* 1. 4KB blocks with --rw-fast-io (1200 randomized write/read/truncate ops) */
-    TEST_ASSERT_EQ_INT(0, run_fsx_session("4k_fast", 0, 1, 512U * 1024U, 1200U, 0x5A3F109C7B2E4D11ULL));
-    /* 2. 1KB blocks with --rw-fast-io (1500 ops -> dense splits, holes, truncates) */
-    TEST_ASSERT_EQ_INT(0, run_fsx_session("1k_fast", 1, 1, 256U * 1024U, 1500U, 0xC0FFEE42DEADBEEFULL));
-    /* 3. 4KB blocks with default e2fsprogs --rw (300 ops baseline) */
-    TEST_ASSERT_EQ_INT(0, run_fsx_session("4k_std", 0, 0, 256U * 1024U, 300U, 0x123456789ABCDEF0ULL));
+    char env_buf[64];
+    uint64_t seed_mix = 0ULL;
+    uint32_t ops_4k_fast = 1200U;
+    uint32_t ops_1k_fast = 1500U;
+    uint32_t ops_4k_std = 300U;
+    int custom_cfg = 0;
+
+    if (GetEnvironmentVariableA("ZEROEXT4_FSX_SEED", env_buf, (DWORD)sizeof(env_buf)) > 0 && env_buf[0] != '\0') {
+        seed_mix = (uint64_t)strtoull(env_buf, NULL, 0);
+        custom_cfg = 1;
+    }
+    if (GetEnvironmentVariableA("ZEROEXT4_FSX_OPS", env_buf, (DWORD)sizeof(env_buf)) > 0 && env_buf[0] != '\0') {
+        unsigned long parsed = strtoul(env_buf, NULL, 10);
+        if (parsed < 100UL) parsed = 100UL;
+        if (parsed > 100000UL) parsed = 100000UL;
+        ops_4k_fast = (uint32_t)parsed;
+        ops_1k_fast = (uint32_t)parsed;
+        ops_4k_std = (uint32_t)(parsed / 4UL);
+        if (ops_4k_std < 100U) ops_4k_std = 100U;
+        if (ops_4k_std > 1000U) ops_4k_std = 1000U;
+        custom_cfg = 1;
+    }
+    if (custom_cfg) {
+        printf("  fsx custom config: seed_mix=0x%016llx ops=(%u/%u/%u)\n",
+               (unsigned long long)seed_mix, ops_4k_fast, ops_1k_fast, ops_4k_std);
+    }
+
+    /* 1. 4KB blocks with --rw-fast-io */
+    TEST_ASSERT_EQ_INT(0, run_fsx_session("4k_fast", 0, 1, 512U * 1024U, ops_4k_fast,
+                                          0x5A3F109C7B2E4D11ULL ^ seed_mix));
+    /* 2. 1KB blocks with --rw-fast-io (dense splits, holes, truncates) */
+    TEST_ASSERT_EQ_INT(0, run_fsx_session("1k_fast", 1, 1, 256U * 1024U, ops_1k_fast,
+                                          0xC0FFEE42DEADBEEFULL ^ (seed_mix * 0x9E3779B97F4A7C15ULL)));
+    /* 3. 4KB blocks with default e2fsprogs --rw baseline */
+    TEST_ASSERT_EQ_INT(0, run_fsx_session("4k_std", 0, 0, 256U * 1024U, ops_4k_std,
+                                          0x123456789ABCDEF0ULL ^ (seed_mix ^ (seed_mix >> 17))));
     return 0;
 }
 
@@ -2388,6 +2418,224 @@ static int test_rw_fast_io_concurrent_rw_stress(void) {
     return rc;
 }
 
+typedef struct huge_sparse_res {
+    char img_path[MAX_PATH];
+    ext4_vfs_ctx_t *ctx;
+    uint8_t *p0;
+    uint8_t *p1;
+    uint8_t *p2;
+    uint8_t *p3;
+    uint8_t *rbuf;
+} huge_sparse_res_t;
+
+static int test_rw_fast_io_large_file_4gb_sparse_boundary_impl(huge_sparse_res_t *r) {
+    enum {
+        P0_LEN = 5000,
+        P1_LEN = 6000,
+        P2_LEN = 8192,
+        P3_LEN = 5555,
+        RBUF_LEN = 16384
+    };
+    const uint64_t off_2g_cross = 0x7FFFF800ULL;
+    const uint64_t off_4g_cross = 0xFFFFF000ULL;
+    const uint64_t off_past_4g  = 0x100003333ULL;
+    const uint64_t trunc_4g_mid = 0x100000800ULL; /* Keep first 6144 bytes of P2 (crossing 4 GiB) */
+    const uint64_t ext_past_4g  = 0x100005000ULL;
+    ext4_mount_config_t cfg;
+    ext2_ino_t ino = 0;
+    ext4_stat_t st;
+    uint32_t w = 0, got = 0;
+    uint64_t new_sz = 0;
+
+    mt_fill_stripe(r->p0, P0_LEN, 0x10101010U);
+    mt_fill_stripe(r->p1, P1_LEN, 0x20202020U);
+    mt_fill_stripe(r->p2, P2_LEN, 0x30303030U);
+    mt_fill_stripe(r->p3, P3_LEN, 0x40404040U);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(r->img_path, 16ULL * 1024ULL * 1024ULL, "HUGE4G"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = r->img_path;
+    cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &r->ctx));
+    TEST_ASSERT_EQ_INT(1, r->ctx->enable_rw_fast_io);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(r->ctx, "/huge_sparse.bin", 0, 0644,
+                                          FILE_ATTRIBUTE_ARCHIVE, &ino));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(r->ctx, ino, r->p0, 0ULL, P0_LEN, 0, &w, &new_sz));
+    TEST_ASSERT_EQ_INT(P0_LEN, w);
+    TEST_ASSERT_EQ_INT(P0_LEN, new_sz);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(r->ctx, ino, r->p1, off_2g_cross, P1_LEN, 0, &w, &new_sz));
+    TEST_ASSERT_EQ_INT(P1_LEN, w);
+    TEST_ASSERT_EQ_INT((long long)(off_2g_cross + P1_LEN), (long long)new_sz);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(r->ctx, ino, r->p2, off_4g_cross, P2_LEN, 0, &w, &new_sz));
+    TEST_ASSERT_EQ_INT(P2_LEN, w);
+    TEST_ASSERT_EQ_INT((long long)(off_4g_cross + P2_LEN), (long long)new_sz);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(r->ctx, ino, r->p3, off_past_4g, P3_LEN, 0, &w, &new_sz));
+    TEST_ASSERT_EQ_INT(P3_LEN, w);
+    TEST_ASSERT_EQ_INT((long long)(off_past_4g + P3_LEN), (long long)new_sz);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(r->ctx, "/huge_sparse.bin", &st));
+    TEST_ASSERT_EQ_INT((long long)(off_past_4g + P3_LEN), (long long)st.size);
+    TEST_ASSERT(ext2fs_has_feature_large_file(r->ctx->fs->super) != 0);
+
+    /* Read back data regions & holes under --rw --rw-fast-io */
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, 0ULL, P0_LEN, &got));
+    TEST_ASSERT_EQ_INT(P0_LEN, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p0, P0_LEN));
+
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, off_2g_cross, P1_LEN, &got));
+    TEST_ASSERT_EQ_INT(P1_LEN, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p1, P1_LEN));
+
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, off_4g_cross, P2_LEN, &got));
+    TEST_ASSERT_EQ_INT(P2_LEN, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p2, P2_LEN));
+
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, off_past_4g, P3_LEN, &got));
+    TEST_ASSERT_EQ_INT(P3_LEN, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p3, P3_LEN));
+
+    /* Sparse holes across 2 GiB / 4 GiB */
+    memset(r->rbuf, 0xCC, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, 0x7FFFE000ULL, 4096U, &got));
+    TEST_ASSERT_EQ_INT(4096U, got);
+    for (size_t i = 0; i < 4096U; i++) {
+        if (r->rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, r->rbuf[i]);
+    }
+
+    memset(r->rbuf, 0xCC, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, 0xC0000000ULL, 8192U, &got));
+    TEST_ASSERT_EQ_INT(8192U, got);
+    for (size_t i = 0; i < 8192U; i++) {
+        if (r->rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, r->rbuf[i]);
+    }
+
+    memset(r->rbuf, 0xCC, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, 0x100001000ULL, 0x2333U, &got));
+    TEST_ASSERT_EQ_INT(0x2333U, got);
+    for (size_t i = 0; i < 0x2333U; i++) {
+        if (r->rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, r->rbuf[i]);
+    }
+
+    /* Truncate down past 4 GiB boundary (to 4 GiB + 2048) */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_truncate(r->ctx, ino, trunc_4g_mid));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(r->ctx, "/huge_sparse.bin", &st));
+    TEST_ASSERT_EQ_INT((long long)trunc_4g_mid, (long long)st.size);
+
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, off_4g_cross, P2_LEN, &got));
+    TEST_ASSERT_EQ_INT(6144U, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p2, 6144U));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, trunc_4g_mid, 1024U, &got));
+    TEST_ASSERT_EQ_INT(0, got);
+
+    /* Re-extend past 4 GiB (previously occupied partial tail + beyond EOF must zero-fill) */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_truncate(r->ctx, ino, ext_past_4g));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(r->ctx, "/huge_sparse.bin", &st));
+    TEST_ASSERT_EQ_INT((long long)ext_past_4g, (long long)st.size);
+
+    memset(r->rbuf, 0xEE, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, ino, r->rbuf, trunc_4g_mid, 16384U, &got));
+    TEST_ASSERT_EQ_INT(16384U, got);
+    for (size_t i = 0; i < 16384U; i++) {
+        if (r->rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, r->rbuf[i]);
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(r->ctx));
+    r->ctx = NULL;
+
+    /* Structural integrity check + Read-Only Direct Extent I/O cross-verification */
+    TEST_ASSERT_EQ_INT(0, verify_ext4_image_integrity(r->img_path));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = r->img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &r->ctx));
+    TEST_ASSERT_EQ_INT(1, r->ctx->enable_direct_io);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(r->ctx, "/huge_sparse.bin", &st));
+    TEST_ASSERT_EQ_INT((long long)ext_past_4g, (long long)st.size);
+
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, st.ino, r->rbuf, 0ULL, P0_LEN, &got));
+    TEST_ASSERT_EQ_INT(P0_LEN, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p0, P0_LEN));
+
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, st.ino, r->rbuf, off_2g_cross, P1_LEN, &got));
+    TEST_ASSERT_EQ_INT(P1_LEN, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p1, P1_LEN));
+
+    memset(r->rbuf, 0xAA, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, st.ino, r->rbuf, off_4g_cross, 6144U, &got));
+    TEST_ASSERT_EQ_INT(6144U, got);
+    TEST_ASSERT_EQ_INT(0, memcmp(r->rbuf, r->p2, 6144U));
+
+    memset(r->rbuf, 0xDD, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, st.ino, r->rbuf, trunc_4g_mid, 16384U, &got));
+    TEST_ASSERT_EQ_INT(16384U, got);
+    for (size_t i = 0; i < 16384U; i++) {
+        if (r->rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, r->rbuf[i]);
+    }
+
+    memset(r->rbuf, 0xDD, RBUF_LEN);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(r->ctx, st.ino, r->rbuf, trunc_4g_mid + 16384ULL, 2048U, &got));
+    TEST_ASSERT_EQ_INT(2048U, got);
+    for (size_t i = 0; i < 2048U; i++) {
+        if (r->rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, r->rbuf[i]);
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(r->ctx));
+    r->ctx = NULL;
+    return 0;
+}
+
+static int test_rw_fast_io_large_file_4gb_sparse_boundary(void) {
+    huge_sparse_res_t *r = (huge_sparse_res_t *)calloc(1, sizeof(huge_sparse_res_t));
+    int rc = 1;
+    int alloc_ok = 0;
+
+    TEST_ASSERT(r != NULL);
+    test_make_temp_path(r->img_path, sizeof(r->img_path), "vfs_huge_4gb_sparse.img");
+    DeleteFileA(r->img_path);
+
+    r->p0 = (uint8_t *)calloc(1, 5000U);
+    r->p1 = (uint8_t *)calloc(1, 6000U);
+    r->p2 = (uint8_t *)calloc(1, 8192U);
+    r->p3 = (uint8_t *)calloc(1, 5555U);
+    r->rbuf = (uint8_t *)calloc(1, 16384U);
+    alloc_ok = (r->p0 != NULL && r->p1 != NULL && r->p2 != NULL && r->p3 != NULL && r->rbuf != NULL);
+
+    if (alloc_ok) {
+        rc = test_rw_fast_io_large_file_4gb_sparse_boundary_impl(r);
+    }
+
+    if (r->ctx) ext4_vfs_unmount(r->ctx);
+    DeleteFileA(r->img_path);
+    free(r->p0);
+    free(r->p1);
+    free(r->p2);
+    free(r->p3);
+    free(r->rbuf);
+    free(r);
+
+    TEST_ASSERT(alloc_ok);
+    return rc;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -2407,5 +2655,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_rw_fast_io_multileaf_hole_boundary_write_and_read);
     RUN_TEST(test_rw_fast_io_fsx_fuzzer);
     RUN_TEST(test_rw_fast_io_concurrent_rw_stress);
+    RUN_TEST(test_rw_fast_io_large_file_4gb_sparse_boundary);
     return suite_failures;
 }

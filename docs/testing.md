@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **39 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **40 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -70,8 +70,9 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_rw_extent_tree_split_reverse_and_fsck_integrity` | `--rw --rw-fast-io` における 420 断片書込の多段エクステント木分割 (`depth 0 -> 1 -> 2`)、逆順スパース挿入 (`insert_before`)＋親インデックス更新、ブロック重複／`i_blocks`／空きブロック／チェックサム全件検査 |
 | `test_rw_uninit_extent_fallback_and_truncate_stress` | `--rw --rw-fast-io` における初期化済＋`UNINIT`＋スパースホール横断書込時の標準フォールバック切替、`truncate`＋再伸長ゼロ埋め、削除後ブロック再利用混合ストレス＋全件整合性検査 |
 | `test_rw_fast_io_multileaf_hole_boundary_write_and_read` | 1KB ブロック＋3,800 断片で構築した `eh_depth == 2`（複数 `level-1` サブツリー）の境界ホール横断読取・書込および EOF 追記（`find_next_leaf_after` 重複／ゼロ読込防止＋`verify_ext4_image_integrity` 検証） |
-| `test_rw_fast_io_fsx_fuzzer` | `fsx` 型決定論的ランダムファザー（4KB 1,200回＋1KB 1,500回＋既定 `--rw` 300回、ランダム `write`/`read`/`truncate`、シャドウバッファ 1B 照合、チェックポイントごとの `verify_ext4_image_integrity`＋RO Direct I/O 再読込） |
+| `test_rw_fast_io_fsx_fuzzer` | `fsx` 型ランダムファザー（既定 4KB 1,200回＋1KB 1,500回＋`--rw` 300回、`ZEROEXT4_FSX_SEED`/`ZEROEXT4_FSX_OPS` でシード・回数可変）、ランダム `write`/`read`/`truncate`、シャドウバッファ 1B 照合、`verify_ext4_image_integrity`＋RO Direct I/O 再読込 |
 | `test_rw_fast_io_concurrent_rw_stress` | `--rw --rw-fast-io` 有効下での 10 スレッド同時並列 RW ストレス（同一 iノード異ストライプ 4 書込＋128KB スパースホール維持・Read-After-Write 検証、別ファイル `truncate`/`flush`、作成/リネーム/削除競合、並列 4 読込）＋ `verify_ext4_image_integrity` ＋ RO Direct I/O 全ストライプ照合 |
+| `test_rw_fast_io_large_file_4gb_sparse_boundary` | `--rw --rw-fast-io` での `2 GiB` / `4 GiB` 境界跨ぎスパース書込・ホールゼロ読取・`LARGE_FILE` 機能フラグ付与・4 GiB 境界跨ぎ `truncate` 縮小／再伸長ゼロ埋め＋`verify_ext4_image_integrity`＋RO Direct Extent I/O 再照合 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 
@@ -156,5 +157,5 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_sanitizers.ps1 -Mode anal
 3. **WinFsp Overlay マウント (`--overlay`)**: Lower ファイル読取・Upper 新規作成・Copy-up 書込後に Lower イメージが 1 バイトも変更されていないこと、および別 UUID イメージに対する `.wh.__ext4_lower_id` 拒否を確認。
 4. **Upstream Zero-Patch 分離検証**: `third_party/e2fsprogs/` 配下に `_MSC_VER` / `_WIN32` / `windows.h` 等の Windows 固有記述が混入していないことを確認（[ADR-0005](adr/0005-zero-patch-e2fsprogs-compat-layer.md)）。
 5. **非破壊ヘッダ生成確認（クロスプラットフォーム可）**: `python3 scripts/generate_e2fsprogs_headers.py ...` が警告・エラーなしで終了することを確認。
-6. **WSL2 Linux 実カーネル (`mount -o loop`) ＆ `e2fsck -fn` 双方向クロス検証（任意・WSL2 環境）**: [scripts/verify_e2fsck_wsl.ps1](../scripts/verify_e2fsck_wsl.ps1) により、`--rw` および `--rw --rw-fast-io` の双方で (A) ZeroExt4 WinFsp 実マウント書き込み → `e2fsck -fn`（Pass 1–5）→ Linux カーネル `mount -t ext4 -o loop,ro` SHA-256 一致 → ZeroExt4 RO Direct Extent I/O SHA-256 一致、(B) Linux カーネル `mkfs.ext4`＋`mount -o loop`（`fallocate` `UNINIT` エクステント・スパースホール・断片化含む）→ ZeroExt4 RO Direct Extent I/O 全件照合 → ZeroExt4 RW 編集 → `e2fsck -fn` → Linux カーネル再マウント SHA-256 一致を検証。
+6. **WSL2 Linux 実カーネル (`mount -o loop`) ＆ `e2fsck -fn` 双方向クロス検証（任意・WSL2 環境）**: [scripts/verify_e2fsck_wsl.ps1](../scripts/verify_e2fsck_wsl.ps1) により、`--rw` および `--rw --rw-fast-io` の双方で (A) ZeroExt4 WinFsp 実マウント書き込み（固定ワークロード＋ランダム `rand_fsx.bin`、`-RandSeed`/`-RandOps` 可変、計 51 ファイル）→ `e2fsck -fn`（Pass 1–5）→ Linux カーネル `mount -t ext4 -o loop,ro` SHA-256 一致 → ZeroExt4 RO Direct Extent I/O SHA-256 一致、(B) Linux カーネル `mkfs.ext4`＋`mount -o loop`（`fallocate` `UNINIT` エクステント・スパースホール・断片化含む）→ ZeroExt4 RO Direct Extent I/O 全件照合 → ZeroExt4 RW 編集 → `e2fsck -fn` → Linux カーネル再マウント SHA-256 一致を検証。
 7. **WinFsp 公式テストスイート（`winfsp-tests-x64.exe`）実マウント互換検証（任意・`winfsp-tests` + WSL2 環境）**: [scripts/run_winfsp_tests.ps1](../scripts/run_winfsp_tests.ps1) により、`--rw` および `--rw --rw-fast-io` の実マウントに対し上流 `--fuse-external --resilient --case-insensitive --case-insensitive-cmp` の ext4 適用可能 **45 項目**（`create_*`, `getfileinfo`, `delete_*`, `rename_*`, `get/setvolinfo`, `getsecurity`, `rdwr_*`, `flush*`, `querydir*`, `exec_*`）＋事後 `e2fsck -fn` を実行。なお Reparse Point (`reparse*`)・ディレクトリ変更通知 (`dirnotify_test`)・バイトレンジロック (`lock*`)・Windows 専用属性永続化 (`create_fileattr_test`, `setfileinfo_test`)・254 文字 3 バイト文字＝762 UTF-8 バイト長テスト (`create_namelen_test`, `querydir_namelen_test`, ext4 上限は 255 UTF-8 バイト) の 7 項目は仕様差のため既定で除外している。
