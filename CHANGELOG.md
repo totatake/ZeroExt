@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-28
+
+### Fixed
+- Hardened `--rw-fast-io` crash/error consistency and guard symmetry: write physical data blocks before inserting new extent metadata in `src/vfs/op_write.c` (with partial-write block/inode-block-count rollback on error so exposed extents never point at stale disk data), symmetrized `EXT2_INODE_SIZE` / `EXT4_EXTENTS_FL` / `EXT4_INLINE_DATA_FL` / `EXT4_ENCRYPT_FL` guards across both `src/vfs/op_read.c` and `src/vfs/op_write.c`, and unconditionally invalidated the `win32_io` cache slot on write errors in `src/io/win32_io.c` to prevent stale dirty cache retention on partial I/O failure.
+
+### Added
+- Added configurable `ZEROEXT4_FSX_SEED` / `ZEROEXT4_FSX_OPS` overrides to `test_rw_fast_io_fsx_fuzzer` and a new 2 GiB / 4 GiB sparse-boundary & `EXT2_FEATURE_RO_COMPAT_LARGE_FILE` integration test (`test_rw_fast_io_large_file_4gb_sparse_boundary`) in `tests/test_vfs_operations.c` (40 CTest functions total).
+- Extended `scripts/verify_e2fsck_wsl.ps1` with `-RandOps` / `-RandSeed` live Win32 `FileStream` randomized write/truncate/rename workload (`rand_fsx.bin`) verified against WSL2 `e2fsck -fn`, Linux kernel `mount -t ext4 -o loop,ro` SHA-256, and ZeroExt4 RO Direct Extent I/O readback.
+
 ## [0.10.1] - 2026-11-27
 
 ### Added
@@ -119,7 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt4 / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/totatake/ZeroExt4/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/totatake/ZeroExt4/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/totatake/ZeroExt4/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/totatake/ZeroExt4/compare/v0.8.1...v0.9.0
