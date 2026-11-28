@@ -100,6 +100,43 @@ typedef PVOID PFILE_FULL_EA_INFORMATION;
 #ifndef STATUS_CANNOT_DELETE
 #define STATUS_CANNOT_DELETE             ((NTSTATUS)0xC0000121L)
 #endif
+#ifndef STATUS_REPARSE
+#define STATUS_REPARSE                   ((NTSTATUS)0x00000104L)
+#endif
+#ifndef STATUS_NOT_A_REPARSE_POINT
+#define STATUS_NOT_A_REPARSE_POINT       ((NTSTATUS)0xC0000275L)
+#endif
+#ifndef STATUS_IO_REPARSE_TAG_INVALID
+#define STATUS_IO_REPARSE_TAG_INVALID    ((NTSTATUS)0xC0000276L)
+#endif
+#ifndef STATUS_IO_REPARSE_TAG_MISMATCH
+#define STATUS_IO_REPARSE_TAG_MISMATCH   ((NTSTATUS)0xC0000277L)
+#endif
+#ifndef STATUS_IO_REPARSE_DATA_INVALID
+#define STATUS_IO_REPARSE_DATA_INVALID   ((NTSTATUS)0xC0000278L)
+#endif
+#ifndef STATUS_REPARSE_POINT_NOT_RESOLVED
+#define STATUS_REPARSE_POINT_NOT_RESOLVED ((NTSTATUS)0xC0000280L)
+#endif
+
+#ifndef IO_REPARSE_TAG_SYMLINK
+#define IO_REPARSE_TAG_SYMLINK           ((UINT32)0xA000000CL)
+#endif
+#ifndef SYMLINK_FLAG_RELATIVE
+#define SYMLINK_FLAG_RELATIVE            ((UINT32)0x00000001L)
+#endif
+
+typedef struct {
+    UINT32 ReparseTag;
+    UINT16 ReparseDataLength;
+    UINT16 Reserved;
+    UINT16 SubstituteNameOffset;
+    UINT16 SubstituteNameLength;
+    UINT16 PrintNameOffset;
+    UINT16 PrintNameLength;
+    UINT32 Flags;
+    WCHAR  PathBuffer[];
+} FSP_SYMLINK_REPARSE_DATA_BUFFER;
 
 #define FSP_FSCTL_DEFAULT_ALIGN_UP(x, s) (((x) + ((s) - 1)) & ~((s) - 1))
 #define FSP_FSCTL_TRANSACT_PATH_SIZEMAX  (1024 * sizeof(WCHAR))
@@ -222,6 +259,7 @@ typedef struct {
 FSP_ABI_ASSERT(fileinfo_size, sizeof(FSP_FSCTL_FILE_INFO) == 72);
 FSP_ABI_ASSERT(dirinfo_fileinfo, offsetof(FSP_FSCTL_DIR_INFO, FileInfo) == 0x08);
 FSP_ABI_ASSERT(dirinfo_namebuf, offsetof(FSP_FSCTL_DIR_INFO, FileNameBuf) == 0x68);
+FSP_ABI_ASSERT(symlink_reparse_hdr, offsetof(FSP_SYMLINK_REPARSE_DATA_BUFFER, PathBuffer) == 20);
 
 typedef struct {
     UINT16 Size;
@@ -341,6 +379,25 @@ typedef BOOLEAN (*PFN_FspFileSystemAddDirInfo)(FSP_FSCTL_DIR_INFO *DirInfo, PVOI
                                                ULONG Length, PULONG PBytesTransferred);
 typedef NTSTATUS (*PFN_FspFileSystemSetDebugLogF)(FSP_FILE_SYSTEM *FileSystem, UINT32 DebugLog);
 typedef VOID (*PFN_FspDebugLogSetHandle)(HANDLE Handle);
+typedef NTSTATUS (*PFN_FspGetReparsePointByName)(
+    FSP_FILE_SYSTEM *FileSystem, PVOID Context, PWSTR FileName,
+    BOOLEAN IsDirectory, PVOID Buffer, PSIZE_T PSize);
+typedef BOOLEAN (*PFN_FspFileSystemFindReparsePoint)(
+    FSP_FILE_SYSTEM *FileSystem,
+    PFN_FspGetReparsePointByName GetReparsePointByName,
+    PVOID Context,
+    PWSTR FileName,
+    PUINT32 PReparsePointIndex);
+typedef NTSTATUS (*PFN_FspFileSystemResolveReparsePoints)(
+    FSP_FILE_SYSTEM *FileSystem,
+    PFN_FspGetReparsePointByName GetReparsePointByName,
+    PVOID Context,
+    PWSTR FileName,
+    UINT32 ReparsePointIndex,
+    BOOLEAN ResolveLastPathComponent,
+    PIO_STATUS_BLOCK PIoStatus,
+    PVOID Buffer,
+    PSIZE_T PSize);
 
 typedef struct {
     HMODULE Module;
@@ -352,6 +409,8 @@ typedef struct {
     PFN_FspFileSystemAddDirInfo AddDirInfo;
     PFN_FspFileSystemSetDebugLogF SetDebugLogF;
     PFN_FspDebugLogSetHandle DebugLogSetHandle;
+    PFN_FspFileSystemFindReparsePoint FindReparsePoint;
+    PFN_FspFileSystemResolveReparsePoints ResolveReparsePoints;
 } FSP_RUNTIME_API;
 
 static __inline HMODULE FspTryLoadDll(void) {
@@ -407,6 +466,8 @@ static __inline FSP_RUNTIME_API *FspGetRuntimeApi(void) {
             api.AddDirInfo = (PFN_FspFileSystemAddDirInfo)(void *)GetProcAddress(mod, "FspFileSystemAddDirInfo");
             api.SetDebugLogF = (PFN_FspFileSystemSetDebugLogF)(void *)GetProcAddress(mod, "FspFileSystemSetDebugLogF");
             api.DebugLogSetHandle = (PFN_FspDebugLogSetHandle)(void *)GetProcAddress(mod, "FspDebugLogSetHandle");
+            api.FindReparsePoint = (PFN_FspFileSystemFindReparsePoint)(void *)GetProcAddress(mod, "FspFileSystemFindReparsePoint");
+            api.ResolveReparsePoints = (PFN_FspFileSystemResolveReparsePoints)(void *)GetProcAddress(mod, "FspFileSystemResolveReparsePoints");
         }
         initialized = 1;
     }
@@ -441,6 +502,100 @@ static __inline BOOLEAN FspFileSystemAddDirInfoFallback(FSP_FSCTL_DIR_INFO *DirI
 
 #ifndef FspFileSystemAddDirInfo
 #define FspFileSystemAddDirInfo FspFileSystemAddDirInfoFallback
+#endif
+
+static __inline BOOLEAN FspFileSystemFindReparsePointFallback(
+    FSP_FILE_SYSTEM *FileSystem,
+    PFN_FspGetReparsePointByName GetReparsePointByName,
+    PVOID Context,
+    PWSTR FileName,
+    PUINT32 PReparsePointIndex) {
+    FSP_RUNTIME_API *api = FspGetRuntimeApi();
+    size_t i = 0;
+    WCHAR sub[1024];
+
+    if (FileSystem && FileSystem->VolumeHandle && api && api->FindReparsePoint) {
+        return api->FindReparsePoint(FileSystem, GetReparsePointByName, Context, FileName, PReparsePointIndex);
+    }
+    if (!GetReparsePointByName || !FileName) return FALSE;
+    while (FileName[i] == L'\\') i++;
+    while (FileName[i] != L'\0') {
+        size_t comp_start = i;
+        size_t j = i;
+        BOOLEAN is_dir;
+        while (FileName[j] != L'\0' && FileName[j] != L'\\') j++;
+        is_dir = (FileName[j] == L'\\') ? TRUE : FALSE;
+        if (j < 1024) {
+            memcpy(sub, FileName, j * sizeof(WCHAR));
+            sub[j] = L'\0';
+            if (GetReparsePointByName(FileSystem, Context, sub, is_dir, NULL, NULL) == STATUS_SUCCESS) {
+                if (PReparsePointIndex) *PReparsePointIndex = (UINT32)comp_start;
+                return TRUE;
+            }
+        }
+        i = j;
+        while (FileName[i] == L'\\') i++;
+    }
+    return FALSE;
+}
+
+static __inline NTSTATUS FspFileSystemResolveReparsePointsFallback(
+    FSP_FILE_SYSTEM *FileSystem,
+    PFN_FspGetReparsePointByName GetReparsePointByName,
+    PVOID Context,
+    PWSTR FileName,
+    UINT32 ReparsePointIndex,
+    BOOLEAN ResolveLastPathComponent,
+    PIO_STATUS_BLOCK PIoStatus,
+    PVOID Buffer,
+    PSIZE_T PSize) {
+    FSP_RUNTIME_API *api = FspGetRuntimeApi();
+    size_t i = 0;
+    WCHAR sub[1024];
+
+    if (FileSystem && FileSystem->VolumeHandle && api && api->ResolveReparsePoints) {
+        return api->ResolveReparsePoints(
+            FileSystem, GetReparsePointByName, Context, FileName,
+            ReparsePointIndex, ResolveLastPathComponent, PIoStatus, Buffer, PSize);
+    }
+    if (!GetReparsePointByName || !FileName || !PIoStatus) return STATUS_INVALID_PARAMETER;
+    while (FileName[i] == L'\\') i++;
+    while (FileName[i] != L'\0') {
+        size_t j = i;
+        BOOLEAN is_dir;
+        while (FileName[j] != L'\0' && FileName[j] != L'\\') j++;
+        is_dir = (FileName[j] == L'\\') ? TRUE : FALSE;
+        if (j > (size_t)ReparsePointIndex && (is_dir || ResolveLastPathComponent)) {
+            if (j < 1024) {
+                NTSTATUS rc;
+                memcpy(sub, FileName, j * sizeof(WCHAR));
+                sub[j] = L'\0';
+                rc = GetReparsePointByName(FileSystem, Context, sub, is_dir, Buffer, PSize);
+                if (rc == STATUS_SUCCESS) {
+                    PIoStatus->Status = STATUS_REPARSE;
+                    PIoStatus->Information = (Buffer && PSize && *PSize >= sizeof(UINT32))
+                                                 ? *(const UINT32 *)Buffer
+                                                 : IO_REPARSE_TAG_SYMLINK;
+                    return STATUS_REPARSE;
+                }
+                if (rc == STATUS_BUFFER_TOO_SMALL) {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+            }
+        }
+        i = j;
+        while (FileName[i] == L'\\') i++;
+    }
+    PIoStatus->Status = STATUS_REPARSE_POINT_NOT_RESOLVED;
+    PIoStatus->Information = 0;
+    return STATUS_REPARSE_POINT_NOT_RESOLVED;
+}
+
+#ifndef FspFileSystemFindReparsePoint
+#define FspFileSystemFindReparsePoint FspFileSystemFindReparsePointFallback
+#endif
+#ifndef FspFileSystemResolveReparsePoints
+#define FspFileSystemResolveReparsePoints FspFileSystemResolveReparsePointsFallback
 #endif
 
 #ifdef __cplusplus

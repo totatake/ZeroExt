@@ -71,6 +71,7 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
 int overlay_vfs_truncate(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint64_t new_size);
 int overlay_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol);
 int overlay_vfs_flush(ext4_vfs_ctx_t *ctx);
+int overlay_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_target, size_t out_sz);
 
 #ifdef __cplusplus
 }

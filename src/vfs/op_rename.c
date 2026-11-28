@@ -87,10 +87,17 @@ static int resolve_ci_cb(ext2_ino_t dir, int entry, struct ext2_dir_entry *diren
     memcpy(tmp, de->name, de->name_len);
     tmp[de->name_len] = '\0';
     if (_stricmp(tmp, c->target) == 0) {
-        strcpy_s(c->actual_name, sizeof(c->actual_name), tmp);
-        c->ino = de->inode;
-        c->found = 1;
-        return DIRENT_ABORT;
+        if (!c->found) {
+            strcpy_s(c->actual_name, sizeof(c->actual_name), tmp);
+            c->ino = de->inode;
+            c->found = 1;
+        } else {
+            int cmp = strcmp(tmp, c->actual_name);
+            if (cmp < 0 || (cmp == 0 && de->inode < c->ino)) {
+                strcpy_s(c->actual_name, sizeof(c->actual_name), tmp);
+                c->ino = de->inode;
+            }
+        }
     }
     return 0;
 }

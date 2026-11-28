@@ -162,6 +162,7 @@ endif()
 # Static library: Win32 I/O, Disk/Partition/Journal Probe, Modular VFS, WinFsp Interface
 add_library(zeroext4_core STATIC
     src/common/ext4_errno.c
+    src/common/win_namespace.c
     src/trace/perfetto_trace.c
     src/io/win32_io.c
     src/disk/superblock_probe.c
@@ -169,6 +170,7 @@ add_library(zeroext4_core STATIC
     src/disk/disk_scanner.c
     src/extent/extent_map.c
     src/overlay/overlay_vfs.c
+    src/overlay/overlay_tools.c
     src/vfs/op_init.c
     src/vfs/op_getattr.c
     src/vfs/op_readdir.c

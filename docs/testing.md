@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **42 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **47 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -74,6 +74,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_rw_fast_io_fsx_fuzzer` | `fsx` 型ランダムファザー（既定 4KB 1,200回＋1KB 1,500回＋`--rw` 300回、`ZEROEXT4_FSX_SEED`/`ZEROEXT4_FSX_OPS` でシード・回数可変）、ランダム `write`/`read`/`truncate`、シャドウバッファ 1B 照合、`verify_ext4_image_integrity`＋RO Direct I/O 再読込 |
 | `test_rw_fast_io_concurrent_rw_stress` | `--rw --rw-fast-io` 有効下での 10 スレッド同時並列 RW ストレス（同一 iノード異ストライプ 4 書込＋128KB スパースホール維持・Read-After-Write 検証、別ファイル `truncate`/`flush`、作成/リネーム/削除競合、並列 4 読込）＋ `verify_ext4_image_integrity` ＋ RO Direct I/O 全ストライプ照合 |
 | `test_rw_fast_io_large_file_4gb_sparse_boundary` | `--rw --rw-fast-io` での `2 GiB` / `4 GiB` 境界跨ぎスパース書込・ホールゼロ読取・`LARGE_FILE` 機能フラグ付与・4 GiB 境界跨ぎ `truncate` 縮小／再伸長ゼロ埋め＋`verify_ext4_image_integrity`＋RO Direct Extent I/O 再照合 |
+| `test_case_insensitive_collision_priority` | `/Foo.txt`・`/foo.txt` 共存下での厳密一致優先・フォールバック時の決定論的順序解決 ＆ `ext4_vfs_get_ci_collision_count` 検証 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 
@@ -84,6 +85,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_winfsp_volume_params_ro_cache_timeout` | RO マウント時 `FileInfoTimeout = INFINITE` と RW/Overlay 時有限タイムアウト設定の検証 |
 | `test_winfsp_get_dir_info_by_name_and_large_readdir` | `PassQueryDirectoryFileName = 1` ＋ `FspGetDirInfoByName` 単一検索および多件数ディレクトリページネーション検証 |
 | `test_winfsp_safe_unmount_target` | `zeroext4 unmount` 時のターゲット対象検証（非 ZeroExt4 / 非 WinFsp ドライブの誤解除抑止） |
+| `test_winfsp_symlink_reparse_points_and_namespace_guards` | `ReparsePoints = 1`、`GetSecurityByName`/`ResolveReparsePoints`/`GetReparsePoint`/`SetReparsePoint`（相対・POSIX 絶対・ディレクトリ symlink・循環・ホスト越境遮断）、`ReadDirectory` 後処理、`CON`/`nul.txt`/禁止文字作成・リネーム拒否検証 |
 
 ### 2.5 `extent_and_overlay` ([tests/test_extent_and_overlay.c](../tests/test_extent_and_overlay.c))
 
@@ -95,6 +97,9 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_read_handle_cached_extents` | オープンハンドル (`ext4_file_handle_t.cached_extents`) 保持時のロックレス直読およびクローズ解放検証 |
 | `test_overlay_case_sensitive_upperdir` | `case_insensitive = 0` + NTFS Upperdir での `FileCaseSensitiveInfo` 設定／拒否保護、`.wh.__ext4_lower_id` の `:cs` 混用ブロック検証 |
 | `test_overlay_upperdir_guards_v2` | 非空未識別 Upperdir の拒否 (`-ENOTEMPTY`) ＆無変更検証、新規 Upperdir v2 マーカー生成、`.wh.__ext4_lower_id` 破損 (`-EINVAL`)・未知バージョン (`-ENOTSUP`)・後方互換 v1・同一 UUID GPT クローン識別検証 |
+| `test_overlay_hashmap_scalability_and_deterministic_inodes` | 650+ ファイル作成・リネーム・再マウント時の O(1) 双方向ハッシュマップおよび合成 inode 安定性／決定論性検証 |
+| `test_overlay_tools_status_diff_validate_export_reset` | `overlay_tools_scan`/`validate`（孤立 whiteout・残留 tmp 検出）・`export_tar`（USTAR/`manifest.json`）・`reset_upper`（マーカー保持＋未識別ディレクトリ拒否）検証 |
+| `test_overlay_symlink_and_windows_namespace_guards` | Overlay における Lower symlink 読取／Whiteout 削除許可・Copy-up/書込/リネーム `-ENOTSUP` 拒否、Windows 予約名 (`CON`, `AUX`, `com1.log`)・禁止文字ガード検証 |
 
 ### 2.6 `perfetto_trace` ([tests/test_perfetto_trace.c](../tests/test_perfetto_trace.c))
 
@@ -115,7 +120,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | :--- | :--- |
 | `JsonParsing_ScanResponse` | `zeroext4 list/inspect --json`（`partition_uuid`・機能フラグ名・`mount_advice` 含む）および `doctor --json` 出力のデシリアライズ検証 |
 | `JsonParsing_LsAndMountEvents` | `ls --json` および `--json-events` リアルタイム統計イベントパース検証 |
-| `ArgBuilder_MountVariantsAndPreview` | Read-Only / `--overlay` / `--rw` / `doctor` 等に応じた `zeroext4.exe` 引数組み立て検証 |
+| `ArgBuilder_MountVariantsAndPreview` | Read-Only / `--overlay` / `--rw` / `doctor` / `overlay` 等に応じた `zeroext4.exe` 引数組み立て検証 |
 | `DriveLetterAndOverlayValidation` | ドライブレター空き判定・Upperdir v2/v1 マーカー・破損／未知バージョン検出・非空未識別拒否検証 |
 | `DriveLetter_SafeUnmountTarget` | GUI 側「残留ドライブ解除」における対象ボリューム判定（システムドライブ保護）検証 |
 | `Localization_CompletenessAndSwitching` | `Strings.en.xaml` / `Strings.ja.xaml` 間のリソースキー網羅性および即時言語切替検証 |
@@ -123,7 +128,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `SettingsService_RoundTrip` | `gui_settings.json` の設定・プリセット保存／復元往復検証 |
 | `MainViewModel_ValidationAndPreview` | マウント前入力検証・Dirty ボリューム時の RW 自動抑止／プリセット強制変換・CLI プレビュー更新検証 |
 | `TrayIconService_MountUnmountMenuRebuild` | マウント／アンマウントに伴うシステムトレイメニュー再構築検証 |
-| `LiveCoreCli_InspectAndBrowseIntegration` | 実 `zeroext4.exe` サブプロセス起動による `inspect`（拡張診断）／`doctor`／`ls --json` 疎結合統合検証 |
+| `LiveCoreCli_InspectAndBrowseIntegration` | 実 `zeroext4.exe` サブプロセス起動による `inspect`（拡張診断）／`doctor`／`overlay`（`diff`/`validate`/`export`/`reset`）／`ls --json` 疎結合統合検証 |
 
 ---
 

@@ -213,6 +213,87 @@ namespace ZeroExt4.Gui.Services
             return args;
         }
 
+        public static List<string> BuildOverlayStatusArgs(
+            string upperDir,
+            string? lowerSource = null,
+            uint? partitionNumber = null,
+            bool caseSensitive = false,
+            bool diff = false,
+            bool json = true)
+        {
+            var args = new List<string> { "overlay", diff ? "diff" : "status", "--upper", upperDir };
+            AppendOverlayCommonArgs(args, lowerSource, partitionNumber, caseSensitive, json);
+            return args;
+        }
+
+        public static List<string> BuildOverlayValidateArgs(
+            string upperDir,
+            string? lowerSource = null,
+            uint? partitionNumber = null,
+            bool caseSensitive = false,
+            bool json = true)
+        {
+            var args = new List<string> { "overlay", "validate", "--upper", upperDir };
+            AppendOverlayCommonArgs(args, lowerSource, partitionNumber, caseSensitive, json);
+            return args;
+        }
+
+        public static List<string> BuildOverlayExportArgs(
+            string upperDir,
+            string outputTarPath,
+            string? lowerSource = null,
+            uint? partitionNumber = null,
+            bool caseSensitive = false,
+            bool json = true)
+        {
+            var args = new List<string>
+            {
+                "overlay", "export",
+                "--upper", upperDir,
+                "--output", outputTarPath,
+            };
+            AppendOverlayCommonArgs(args, lowerSource, partitionNumber, caseSensitive, json);
+            return args;
+        }
+
+        public static List<string> BuildOverlayResetArgs(
+            string upperDir,
+            bool yes = true,
+            bool json = true)
+        {
+            var args = new List<string> { "overlay", "reset", "--upper", upperDir };
+            if (yes) args.Add("--yes");
+            if (json) args.Add("--json");
+            return args;
+        }
+
+        private static void AppendOverlayCommonArgs(
+            List<string> args,
+            string? lowerSource,
+            uint? partitionNumber,
+            bool caseSensitive,
+            bool json)
+        {
+            if (!string.IsNullOrWhiteSpace(lowerSource))
+            {
+                args.Add("--lower");
+                args.Add(lowerSource.Trim());
+            }
+            if (partitionNumber.HasValue && partitionNumber.Value > 0)
+            {
+                args.Add("--partition");
+                args.Add(partitionNumber.Value.ToString(CultureInfo.InvariantCulture));
+            }
+            if (caseSensitive)
+            {
+                args.Add("--case-sensitive");
+            }
+            if (json)
+            {
+                args.Add("--json");
+            }
+        }
+
         public static string BuildMountPreviewCommand(MountRequest req, string exeName = "zeroext4.exe")
         {
             List<string> args = BuildMountArgs(req, stopEventName: null, jsonEvents: false, statsIntervalMs: 0);

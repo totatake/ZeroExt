@@ -365,4 +365,20 @@
     <sys:String x:Key="Str_DoctorHint">「診断を実行 (doctor)」を押すと WinFsp ランタイム・管理者権限・選択ボリュームの健全性・Overlay Upperdir 整合性を一括診断します。</sys:String>
     <sys:String x:Key="Str_StatusDoctorDoneFmt">診断完了 ({0})</sys:String>
     <sys:String x:Key="Str_StatusDoctorErrFmt">診断エラー: {0}</sys:String>
+
+    <!-- Phase 2 Overlay Tools -->
+    <sys:String x:Key="Str_CoreOverlayFailFmt">Overlay コマンドに失敗しました (exit={0}): {1}</sys:String>
+    <sys:String x:Key="Str_OverlayRenameCopyUpNote">注意: Lower ext4 側のディレクトリをリネームすると、サブツリー全体が NTFS Upperdir へ Copy-up されます。</sys:String>
+    <sys:String x:Key="Str_OverlayInspectDiffBtn">差分を確認</sys:String>
+    <sys:String x:Key="Str_OverlayExportTarBtn">エクスポート (.tar)</sys:String>
+    <sys:String x:Key="Str_OverlayResetDiffBtn">差分をリセット</sys:String>
+    <sys:String x:Key="Str_OverlayExportDialogTitle">Overlay 差分アーカイブのエクスポート</sys:String>
+    <sys:String x:Key="Str_OverlayExportDialogFilter">TAR アーカイブ (*.tar)|*.tar|すべてのファイル (*.*)|*.*</sys:String>
+    <sys:String x:Key="Str_OverlayResetConfirmTitle">Overlay Upperdir のリセット確認</sys:String>
+    <sys:String x:Key="Str_OverlayResetConfirmMsgFmt">'{0}' 内の変更・新規ファイルおよび Whiteout マーカーをすべて削除しますか？&#x0a;&#x0a;.wh.__ext4_lower_id 識別マーカーは保持され、Lower ext4 ボリューム自体は変更されません。</sys:String>
+    <sys:String x:Key="Str_OverlayDiffSummaryFmt">新規: {0} 件  |  変更: {1} 件  |  削除: {2} 件  |  不透過ディレクトリ: {3} 件  |  Upper 使用量: {4}</sys:String>
+    <sys:String x:Key="Str_OverlayDiffEmptyNote">この Upperdir に差分エントリはありません。</sys:String>
+    <sys:String x:Key="Str_OverlayExportDoneFmt">{0} 件 ({1}) を {2} へエクスポートしました</sys:String>
+    <sys:String x:Key="Str_OverlayResetDoneFmt">リセット完了（{0} 件を削除、.wh.__ext4_lower_id は保持）</sys:String>
+    <sys:String x:Key="Str_OverlayResetBlockedMounted">この Upperdir を使用中の Overlay マウントが存在するためリセットできません。先にアンマウントしてください。</sys:String>
 </ResourceDictionary>

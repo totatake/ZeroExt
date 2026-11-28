@@ -1,5 +1,6 @@
 #include "ext4_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../overlay/overlay_vfs.h"
 #include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@ int ext4_vfs_symlink(ext4_vfs_ctx_t *ctx, const char *link_path, const char *tar
     int rc;
 
     if (!ctx || !link_path || !target_path) return -EINVAL;
+    if (ctx->overlay) return -ENOTSUP;
     if (ctx->read_only || ctx->lower_read_only) return -EROFS;
 
     rc = ext4_vfs_normalize_path(link_path, norm, sizeof(norm));
@@ -50,7 +52,7 @@ int ext4_vfs_symlink(ext4_vfs_ctx_t *ctx, const char *link_path, const char *tar
     return rc;
 }
 
-int ext4_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_target, size_t out_sz) {
+int ext4_vfs_lower_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_target, size_t out_sz) {
     char norm[1024];
     ext2_ino_t ino = 0;
     struct ext2_inode ino_st;
@@ -101,4 +103,12 @@ int ext4_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_targ
         ztrace_srw_release_shared(&ctx->rwlock, &lg);
     }
     return rc;
+}
+
+int ext4_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_target, size_t out_sz) {
+    if (!ctx || !link_path || !out_target || out_sz == 0) return -EINVAL;
+    if (ctx->overlay) {
+        return overlay_vfs_readlink(ctx, link_path, out_target, out_sz);
+    }
+    return ext4_vfs_lower_readlink(ctx, link_path, out_target, out_sz);
 }

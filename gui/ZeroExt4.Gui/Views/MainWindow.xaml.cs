@@ -251,6 +251,36 @@ namespace ZeroExt4.Gui.Views
             }
         }
 
+        private async void OnExportOverlayClick(object sender, RoutedEventArgs e)
+        {
+            var dlg = new SaveFileDialog
+            {
+                Title = LocalizationService.Get("Str_OverlayExportDialogTitle"),
+                Filter = LocalizationService.Get("Str_OverlayExportDialogFilter"),
+                DefaultExt = ".tar",
+                FileName = "overlay_diff.tar",
+            };
+            if (dlg.ShowDialog(this) == true)
+            {
+                await _vm.ExportOverlayAsync(dlg.FileName);
+            }
+        }
+
+        private async void OnResetOverlayClick(object sender, RoutedEventArgs e)
+        {
+            MessageBoxResult res = MessageBox.Show(
+                this,
+                LocalizationService.Format("Str_OverlayResetConfirmMsgFmt", _vm.OverlayUpperDir),
+                LocalizationService.Get("Str_OverlayResetConfirmTitle"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (res == MessageBoxResult.Yes)
+            {
+                await _vm.ResetOverlayAsync();
+            }
+        }
+
         private async void OnBrowseCoreExeClick(object sender, RoutedEventArgs e)
         {
             var dlg = new OpenFileDialog

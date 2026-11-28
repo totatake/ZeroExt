@@ -5,6 +5,7 @@
 #include "../vfs/ext4_vfs.h"
 #include "../extent/extent_map.h"
 #include "../overlay/overlay_vfs.h"
+#include "../overlay/overlay_tools.h"
 #include "../driver/winfsp_driver.h"
 #include "../trace/perfetto_trace.h"
 #include <stdio.h>
@@ -94,6 +95,8 @@ static void print_usage(void) {
         "  zeroext4 list [<image_or_disk>] [--json]\n"
         "  zeroext4 inspect <image_or_disk> [--partition <N>] [--json]\n"
         "  zeroext4 doctor [--source <image_or_disk>] [--partition <N>] [--overlay <ntfs_upper_dir>] [--case-sensitive] [--json]\n"
+        "  zeroext4 overlay <status|diff|validate|export|reset> --upper <ntfs_upper_dir> [--lower <image_or_disk>] [--partition <N>]\n"
+        "                  [--case-sensitive] [--output <archive.tar>] [--yes] [--json]\n"
         "  zeroext4 mkfs <image_path> --size-mb <N> [--label <label>]\n"
         "  zeroext4 ls <image_path> [<ext4_path>] [--partition <N>] [--json]\n"
         "  zeroext4 stat <image_path> <ext4_path> [--partition <N>]\n"
@@ -147,6 +150,9 @@ static const char *find_positional_skip_opts(int argc, char **argv, int start_id
             strcmp(argv[i], "--label") == 0 ||
             strcmp(argv[i], "--cache-blocks") == 0 ||
             strcmp(argv[i], "--overlay") == 0 ||
+            strcmp(argv[i], "--upper") == 0 ||
+            strcmp(argv[i], "--lower") == 0 ||
+            strcmp(argv[i], "--output") == 0 ||
             strcmp(argv[i], "--source") == 0 ||
             strcmp(argv[i], "--mountpoint") == 0 ||
             strcmp(argv[i], "--stop-event") == 0 ||
@@ -1462,6 +1468,260 @@ static int cmd_doctor(int argc, char **argv) {
     return has_error ? 1 : 0;
 }
 
+static void print_overlay_check_json(const overlay_upper_check_t *chk) {
+    printf("{");
+    printf("\"status\":"); print_json_str(overlay_upper_status_name(chk->status));
+    printf(",\"can_mount\":%s", chk->can_mount ? "true" : "false");
+    printf(",\"marker_version\":%d", chk->marker_version);
+    printf(",\"expected_id\":"); print_json_str(chk->expected_id);
+    printf(",\"found_id\":"); print_json_str(chk->found_id);
+    printf(",\"reason\":"); print_json_str(chk->reason);
+    printf("}");
+}
+
+static void print_overlay_summary_json(const overlay_diff_summary_t *s) {
+    printf("{");
+    printf("\"added_count\":%llu,", (unsigned long long)s->added_count);
+    printf("\"modified_count\":%llu,", (unsigned long long)s->modified_count);
+    printf("\"deleted_count\":%llu,", (unsigned long long)s->deleted_count);
+    printf("\"opaque_dir_count\":%llu,", (unsigned long long)s->opaque_dir_count);
+    printf("\"upper_count\":%llu,", (unsigned long long)s->upper_count);
+    printf("\"file_count\":%llu,", (unsigned long long)s->file_count);
+    printf("\"dir_count\":%llu,", (unsigned long long)s->dir_count);
+    printf("\"total_upper_bytes\":%llu", (unsigned long long)s->total_upper_bytes);
+    printf("}");
+}
+
+static void build_lower_identity_from_vfs(const ext4_vfs_ctx_t *ctx, int case_sensitive,
+                                          overlay_lower_identity_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!ctx || !ctx->fs || !ctx->fs->super) return;
+    const __u8 *u = ctx->fs->super->s_uuid;
+    _snprintf_s(out->fs_uuid, sizeof(out->fs_uuid), _TRUNCATE,
+                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
+                u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+    out->blocks_count = (uint64_t)ext2fs_blocks_count(ctx->fs->super);
+    out->block_size = (uint32_t)ctx->fs->blocksize;
+    strcpy_s(out->partition_uuid, sizeof(out->partition_uuid), ctx->partition_uuid);
+    out->partition_offset = ctx->partition_offset;
+    out->partition_size = (ctx->partition_size > 0)
+                              ? ctx->partition_size
+                              : (out->blocks_count * (uint64_t)out->block_size);
+    out->case_sensitive = case_sensitive ? 1 : 0;
+}
+
+static int cmd_overlay(int argc, char **argv) {
+    if (argc < 3 || has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
+        print_usage();
+        return (argc < 3) ? 1 : 0;
+    }
+
+    const char *sub = argv[2];
+    const char *upper_dir = parse_str_opt(argc, argv, "--upper", NULL);
+    const char *lower_src = parse_str_opt(argc, argv, "--lower", NULL);
+    const char *output_path = parse_str_opt(argc, argv, "--output", NULL);
+    uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
+    int case_sensitive = has_flag(argc, argv, "--case-sensitive");
+    int yes = has_flag(argc, argv, "--yes");
+    int json = has_flag(argc, argv, "--json");
+
+    if (!upper_dir || !upper_dir[0]) {
+        fprintf(stderr, "Missing required --upper <ntfs_upper_dir> option.\n");
+        return 1;
+    }
+
+    ext4_vfs_ctx_t *lower_ctx = NULL;
+    overlay_lower_identity_t lower_id;
+    const overlay_lower_identity_t *expected_ptr = NULL;
+
+    if (lower_src && lower_src[0] != '\0') {
+        ext4_mount_config_t cfg;
+        int mrc;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.source_path = lower_src;
+        cfg.partition_number = part;
+        cfg.read_only = 1;
+        cfg.ro_fallback_on_dirty = 1;
+        cfg.case_insensitive = case_sensitive ? 0 : 1;
+        mrc = ext4_vfs_mount(&cfg, &lower_ctx);
+        if (mrc != 0) {
+            fprintf(stderr, "Failed to open lower ext4 source '%s' (err=%d).\n", lower_src, mrc);
+            return 1;
+        }
+        build_lower_identity_from_vfs(lower_ctx, case_sensitive, &lower_id);
+        expected_ptr = &lower_id;
+    }
+
+    if (strcmp(sub, "status") == 0 || strcmp(sub, "diff") == 0) {
+        int collect = (strcmp(sub, "diff") == 0) ? 1 : 0;
+        overlay_diff_report_t rep;
+        int rc = overlay_tools_scan(upper_dir, lower_ctx, expected_ptr, collect, &rep);
+        if (rc != 0) {
+            fprintf(stderr, "overlay %s failed (err=%d).\n", sub, rc);
+            if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+            return 1;
+        }
+        if (json) {
+            printf("{\"action\":"); print_json_str(sub);
+            printf(",\"upper_dir\":"); print_json_str(upper_dir);
+            printf(",\"lower_source\":"); print_json_str(lower_src ? lower_src : "");
+            printf(",\"partition\":%u", part);
+            printf(",\"case_sensitive\":%s", case_sensitive ? "true" : "false");
+            printf(",\"upper_check\":"); print_overlay_check_json(&rep.upper_check);
+            printf(",\"summary\":"); print_overlay_summary_json(&rep.summary);
+            printf(",\"entries\":[");
+            for (size_t i = 0; i < rep.entry_count; i++) {
+                const overlay_diff_entry_t *e = &rep.entries[i];
+                if (i > 0) putchar(',');
+                printf("{\"kind\":"); print_json_str(overlay_diff_kind_name(e->kind));
+                printf(",\"path\":"); print_json_str(e->path);
+                printf(",\"is_dir\":%s", e->is_dir ? "true" : "false");
+                printf(",\"size\":%llu", (unsigned long long)e->size);
+                printf(",\"mode\":%u", (unsigned)e->mode);
+                printf(",\"mtime\":%llu}", (unsigned long long)e->mtime_unix);
+            }
+            printf("]}\n");
+            fflush(stdout);
+        } else {
+            printf("Overlay %s: %s\n", sub, upper_dir);
+            printf("  Marker   : %s (can_mount=%s, ver=%d)\n",
+                   overlay_upper_status_name(rep.upper_check.status),
+                   rep.upper_check.can_mount ? "yes" : "no",
+                   rep.upper_check.marker_version);
+            if (lower_ctx) {
+                printf("  Summary  : added=%llu, modified=%llu, deleted=%llu, opaque_dirs=%llu, upper_bytes=%llu\n",
+                       (unsigned long long)rep.summary.added_count,
+                       (unsigned long long)rep.summary.modified_count,
+                       (unsigned long long)rep.summary.deleted_count,
+                       (unsigned long long)rep.summary.opaque_dir_count,
+                       (unsigned long long)rep.summary.total_upper_bytes);
+            } else {
+                printf("  Summary  : entries=%llu, deleted=%llu, opaque_dirs=%llu, upper_bytes=%llu\n",
+                       (unsigned long long)rep.summary.upper_count,
+                       (unsigned long long)rep.summary.deleted_count,
+                       (unsigned long long)rep.summary.opaque_dir_count,
+                       (unsigned long long)rep.summary.total_upper_bytes);
+            }
+            if (collect) {
+                for (size_t i = 0; i < rep.entry_count; i++) {
+                    const overlay_diff_entry_t *e = &rep.entries[i];
+                    printf("  %-10s %c %10llu  %s\n",
+                           overlay_diff_kind_name(e->kind),
+                           e->is_dir ? 'd' : '-',
+                           (unsigned long long)e->size,
+                           e->path);
+                }
+            }
+        }
+        overlay_tools_free_diff_report(&rep);
+        if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+        return 0;
+    }
+
+    if (strcmp(sub, "validate") == 0) {
+        overlay_validate_report_t rep;
+        int rc = overlay_tools_validate(upper_dir, lower_ctx, expected_ptr, &rep);
+        if (rc != 0) {
+            fprintf(stderr, "overlay validate failed (err=%d).\n", rc);
+            if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+            return 1;
+        }
+        if (json) {
+            printf("{\"action\":\"validate\"");
+            printf(",\"upper_dir\":"); print_json_str(upper_dir);
+            printf(",\"lower_source\":"); print_json_str(lower_src ? lower_src : "");
+            printf(",\"partition\":%u", part);
+            printf(",\"valid\":%s", rep.valid ? "true" : "false");
+            printf(",\"error_count\":%llu", (unsigned long long)rep.error_count);
+            printf(",\"warning_count\":%llu", (unsigned long long)rep.warning_count);
+            printf(",\"upper_check\":"); print_overlay_check_json(&rep.upper_check);
+            printf(",\"issues\":[");
+            for (size_t i = 0; i < rep.issue_count; i++) {
+                const overlay_validate_issue_t *iss = &rep.issues[i];
+                if (i > 0) putchar(',');
+                printf("{\"severity\":"); print_json_str(iss->severity);
+                printf(",\"code\":"); print_json_str(iss->code);
+                printf(",\"path\":"); print_json_str(iss->path);
+                printf(",\"message\":"); print_json_str(iss->message);
+                printf("}");
+            }
+            printf("]}\n");
+            fflush(stdout);
+        } else {
+            printf("Overlay Validate: %s (%s)\n", upper_dir, rep.valid ? "VALID" : "INVALID");
+            printf("  Errors: %llu | Warnings: %llu\n",
+                   (unsigned long long)rep.error_count, (unsigned long long)rep.warning_count);
+            for (size_t i = 0; i < rep.issue_count; i++) {
+                const overlay_validate_issue_t *iss = &rep.issues[i];
+                printf("  [%s] %s (%s): %s\n", iss->severity, iss->code, iss->path, iss->message);
+            }
+        }
+        int exit_code = rep.valid ? 0 : 1;
+        overlay_tools_free_validate_report(&rep);
+        if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+        return exit_code;
+    }
+
+    if (strcmp(sub, "export") == 0) {
+        if (!output_path || !output_path[0]) {
+            fprintf(stderr, "Missing required --output <archive.tar> option for overlay export.\n");
+            if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+            return 1;
+        }
+        overlay_export_summary_t sum;
+        int rc = overlay_tools_export_tar(upper_dir, lower_ctx, expected_ptr, output_path, &sum);
+        if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+        if (rc != 0) {
+            fprintf(stderr, "overlay export failed (err=%d).\n", rc);
+            return 1;
+        }
+        if (json) {
+            printf("{\"action\":\"export\"");
+            printf(",\"upper_dir\":"); print_json_str(upper_dir);
+            printf(",\"output_path\":"); print_json_str(output_path);
+            printf(",\"archive_bytes\":%llu", (unsigned long long)sum.archive_bytes);
+            printf(",\"exported_entries\":%llu", (unsigned long long)sum.exported_entries);
+            printf(",\"summary\":"); print_overlay_summary_json(&sum.diff_summary);
+            printf("}\n");
+            fflush(stdout);
+        } else {
+            printf("Exported overlay archive '%s' (%llu entries, %llu bytes).\n",
+                   output_path, (unsigned long long)sum.exported_entries, (unsigned long long)sum.archive_bytes);
+        }
+        return 0;
+    }
+
+    if (strcmp(sub, "reset") == 0) {
+        if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+        if (!yes) {
+            fprintf(stderr, "Refusing destructive reset without --yes confirmation.\n");
+            return 1;
+        }
+        uint64_t removed = 0;
+        int rc = overlay_tools_reset_upper(upper_dir, 1, &removed);
+        if (rc != 0) {
+            fprintf(stderr, "overlay reset failed (err=%d).\n", rc);
+            return 1;
+        }
+        if (json) {
+            printf("{\"action\":\"reset\"");
+            printf(",\"upper_dir\":"); print_json_str(upper_dir);
+            printf(",\"kept_marker\":true");
+            printf(",\"removed_entries\":%llu}\n", (unsigned long long)removed);
+            fflush(stdout);
+        } else {
+            printf("Reset overlay upperdir '%s' (%llu entries removed; .wh.__ext4_lower_id preserved).\n",
+                   upper_dir, (unsigned long long)removed);
+        }
+        return 0;
+    }
+
+    if (lower_ctx) ext4_vfs_unmount(lower_ctx);
+    fprintf(stderr, "Unknown overlay subcommand '%s'. Expected status|diff|validate|export|reset.\n", sub);
+    return 1;
+}
+
 int main(int argc, char **argv) {
     int uargc = 0;
     char **uargv = NULL;
@@ -1485,6 +1745,7 @@ int main(int argc, char **argv) {
     else if (strcmp(cmd, "list") == 0) rc = cmd_list(argc, argv);
     else if (strcmp(cmd, "inspect") == 0) rc = cmd_inspect(argc, argv);
     else if (strcmp(cmd, "doctor") == 0) rc = cmd_doctor(argc, argv);
+    else if (strcmp(cmd, "overlay") == 0) rc = cmd_overlay(argc, argv);
     else if (strcmp(cmd, "mkfs") == 0) rc = cmd_mkfs(argc, argv);
     else if (strcmp(cmd, "ls") == 0) rc = cmd_ls(argc, argv);
     else if (strcmp(cmd, "stat") == 0) rc = cmd_stat(argc, argv);

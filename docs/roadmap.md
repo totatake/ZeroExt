@@ -47,7 +47,7 @@
 | Phase | テーマ | 主な対象・成果物 | 状況 / 優先度 |
 | :--- | :--- | :--- | :---: |
 | **Phase 1**<br>（短期） | **安全性・診断の強化** | 非空未識別 Upperdir の拒否＆v2 `.wh.__ext4_lower_id` 強化、GUI Dirty/エラー時 RW 抑止、`inspect` 診断拡充・`zeroext4 doctor`（GUI i18n は `v0.5.0`、安全 `unmount` 検証は `v0.6.0`、`--case-sensitive` は `v0.8.0` で完了） | **完了** |
-| **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export`、ハッシュ化による inode/path マップ高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **中〜高** |
+| **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export/reset`、ハッシュ化による inode/path マップ O(1) 高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **完了** |
 | **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出、非破壊診断 `zeroext4 fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、`--rw` 標準 `libext2fs` 経路の追加最適化（バッチ連続エクステント書込・並列読込は `v0.10.0` で完了） | **中** |
 | **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／ポータブル配布評価、停止済み WSL2 `ext4.vhdx` 連携ワークフロー強化 | **低〜中** |
 
@@ -76,38 +76,35 @@
 
 ---
 
-## 5. Phase 2：Overlay 運用性・スケーラビリティ・名前空間の強化
+## 5. Phase 2：Overlay 運用性・スケーラビリティ・名前空間の強化（完了）
 
-### 5.1 Overlay 差分管理コマンド & GUI 支援 (`overlay status / diff / validate / export`)
+### 5.1 Overlay 差分管理コマンド & GUI 支援 (`overlay status / diff / validate / export / reset`)（完了）
 
-`--overlay` の大きな強みは「Lower ext4 を傷つけず、NTFS Upperdir に差分だけが残る」点にある。これを運用ワークフローとして完結させるため、CLI サブコマンド群と GUI 連携を追加する。
-
-- **`zeroext4 overlay status / diff --upper <dir> [--lower <src>] [--json]`**:
-  - Upperdir 内の変更済みファイル（Copy-up 由来）・新規作成ファイル・削除（`.wh.*` Whiteout）・不透過ディレクトリ（`.wh.__dir_opaque`）の件数と一覧・Upper 消費容量を表示する。
-- **`zeroext4 overlay validate --upper <dir> --lower <src> [--partition N]`**:
-  - Lower ID マーカー整合性、孤立した Whiteout／不正パスの有無を事前検査する。
-- **`zeroext4 overlay export --upper <dir> --output <archive.tar>`**:
-  - Upper 上の差分に加え、元の ext4 パス・Lower UUID・Whiteout / Opaque 情報・POSIX mode 等をマニフェスト付きアーカイブ（`.tar` + JSON マニフェスト等）として書き出し、バックアップや Linux 側への安全な反映検討に利用できるようにする。
+- **`zeroext4 overlay status / diff / validate / export / reset --upper <dir> [--lower <src>] [--json]`**:
+  - `status` / `diff`: Upperdir 内の変更済み（`modified`）・新規（`added`）・削除（`.wh.*` Whiteout）・不透過ディレクトリ（`.wh.__dir_opaque`）の件数・一覧・Upper 消費容量を集計し JSON / テキスト出力する。
+  - `validate`: v2/v1 マーカー整合性、孤立 Whiteout、残留一時ファイル (`.ext4tmp_*`)、NTFS Reparse Point、Windows 非互換名・パス長を事前検査する。
+  - `export`: `manifest.json`（差分メタデータ・Lower ID 情報）と変更ファイル群 (`files/...`) を POSIX USTAR/PAX `.tar` アーカイブとして書き出す。
+  - `reset --yes`: `.wh.__ext4_lower_id` を保持したまま差分内容を安全に初期化する（マーカー無し非空フォルダは無条件拒否）。
 - **GUI 上での差分プレビューと安全なリセット**:
-  - 指定 Upperdir 内の変更件数やサイズをマウント前後で確認し、不要になった差分フォルダの安全な初期化を行える UI を提供する。
+  - `ZeroExt4Gui.exe` の Overlay カードに **「差分を確認」「エクスポート (.tar)」「差分をリセット」**（稼働中マウント時は抑止＋確認ダイアログ付き）と差分エントリプレビューを追加した。
 
-### 5.2 Overlay 内部構造のスケーラビリティと inode 安定性
+### 5.2 Overlay 内部構造のスケーラビリティと inode 安定性（完了）
 
-- **`ov_ino_entry_t` の O(N) リニア探索からハッシュテーブル化への置換**:
-  - 現行 `src/overlay/overlay_vfs.c` の双方向 inode ⇔ path マッピング（`ov_ino_entry_t *entries`）は単方向連結リストの線形探索となっており、数万ファイル規模のディレクトリ走査・並列アクセス時に `map_lock` 競合および検索コストが増大する。Open-addressing またはバケットハッシュ＋パスインデックスへ置き換え、`O(1)` 化する。
-- **合成 inode 番号（`0x80000000U+`）の再現性と衝突対策**:
-  - マウントセッションを跨いだ際のパスベース合成 inode の安定化・Lower inode との衝突回避ルールを整理し、長期キャッシュやエクスプローラー更新との親和性を高める。
-- **Lower 大規模ディレクトリ `rename` 時のコスト対策**:
-  - 現行の `overlay_vfs_rename()` は Lower 側ディレクトリをリネームする際、`copy_lower_tree_to_upper()` によりサブツリー全体を NTFS Upperdir へ再帰 Copy-up する仕様となっている。巨大モデルやデータセットを含むディレクトリで意図せず大量コピーが発生するリスクをドキュメント・GUI 警告で明示しつつ、容量事前チェックや中断安全性の向上を検討する。
+- **双方向ハッシュテーブルによる O(1) ルックアップ**:
+  - `src/overlay/overlay_vfs.c` の inode ⇔ path マッピングを単方向リスト (`O(N)`) から動的リサイズ可能な `ino_buckets` + `path_buckets`（Shared ロック高速パス付き `O(1)`）へ置換し、`overlay_vfs_readdir()` 内の `ov_name_list_t` もハッシュ索引化した。
+- **合成 inode 番号（`0x80000000U+`）の決定論的割り当て**:
+  - パスハッシュ由来の決定論的合成 inode と Linear Probing により再マウント後も同一パスの合成 inode を維持し、`rename` 時も `ino` を不変に保つようにした。
+- **Lower 大規模ディレクトリ `rename` 時の事前検証＆安全制御**:
+  - 事前ツリー容量・件数走査 (`measure_lower_tree_copyup`)、NTFS 空き容量事前チェック (`-ENOSPC` 早期拒否)、大容量 Copy-up 警告、および失敗時の部分コピーロールバックを実装した（GUI / ドキュメントでも仕様を明記）。
 
-### 5.3 WinFsp シンボリックリンク透過対応（Reparse Point）および名前空間エッジケース
+### 5.3 WinFsp シンボリックリンク透過対応（Reparse Point）および名前空間エッジケース（完了）
 
-- **Windows Reparse Point (`SYMLINK`) 連携**:
-  - VFS 層には既に `src/vfs/op_symlink.c`（`ext4_vfs_readlink` / `ext4_vfs_symlink`）が存在する。`src/driver/winfsp_driver.c` 側で `GetReparsePoint` 等を実装し、少なくとも Read-Only マウントにおいて ext4 上のシンボリックリンクを Windows 側へ安全に公開できるようにする（ディレクトリ循環参照防止やセキュリティ境界を明確化）。
-  - Overlay におけるシンボリックリンク／ハードリンク挙動（Lower symlink 参照・Upper 側作成ルールと制限事項）の仕様確定と回帰テスト追加を行う。
-- **Windows 固有の名前空間エッジケース対策**:
-  - `CON`, `AUX`, `NUL`, `COM1` 等の Windows 予約デバイス名や `:` / `*` / `?` 等を含む ext4 パスを安全に扱うためのガードと変換／アクセス抑止ルールを整理する。
-  - ext4 の大文字小文字区別については `v0.8.0` で `--case-sensitive` モードおよび NTFS Upperdir 対応（`FileCaseSensitiveInfo`）と共存テストを実装済み。今後は既定 Case-Insensitive モードにおける `Foo.txt` / `foo.txt` 衝突時の解決優先順位・診断ルールを引き続き整理する。
+- **Windows Reparse Point (`IO_REPARSE_TAG_SYMLINK`) 連携**:
+  - `VolumeParams.ReparsePoints = 1` および `ResolveReparsePoints` / `GetReparsePoint` / `SetReparsePoint` / `DeleteReparsePoint` を実装し、ボリューム内相対・POSIX 絶対（ボリューム相対への変換）およびディレクトリ symlink（`ReadDirectory` ロック外後処理による `FILE_ATTRIBUTE_DIRECTORY` 付与・循環参照上限 16 段）に対応した。ホスト側脱出パス（ドライブ文字 / UNC / `..` 越境）は安全のため遮断する。
+  - Overlay 時は Lower symlink 参照 (`readlink`) と削除 (`.wh.*`) を許可しつつ、Copy-up / 新規 symlink 作成 / リネームは `-ENOTSUP` として明確に禁止した。
+- **Windows 固有の名前空間ガード & 大文字小文字衝突解決**:
+  - `src/common/win_namespace.c` で予約デバイス名（`CON`, `NUL`, `AUX`, `PRN`, `COM1..9`, `LPT1..9` 拡張子付き含む）、禁止文字 (`< > : " | ? * \`)、末尾ドット／空白を検出し、WinFsp 作成／リネーム・Overlay Copy-up・Lower 無条件スキップ（Lower RO 閲覧は安全維持）を実装した。
+  - 既定 Case-Insensitive モードにおける `Foo.txt` / `foo.txt` 衝突時は「厳密一致優先 → 辞書順最小名 → 最小 inode」の決定論的ルールと警告ログ＋`stat_ci_collisions` カウンタを導入した。
 
 ---
 

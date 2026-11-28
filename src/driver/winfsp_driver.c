@@ -1,5 +1,6 @@
 #include "winfsp_driver.h"
 #include "../common/ext4_errno.h"
+#include "../common/win_namespace.h"
 #include "../trace/perfetto_trace.h"
 #include <sddl.h>
 #include <shlobj.h>
@@ -17,6 +18,9 @@
 #endif
 #ifndef FILE_DELETE_ON_CLOSE
 #define FILE_DELETE_ON_CLOSE    0x00001000
+#endif
+#ifndef FILE_OPEN_REPARSE_POINT
+#define FILE_OPEN_REPARSE_POINT 0x00200000
 #endif
 
 struct winfsp_mount_handle {
@@ -41,12 +45,22 @@ static void ensure_default_sd(void) {
     }
 }
 
-static void fill_fsp_file_info(const ext4_stat_t *st, FSP_FSCTL_FILE_INFO *fi) {
+static void fill_fsp_file_info(const ext4_stat_t *st, int symlink_is_dir, FSP_FSCTL_FILE_INFO *fi) {
     memset(fi, 0, sizeof(*fi));
     fi->FileAttributes = st->file_attributes;
     fi->ReparseTag = 0;
-    fi->AllocationSize = st->alloc_size;
-    fi->FileSize = st->size;
+    if (st->is_symlink) {
+        fi->FileAttributes |= FILE_ATTRIBUTE_REPARSE_POINT;
+        if (symlink_is_dir) {
+            fi->FileAttributes |= FILE_ATTRIBUTE_DIRECTORY;
+        }
+        fi->ReparseTag = IO_REPARSE_TAG_SYMLINK;
+        fi->AllocationSize = 0;
+        fi->FileSize = 0;
+    } else {
+        fi->AllocationSize = st->alloc_size;
+        fi->FileSize = st->size;
+    }
     fi->CreationTime = st->creation_time;
     fi->LastAccessTime = st->last_access_time;
     fi->LastWriteTime = st->last_write_time;
@@ -54,6 +68,286 @@ static void fill_fsp_file_info(const ext4_stat_t *st, FSP_FSCTL_FILE_INFO *fi) {
     fi->IndexNumber = st->ino;
     fi->HardLinks = st->hard_links;
     fi->EaSize = 0;
+}
+
+static int split_norm_segments(const char *norm_path, char segs[64][EXT2_NAME_LEN + 1], int *out_cnt) {
+    const char *p = norm_path;
+    int cnt = 0;
+    if (!norm_path || norm_path[0] != '/') return -EINVAL;
+    while (*p) {
+        size_t len = 0;
+        if (*p == '/') {
+            p++;
+            continue;
+        }
+        while (p[len] && p[len] != '/') {
+            if (len >= EXT2_NAME_LEN) return -ENAMETOOLONG;
+            len++;
+        }
+        if (cnt >= 64) return -ENAMETOOLONG;
+        memcpy(segs[cnt], p, len);
+        segs[cnt][len] = '\0';
+        cnt++;
+        p += len;
+    }
+    *out_cnt = cnt;
+    return 0;
+}
+
+static int resolve_posix_target_in_volume(const char *link_norm_path, const char *target_utf8,
+                                          char *out_norm, size_t out_sz,
+                                          char (*out_win_rel_buf)[1024]) {
+    char par_path[1024], dummy_leaf[EXT2_NAME_LEN + 1];
+    char (*segs)[EXT2_NAME_LEN + 1] = NULL;
+    char (*par_segs)[EXT2_NAME_LEN + 1] = NULL;
+    int par_cnt = 0;
+    int depth = 0;
+    int min_depth = 0;
+    int is_abs;
+    const char *p;
+    int rc = 0;
+
+    if (!link_norm_path || !target_utf8 || target_utf8[0] == '\0') return -EINVAL;
+
+    /* Reject Windows drive letters, UNC paths, backslashes, or invalid control/reserved chars */
+    if (((target_utf8[0] >= 'a' && target_utf8[0] <= 'z') ||
+         (target_utf8[0] >= 'A' && target_utf8[0] <= 'Z')) &&
+        target_utf8[1] == ':') {
+        return -EACCES;
+    }
+    if (strchr(target_utf8, '\\') != NULL) return -EINVAL;
+
+    if (ext4_vfs_split_parent(link_norm_path, par_path, sizeof(par_path), dummy_leaf, sizeof(dummy_leaf)) != 0) {
+        return -EINVAL;
+    }
+
+    segs = (char (*)[EXT2_NAME_LEN + 1])calloc(64, sizeof(*segs));
+    par_segs = (char (*)[EXT2_NAME_LEN + 1])calloc(64, sizeof(*par_segs));
+    if (!segs || !par_segs) {
+        free(segs);
+        free(par_segs);
+        return -ENOMEM;
+    }
+
+    if (split_norm_segments(par_path, par_segs, &par_cnt) != 0) {
+        rc = -ENAMETOOLONG;
+        goto out;
+    }
+
+    is_abs = (target_utf8[0] == '/') ? 1 : 0;
+    if (is_abs) {
+        depth = 0;
+        min_depth = 0;
+    } else {
+        for (int i = 0; i < par_cnt; i++) {
+            strcpy_s(segs[i], EXT2_NAME_LEN + 1, par_segs[i]);
+        }
+        depth = par_cnt;
+        min_depth = par_cnt;
+    }
+
+    p = target_utf8;
+    while (*p) {
+        size_t len = 0;
+        char comp[EXT2_NAME_LEN + 1];
+        if (*p == '/') {
+            p++;
+            continue;
+        }
+        while (p[len] && p[len] != '/') {
+            if (len >= EXT2_NAME_LEN) {
+                rc = -ENAMETOOLONG;
+                goto out;
+            }
+            comp[len] = p[len];
+            len++;
+        }
+        comp[len] = '\0';
+        p += len;
+
+        if (strcmp(comp, ".") == 0) {
+            continue;
+        }
+        if (strcmp(comp, "..") == 0) {
+            if (depth == 0) {
+                if (!is_abs) {
+                    ext4_log(EXT4_LOG_WARN,
+                             "Refusing symlink '%s' -> '%s': relative target escapes mounted volume root.",
+                             link_norm_path, target_utf8);
+                    rc = -EACCES;
+                    goto out;
+                }
+                /* POSIX root "/.." stays at "/" */
+                continue;
+            }
+            depth--;
+            if (depth < min_depth) min_depth = depth;
+            continue;
+        }
+        if (ext4_win_check_component(comp) != EXT4_WIN_NAME_OK) {
+            rc = -EINVAL;
+            goto out;
+        }
+        if (depth >= 64) {
+            rc = -ENAMETOOLONG;
+            goto out;
+        }
+        strcpy_s(segs[depth++], EXT2_NAME_LEN + 1, comp);
+    }
+
+    if (out_norm && out_sz > 0) {
+        if (depth == 0) {
+            strcpy_s(out_norm, out_sz, "/");
+        } else {
+            size_t pos = 0;
+            out_norm[0] = '\0';
+            for (int i = 0; i < depth; i++) {
+                int n = _snprintf_s(out_norm + pos, out_sz - pos, _TRUNCATE, "/%s", segs[i]);
+                if (n < 0 || pos + (size_t)n >= out_sz) {
+                    rc = -ENAMETOOLONG;
+                    goto out;
+                }
+                pos += (size_t)n;
+            }
+        }
+    }
+
+    if (out_win_rel_buf) {
+        char *rel = *out_win_rel_buf;
+        int common = 0;
+        size_t pos = 0;
+        while (common < par_cnt && common < depth &&
+               strcmp(par_segs[common], segs[common]) == 0) {
+            common++;
+        }
+        rel[0] = '\0';
+        for (int i = common; i < par_cnt; i++) {
+            int n = _snprintf_s(rel + pos, sizeof(*out_win_rel_buf) - pos, _TRUNCATE,
+                                "%s..", (pos > 0) ? "\\" : "");
+            if (n < 0 || pos + (size_t)n >= sizeof(*out_win_rel_buf)) {
+                rc = -ENAMETOOLONG;
+                goto out;
+            }
+            pos += (size_t)n;
+        }
+        for (int i = common; i < depth; i++) {
+            int n = _snprintf_s(rel + pos, sizeof(*out_win_rel_buf) - pos, _TRUNCATE,
+                                "%s%s", (pos > 0) ? "\\" : "", segs[i]);
+            if (n < 0 || pos + (size_t)n >= sizeof(*out_win_rel_buf)) {
+                rc = -ENAMETOOLONG;
+                goto out;
+            }
+            pos += (size_t)n;
+        }
+        if (pos == 0) {
+            strcpy_s(rel, sizeof(*out_win_rel_buf), ".");
+        }
+    }
+
+out:
+    free(segs);
+    free(par_segs);
+    return rc;
+}
+
+static int resolve_symlink_target_is_dir(ext4_vfs_ctx_t *ctx, const char *link_norm_path) {
+    char cur[1024];
+    char target[1024];
+    char next[1024];
+    ext4_stat_t st;
+
+    if (!ctx || !link_norm_path) return 0;
+    strcpy_s(cur, sizeof(cur), link_norm_path);
+    for (int hop = 0; hop < 16; hop++) {
+        if (ext4_vfs_readlink(ctx, cur, target, sizeof(target)) != 0) return 0;
+        if (resolve_posix_target_in_volume(cur, target, next, sizeof(next), NULL) != 0) return 0;
+        if (ext4_vfs_stat(ctx, next, &st) != 0) return 0;
+        if (!st.is_symlink) return st.is_dir ? 1 : 0;
+        strcpy_s(cur, sizeof(cur), next);
+    }
+    return 0;
+}
+
+static NTSTATUS build_symlink_reparse_data(ext4_vfs_ctx_t *ctx, const char *norm_path,
+                                           PVOID Buffer, PSIZE_T PSize) {
+    char target_utf8[1024];
+    char rel_utf8[1024];
+    wchar_t rel_w[512];
+    size_t rel_cch;
+    UINT16 rel_bytes;
+    size_t needed;
+    int rc;
+
+    rc = ext4_vfs_readlink(ctx, norm_path, target_utf8, sizeof(target_utf8));
+    if (rc == -ENOENT) return STATUS_OBJECT_NAME_NOT_FOUND;
+    if (rc != 0) return STATUS_NOT_A_REPARSE_POINT;
+
+    if (resolve_posix_target_in_volume(norm_path, target_utf8, NULL, 0, &rel_utf8) != 0) {
+        return STATUS_REPARSE_POINT_NOT_RESOLVED;
+    }
+    if (ext4_utf8_to_wide(rel_utf8, rel_w, _countof(rel_w)) != 0) {
+        return STATUS_REPARSE_POINT_NOT_RESOLVED;
+    }
+
+    rel_cch = wcslen(rel_w);
+    if (rel_cch * sizeof(WCHAR) > 16000U) {
+        return STATUS_REPARSE_POINT_NOT_RESOLVED;
+    }
+    rel_bytes = (UINT16)(rel_cch * sizeof(WCHAR));
+    needed = sizeof(FSP_SYMLINK_REPARSE_DATA_BUFFER) + 2U * (size_t)rel_bytes;
+
+    if (!Buffer && !PSize) {
+        return STATUS_SUCCESS;
+    }
+    if (!PSize) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!Buffer || *PSize < needed) {
+        *PSize = needed;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    {
+        FSP_SYMLINK_REPARSE_DATA_BUFFER *rb = (FSP_SYMLINK_REPARSE_DATA_BUFFER *)Buffer;
+        memset(rb, 0, sizeof(*rb));
+        rb->ReparseTag = IO_REPARSE_TAG_SYMLINK;
+        rb->ReparseDataLength = (UINT16)(12U + 2U * rel_bytes);
+        rb->SubstituteNameOffset = 0;
+        rb->SubstituteNameLength = rel_bytes;
+        rb->PrintNameOffset = rel_bytes;
+        rb->PrintNameLength = rel_bytes;
+        rb->Flags = SYMLINK_FLAG_RELATIVE;
+        if (rel_bytes > 0) {
+            memcpy(rb->PathBuffer, rel_w, rel_bytes);
+            memcpy(rb->PathBuffer + rel_cch, rel_w, rel_bytes);
+        }
+        *PSize = needed;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS ext4_get_reparse_point_by_name(FSP_FILE_SYSTEM *FileSystem, PVOID Context,
+                                               PWSTR FileName, BOOLEAN IsDirectory,
+                                               PVOID Buffer, PSIZE_T PSize) {
+    ext4_vfs_ctx_t *ctx = FileSystem ? (ext4_vfs_ctx_t *)FileSystem->UserContext : NULL;
+    char raw_utf8[1024];
+    char norm_path[1024];
+    ext4_stat_t st;
+    int rc;
+    (void)Context;
+    (void)IsDirectory;
+
+    if (!ctx || !FileName) return STATUS_INVALID_PARAMETER;
+    if (ext4_wide_to_utf8(FileName, raw_utf8, sizeof(raw_utf8)) != 0) {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    if (ext4_vfs_normalize_path(raw_utf8, norm_path, sizeof(norm_path)) != 0) {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    rc = ext4_vfs_stat(ctx, norm_path, &st);
+    if (rc != 0) return ext4_errno_to_ntstatus(rc);
+    if (!st.is_symlink) return STATUS_NOT_A_REPARSE_POINT;
+    return build_symlink_reparse_data(ctx, norm_path, Buffer, PSize);
 }
 
 static NTSTATUS copy_default_sd(PSECURITY_DESCRIPTOR SecurityDescriptor, SIZE_T *PSecurityDescriptorSize) {
@@ -123,17 +417,47 @@ static NTSTATUS FspGetSecurityByName_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR Fil
     int rc;
 
     if (!ctx || !FileName) return STATUS_INVALID_PARAMETER;
+    {
+        const WCHAR *first = FileName;
+        while (*first == L'\\') first++;
+        if (wcschr(first, L'\\') != NULL) {
+            UINT32 reparse_idx = 0;
+            if (FspFileSystemFindReparsePoint(FileSystem, ext4_get_reparse_point_by_name, NULL,
+                                              FileName, &reparse_idx) &&
+                wcschr(FileName + reparse_idx, L'\\') != NULL) {
+                if (PFileAttributes) *PFileAttributes = reparse_idx;
+                return STATUS_REPARSE;
+            }
+        }
+    }
     if (ext4_wide_to_utf8(FileName, path_utf8, sizeof(path_utf8)) != 0) {
         return STATUS_OBJECT_NAME_INVALID;
     }
 
     rc = ext4_vfs_stat(ctx, path_utf8, &st);
     if (rc != 0) {
+        if (rc == -ENOENT || rc == -ENOTDIR || rc == -ELOOP) {
+            UINT32 reparse_idx = 0;
+            if (FspFileSystemFindReparsePoint(FileSystem, ext4_get_reparse_point_by_name, NULL,
+                                              FileName, &reparse_idx)) {
+                if (PFileAttributes) *PFileAttributes = reparse_idx;
+                return STATUS_REPARSE;
+            }
+        }
         return ext4_errno_to_ntstatus(rc);
     }
 
     if (PFileAttributes) {
-        *PFileAttributes = st.file_attributes;
+        UINT32 attrs = st.file_attributes;
+        if (st.is_symlink) {
+            char norm[1024];
+            attrs |= FILE_ATTRIBUTE_REPARSE_POINT;
+            if (ext4_vfs_normalize_path(path_utf8, norm, sizeof(norm)) == 0 &&
+                resolve_symlink_target_is_dir(ctx, norm)) {
+                attrs |= FILE_ATTRIBUTE_DIRECTORY;
+            }
+        }
+        *PFileAttributes = attrs;
     }
     if (PSecurityDescriptorSize) {
         return copy_default_sd(SecurityDescriptor, PSecurityDescriptorSize);
@@ -174,6 +498,13 @@ static NTSTATUS FspCreate_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT
     if (ext4_wide_to_utf8(FileName, path_utf8, sizeof(path_utf8)) != 0) {
         return STATUS_OBJECT_NAME_INVALID;
     }
+    {
+        char norm[1024];
+        if (ext4_vfs_normalize_path(path_utf8, norm, sizeof(norm)) != 0 ||
+            ext4_win_check_path(norm) != EXT4_WIN_NAME_OK) {
+            return STATUS_OBJECT_NAME_INVALID;
+        }
+    }
 
     rc = ext4_vfs_create(ctx, path_utf8, is_dir, is_dir ? 0755 : 0644, FileAttributes, &ino);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
@@ -187,7 +518,7 @@ static NTSTATUS FspCreate_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT
     }
 
     if (FileInfo) {
-        fill_fsp_file_info(&st, FileInfo);
+        fill_fsp_file_info(&st, 0, FileInfo);
     }
 
     *PFileContext = handle;
@@ -226,25 +557,28 @@ static NTSTATUS FspOpen_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT32
     }
 
     rc = ext4_vfs_open_stat(ctx, path_utf8, wants_write && !ctx->read_only,
-                            &handle, FileInfo ? &st : NULL);
+                            &handle, &st);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
 
-    if ((CreateOptions & FILE_DIRECTORY_FILE) && !handle->is_dir) {
-        ext4_vfs_close_handle(handle);
-        return STATUS_NOT_A_DIRECTORY;
-    }
-    if ((CreateOptions & FILE_NON_DIRECTORY_FILE) && handle->is_dir) {
-        ext4_vfs_close_handle(handle);
-        return STATUS_FILE_IS_A_DIRECTORY;
-    }
-
-    handle->create_options = CreateOptions;
-    if ((CreateOptions & FILE_DELETE_ON_CLOSE) && !ctx->read_only) {
-        handle->delete_on_close = 1;
-    }
-
-    if (FileInfo) {
-        fill_fsp_file_info(&st, FileInfo);
+    {
+        int sym_dir = st.is_symlink ? resolve_symlink_target_is_dir(ctx, handle->path) : 0;
+        if (!(CreateOptions & FILE_OPEN_REPARSE_POINT)) {
+            if ((CreateOptions & FILE_DIRECTORY_FILE) && !handle->is_dir && !sym_dir) {
+                ext4_vfs_close_handle(handle);
+                return STATUS_NOT_A_DIRECTORY;
+            }
+            if ((CreateOptions & FILE_NON_DIRECTORY_FILE) && (handle->is_dir || sym_dir)) {
+                ext4_vfs_close_handle(handle);
+                return STATUS_FILE_IS_A_DIRECTORY;
+            }
+        }
+        handle->create_options = CreateOptions;
+        if ((CreateOptions & FILE_DELETE_ON_CLOSE) && !ctx->read_only) {
+            handle->delete_on_close = 1;
+        }
+        if (FileInfo) {
+            fill_fsp_file_info(&st, sym_dir, FileInfo);
+        }
     }
 
     *PFileContext = handle;
@@ -288,7 +622,8 @@ static NTSTATUS FspOverwrite_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext
         const char *leaf = strrchr(handle->path, '/');
         leaf = leaf ? (leaf + 1) : handle->path;
         if (ext4_vfs_stat_ino(ctx, handle->ino, leaf, &st) == 0) {
-            fill_fsp_file_info(&st, FileInfo);
+            int sym_dir = st.is_symlink ? resolve_symlink_target_is_dir(ctx, handle->path) : 0;
+            fill_fsp_file_info(&st, sym_dir, FileInfo);
         }
     }
     return STATUS_SUCCESS;
@@ -398,7 +733,7 @@ static NTSTATUS FspWrite_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PV
         rc = ext4_vfs_stat_ino(ctx, handle->ino, NULL, &cur_st);
         if (rc != 0) return ext4_errno_to_ntstatus(rc);
         if (Offset >= cur_st.size) {
-            if (FileInfo) fill_fsp_file_info(&cur_st, FileInfo);
+            if (FileInfo) fill_fsp_file_info(&cur_st, 0, FileInfo);
             return STATUS_SUCCESS;
         }
         if ((UINT64)effective_len > cur_st.size - Offset) {
@@ -422,7 +757,7 @@ static NTSTATUS FspWrite_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, PV
 
         *PBytesTransferred = written;
         if (FileInfo) {
-            fill_fsp_file_info(&st, FileInfo);
+            fill_fsp_file_info(&st, 0, FileInfo);
         }
     }
     return STATUS_SUCCESS;
@@ -458,7 +793,8 @@ static NTSTATUS FspFlush_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
         const char *leaf = strrchr(handle->path, '/');
         leaf = leaf ? (leaf + 1) : handle->path;
         if (ext4_vfs_stat_ino(ctx, handle->ino, leaf, &st) == 0) {
-            fill_fsp_file_info(&st, FileInfo);
+            int sym_dir = st.is_symlink ? resolve_symlink_target_is_dir(ctx, handle->path) : 0;
+            fill_fsp_file_info(&st, sym_dir, FileInfo);
         }
     }
     return STATUS_SUCCESS;
@@ -482,6 +818,7 @@ static NTSTATUS FspGetFileInfo_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileConte
     ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
     ext4_stat_t st;
     const char *leaf;
+    int sym_dir = 0;
     int rc;
 
     if (!ctx || !handle || !FileInfo) return STATUS_INVALID_PARAMETER;
@@ -489,7 +826,10 @@ static NTSTATUS FspGetFileInfo_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileConte
     leaf = leaf ? (leaf + 1) : handle->path;
     rc = ext4_vfs_stat_ino(ctx, handle->ino, leaf, &st);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
-    fill_fsp_file_info(&st, FileInfo);
+    if (st.is_symlink) {
+        sym_dir = resolve_symlink_target_is_dir(ctx, handle->path);
+    }
+    fill_fsp_file_info(&st, sym_dir, FileInfo);
     return STATUS_SUCCESS;
 }
 
@@ -615,6 +955,10 @@ static NTSTATUS FspRename_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext, P
         ext4_wide_to_utf8(NewFileName, new_utf8, sizeof(new_utf8)) != 0) {
         return STATUS_OBJECT_NAME_INVALID;
     }
+    if (ext4_vfs_normalize_path(new_utf8, norm_new, sizeof(norm_new)) != 0 ||
+        ext4_win_check_path(norm_new) != EXT4_WIN_NAME_OK) {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
 
     if (ReplaceIfExists) {
         ext4_stat_t src_st, dst_st;
@@ -694,7 +1038,7 @@ static int fsp_readdir_cb(const char *name, const ext4_stat_t *st, void *user_ct
     wlen = wcslen(wname);
     memset(info_buf, 0, sizeof(FSP_FSCTL_DIR_INFO));
     dir_info->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + wlen * sizeof(WCHAR));
-    fill_fsp_file_info(st, &dir_info->FileInfo);
+    fill_fsp_file_info(st, 0, &dir_info->FileInfo);
     memcpy(dir_info->FileNameBuf, wname, wlen * sizeof(WCHAR));
 
     if (!FspFileSystemAddDirInfo(dir_info, s->buffer, s->length, s->transferred)) {
@@ -737,6 +1081,40 @@ static NTSTATUS FspReadDirectory_impl(FSP_FILE_SYSTEM *FileSystem, PVOID FileCon
         rc = ext4_vfs_readdir(ctx, handle->ino, fsp_readdir_cb, &state);
     }
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
+
+    /* Post-pass outside VFS locks: augment FILE_ATTRIBUTE_DIRECTORY on symlinks targeting directories. */
+    {
+        ULONG off = 0;
+        ULONG total = *PBytesTransferred;
+        while (off + sizeof(FSP_FSCTL_DIR_INFO) <= total) {
+            FSP_FSCTL_DIR_INFO *di = (FSP_FSCTL_DIR_INFO *)((PUINT8)Buffer + off);
+            if (di->Size < sizeof(FSP_FSCTL_DIR_INFO) || off + di->Size > total) break;
+            if ((di->FileInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+                size_t nchars = (di->Size - sizeof(FSP_FSCTL_DIR_INFO)) / sizeof(WCHAR);
+                if (nchars > 0 && nchars <= EXT2_NAME_LEN) {
+                    WCHAR leaf_w[EXT2_NAME_LEN + 1];
+                    char leaf_utf8[EXT2_NAME_LEN * 3 + 1];
+                    memcpy(leaf_w, di->FileNameBuf, nchars * sizeof(WCHAR));
+                    leaf_w[nchars] = L'\0';
+                    if (ext4_wide_to_utf8(leaf_w, leaf_utf8, sizeof(leaf_utf8)) == 0 &&
+                        strcmp(leaf_utf8, ".") != 0 && strcmp(leaf_utf8, "..") != 0) {
+                        char child_norm[1024];
+                        int n;
+                        if (strcmp(handle->path, "/") == 0) {
+                            n = snprintf(child_norm, sizeof(child_norm), "/%s", leaf_utf8);
+                        } else {
+                            n = snprintf(child_norm, sizeof(child_norm), "%s/%s", handle->path, leaf_utf8);
+                        }
+                        if (n > 0 && (size_t)n < sizeof(child_norm) &&
+                            resolve_symlink_target_is_dir(ctx, child_norm)) {
+                            di->FileInfo.FileAttributes |= FILE_ATTRIBUTE_DIRECTORY;
+                        }
+                    }
+                }
+            }
+            off += FSP_FSCTL_DEFAULT_ALIGN_UP(di->Size, 8);
+        }
+    }
 
     if (!state.buffer_full) {
         FspFileSystemAddDirInfo(NULL, Buffer, Length, PBytesTransferred);
@@ -828,7 +1206,22 @@ static NTSTATUS FspGetDirInfoByName_impl(FSP_FILE_SYSTEM *FileSystem, PVOID File
     wlen = wcslen(wname);
     memset(DirInfo, 0, sizeof(FSP_FSCTL_DIR_INFO));
     DirInfo->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + wlen * sizeof(WCHAR));
-    fill_fsp_file_info(&st, &DirInfo->FileInfo);
+    {
+        int sym_dir = 0;
+        if (st.is_symlink && strcmp(actual_leaf, ".") != 0 && strcmp(actual_leaf, "..") != 0) {
+            char full_child[1024];
+            int n;
+            if (strcmp(handle->path, "/") == 0) {
+                n = snprintf(full_child, sizeof(full_child), "/%s", actual_leaf);
+            } else {
+                n = snprintf(full_child, sizeof(full_child), "%s/%s", handle->path, actual_leaf);
+            }
+            if (n > 0 && (size_t)n < sizeof(full_child)) {
+                sym_dir = resolve_symlink_target_is_dir(ctx, full_child);
+            }
+        }
+        fill_fsp_file_info(&st, sym_dir, &DirInfo->FileInfo);
+    }
     memcpy(DirInfo->FileNameBuf, wname, wlen * sizeof(WCHAR));
     return STATUS_SUCCESS;
 }
@@ -845,28 +1238,155 @@ static NTSTATUS FspGetDirInfoByName(FSP_FILE_SYSTEM *FileSystem, PVOID FileConte
     return st;
 }
 
+static NTSTATUS FspResolveReparsePoints(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName,
+                                        UINT32 ReparsePointIndex, BOOLEAN ResolveLastPathComponent,
+                                        PIO_STATUS_BLOCK PIoStatus, PVOID Buffer, PSIZE_T PSize) {
+    return FspFileSystemResolveReparsePoints(
+        FileSystem, ext4_get_reparse_point_by_name, NULL,
+        FileName, ReparsePointIndex, ResolveLastPathComponent,
+        PIoStatus, Buffer, PSize);
+}
+
+static NTSTATUS FspGetReparsePoint(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                                   PWSTR FileName, PVOID Buffer, PSIZE_T PSize) {
+    ext4_vfs_ctx_t *ctx = FileSystem ? (ext4_vfs_ctx_t *)FileSystem->UserContext : NULL;
+    ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
+    ext4_stat_t st;
+    int rc;
+
+    if (!ctx) return STATUS_INVALID_PARAMETER;
+    if (handle && handle->path[0] != '\0') {
+        rc = ext4_vfs_stat(ctx, handle->path, &st);
+        if (rc != 0) return ext4_errno_to_ntstatus(rc);
+        if (!st.is_symlink) return STATUS_NOT_A_REPARSE_POINT;
+        return build_symlink_reparse_data(ctx, handle->path, Buffer, PSize);
+    }
+    return ext4_get_reparse_point_by_name(FileSystem, NULL, FileName, FALSE, Buffer, PSize);
+}
+
+static NTSTATUS FspSetReparsePoint(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                                   PWSTR FileName, PVOID Buffer, SIZE_T Size) {
+    ext4_vfs_ctx_t *ctx = FileSystem ? (ext4_vfs_ctx_t *)FileSystem->UserContext : NULL;
+    ext4_file_handle_t *handle = (ext4_file_handle_t *)FileContext;
+    const FSP_SYMLINK_REPARSE_DATA_BUFFER *rb;
+    char link_norm[1024];
+    char target_posix[1024];
+    WCHAR target_w[512];
+    size_t sub_cch;
+    ext4_stat_t st;
+    int rc;
+
+    if (!ctx) return STATUS_INVALID_PARAMETER;
+    if (ctx->read_only) return STATUS_MEDIA_WRITE_PROTECTED;
+    if (ctx->overlay) return STATUS_NOT_SUPPORTED;
+    if (!Buffer || Size < sizeof(FSP_SYMLINK_REPARSE_DATA_BUFFER)) {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+
+    rb = (const FSP_SYMLINK_REPARSE_DATA_BUFFER *)Buffer;
+    if (rb->ReparseTag != IO_REPARSE_TAG_SYMLINK) {
+        return STATUS_IO_REPARSE_TAG_MISMATCH;
+    }
+    if ((rb->SubstituteNameOffset & 1U) != 0 || (rb->SubstituteNameLength & 1U) != 0 ||
+        rb->SubstituteNameLength == 0 ||
+        (size_t)sizeof(FSP_SYMLINK_REPARSE_DATA_BUFFER) + (size_t)rb->SubstituteNameOffset + (size_t)rb->SubstituteNameLength > Size) {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+
+    sub_cch = rb->SubstituteNameLength / sizeof(WCHAR);
+    if (sub_cch >= _countof(target_w)) {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    memcpy(target_w, (const UINT8 *)rb->PathBuffer + rb->SubstituteNameOffset, rb->SubstituteNameLength);
+    target_w[sub_cch] = L'\0';
+
+    if (ext4_wide_to_utf8(target_w, target_posix, sizeof(target_posix)) != 0) {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    if (strncmp(target_posix, "\\??\\", 4) == 0 || strncmp(target_posix, "\\\\", 2) == 0 ||
+        (target_posix[0] && target_posix[1] == ':')) {
+        return STATUS_NOT_SUPPORTED;
+    }
+    for (size_t i = 0; target_posix[i]; i++) {
+        if (target_posix[i] == '\\') target_posix[i] = '/';
+    }
+
+    if (handle && handle->path[0] != '\0') {
+        strcpy_s(link_norm, sizeof(link_norm), handle->path);
+    } else if (FileName) {
+        char raw[1024];
+        if (ext4_wide_to_utf8(FileName, raw, sizeof(raw)) != 0 ||
+            ext4_vfs_normalize_path(raw, link_norm, sizeof(link_norm)) != 0) {
+            return STATUS_OBJECT_NAME_INVALID;
+        }
+    } else {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (resolve_posix_target_in_volume(link_norm, target_posix, NULL, 0, NULL) != 0) {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+
+    rc = ext4_vfs_stat(ctx, link_norm, &st);
+    if (rc != 0) return ext4_errno_to_ntstatus(rc);
+    if (st.is_dir) {
+        rc = ext4_vfs_can_delete(ctx, st.ino);
+        if (rc != 0) return ext4_errno_to_ntstatus(rc);
+    } else if (st.size != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    rc = ext4_vfs_unlink(ctx, link_norm);
+    if (rc != 0) return ext4_errno_to_ntstatus(rc);
+
+    rc = ext4_vfs_symlink(ctx, link_norm, target_posix);
+    if (rc != 0) return ext4_errno_to_ntstatus(rc);
+
+    if (handle && ext4_vfs_stat(ctx, link_norm, &st) == 0) {
+        handle->ino = st.ino;
+        handle->is_dir = 0;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS FspDeleteReparsePoint(FSP_FILE_SYSTEM *FileSystem, PVOID FileContext,
+                                      PWSTR FileName, PVOID Buffer, SIZE_T Size) {
+    ext4_vfs_ctx_t *ctx = FileSystem ? (ext4_vfs_ctx_t *)FileSystem->UserContext : NULL;
+    (void)FileContext;
+    (void)FileName;
+    (void)Buffer;
+    (void)Size;
+    if (!ctx) return STATUS_INVALID_PARAMETER;
+    if (ctx->read_only) return STATUS_MEDIA_WRITE_PROTECTED;
+    return STATUS_NOT_SUPPORTED;
+}
+
 static const FSP_FILE_SYSTEM_INTERFACE g_winfsp_iface = {
-    .GetVolumeInfo     = FspGetVolumeInfo,
-    .SetVolumeLabel    = FspSetVolumeLabel,
-    .GetSecurityByName = FspGetSecurityByName,
-    .Create            = FspCreate,
-    .Open              = FspOpen,
-    .Overwrite         = FspOverwrite,
-    .Cleanup           = FspCleanup,
-    .Close             = FspClose,
-    .Read              = FspRead,
-    .Write             = FspWrite,
-    .Flush             = FspFlush,
-    .GetFileInfo       = FspGetFileInfo,
-    .SetBasicInfo      = FspSetBasicInfo,
-    .SetFileSize       = FspSetFileSize,
-    .CanDelete         = FspCanDelete,
-    .Rename            = FspRename,
-    .GetSecurity       = FspGetSecurity,
-    .SetSecurity       = FspSetSecurity,
-    .ReadDirectory     = FspReadDirectory,
-    .GetDirInfoByName  = FspGetDirInfoByName,
-    .SetDelete         = FspSetDelete,
+    .GetVolumeInfo        = FspGetVolumeInfo,
+    .SetVolumeLabel       = FspSetVolumeLabel,
+    .GetSecurityByName    = FspGetSecurityByName,
+    .Create               = FspCreate,
+    .Open                 = FspOpen,
+    .Overwrite            = FspOverwrite,
+    .Cleanup              = FspCleanup,
+    .Close                = FspClose,
+    .Read                 = FspRead,
+    .Write                = FspWrite,
+    .Flush                = FspFlush,
+    .GetFileInfo          = FspGetFileInfo,
+    .SetBasicInfo         = FspSetBasicInfo,
+    .SetFileSize          = FspSetFileSize,
+    .CanDelete            = FspCanDelete,
+    .Rename               = FspRename,
+    .GetSecurity          = FspGetSecurity,
+    .SetSecurity          = FspSetSecurity,
+    .ReadDirectory        = FspReadDirectory,
+    .ResolveReparsePoints = FspResolveReparsePoints,
+    .GetReparsePoint      = FspGetReparsePoint,
+    .SetReparsePoint      = FspSetReparsePoint,
+    .DeleteReparsePoint   = FspDeleteReparsePoint,
+    .GetDirInfoByName     = FspGetDirInfoByName,
+    .SetDelete            = FspSetDelete,
 };
 
 const FSP_FILE_SYSTEM_INTERFACE *winfsp_driver_get_interface(void) {
@@ -896,6 +1416,7 @@ void winfsp_driver_build_volume_params(ext4_vfs_ctx_t *ctx, FSP_FSCTL_VOLUME_PAR
     out_params->CasePreservedNames = 1;
     out_params->UnicodeOnDisk = 1;
     out_params->PersistentAcls = 0;
+    out_params->ReparsePoints = 1;
     out_params->ReadOnlyVolume = ctx->read_only ? 1 : 0;
     out_params->PostCleanupWhenModifiedOnly = 1;
     out_params->PassQueryDirectoryFileName = 1;

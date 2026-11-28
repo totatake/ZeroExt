@@ -21,6 +21,7 @@ typedef struct dentry_slot {
     uint16_t   key_len;
     uint8_t    valid;
     uint8_t    ref;
+    uint8_t    exact_only;
     int16_t    bucket_idx;
     int16_t    next;
     int16_t    prev;
@@ -131,6 +132,11 @@ void ext4_vfs_get_dentry_cache_stats(ext4_vfs_ctx_t *ctx, ext4_dentry_cache_stat
     out_stats->invalidations = (uint64_t)InterlockedCompareExchange64(&ctx->dentry_cache->invalidations, 0, 0);
 }
 
+uint64_t ext4_vfs_get_ci_collision_count(ext4_vfs_ctx_t *ctx) {
+    if (!ctx) return 0;
+    return (uint64_t)InterlockedCompareExchange64(&ctx->stat_ci_collisions, 0, 0);
+}
+
 static void dentry_unlink_slot(dentry_shard_t *sh, int16_t idx) {
     dentry_slot_t *s = &sh->slots[idx];
     if (s->prev >= 0) {
@@ -166,6 +172,7 @@ static int dentry_cache_lookup(struct ext4_dentry_cache *c, const char *norm_pat
     dentry_shard_t *sh;
     int bidx;
     LONG64 cur_epoch;
+    dentry_slot_t *ci_match = NULL;
 
     if (!c || len == 0 || len >= DENTRY_MAX_KEY) return 0;
 
@@ -178,8 +185,8 @@ static int dentry_cache_lookup(struct ext4_dentry_cache *c, const char *norm_pat
     if (sh->epoch == cur_epoch) {
         for (int16_t idx = sh->buckets[bidx]; idx >= 0; idx = sh->slots[idx].next) {
             dentry_slot_t *s = &sh->slots[idx];
-            if (s->valid && s->hash == h && s->key_len == len &&
-                dentry_key_eq(s->key, norm_path, len, ci)) {
+            if (!s->valid || s->hash != h || s->key_len != len) continue;
+            if (memcmp(s->key, norm_path, len) == 0) {
                 ext2_ino_t found_ino = s->ino;
                 s->ref = 1;
                 if (found_ino == 0) {
@@ -197,6 +204,27 @@ static int dentry_cache_lookup(struct ext4_dentry_cache *c, const char *norm_pat
                 InterlockedIncrement64(&sh->pos_hits);
                 return 1;
             }
+            if (ci && !s->exact_only && !ci_match && dentry_key_eq(s->key, norm_path, len, 1)) {
+                ci_match = s;
+            }
+        }
+        if (ci_match) {
+            ext2_ino_t found_ino = ci_match->ino;
+            ci_match->ref = 1;
+            if (found_ino == 0) {
+                ReleaseSRWLockShared(&sh->lock);
+                InterlockedIncrement64(&sh->neg_hits);
+                return -1;
+            }
+            *out_ino = found_ino;
+            if (out_leaf && out_leaf_sz > 0) {
+                const char *slash = strrchr(ci_match->key, '/');
+                const char *leaf = slash ? (slash + 1) : ci_match->key;
+                strcpy_s(out_leaf, out_leaf_sz, leaf);
+            }
+            ReleaseSRWLockShared(&sh->lock);
+            InterlockedIncrement64(&sh->pos_hits);
+            return 1;
         }
     }
     ReleaseSRWLockShared(&sh->lock);
@@ -205,7 +233,7 @@ static int dentry_cache_lookup(struct ext4_dentry_cache *c, const char *norm_pat
 }
 
 static void dentry_cache_put(struct ext4_dentry_cache *c, const char *store_path, size_t len,
-                             int ci, ext2_ino_t ino) {
+                             int ci, ext2_ino_t ino, int exact_only) {
     uint64_t h;
     dentry_shard_t *sh;
     int bidx;
@@ -227,8 +255,9 @@ static void dentry_cache_put(struct ext4_dentry_cache *c, const char *store_path
     for (int16_t cur = sh->buckets[bidx]; cur >= 0; cur = sh->slots[cur].next) {
         dentry_slot_t *s = &sh->slots[cur];
         if (s->valid && s->hash == h && s->key_len == len &&
-            dentry_key_eq(s->key, store_path, len, ci)) {
+            memcmp(s->key, store_path, len) == 0) {
             s->ino = ino;
+            s->exact_only = exact_only ? 1 : 0;
             memcpy(s->key, store_path, len + 1);
             s->ref = 1;
             ReleaseSRWLockExclusive(&sh->lock);
@@ -261,6 +290,7 @@ static void dentry_cache_put(struct ext4_dentry_cache *c, const char *store_path
         s->key_len = (uint16_t)len;
         s->valid = 1;
         s->ref = 1;
+        s->exact_only = exact_only ? 1 : 0;
         memcpy(s->key, store_path, len + 1);
         dentry_link_slot(sh, idx, bidx);
     }
@@ -318,6 +348,7 @@ struct ci_lookup_ctx {
     const char *target;
     ext2_ino_t  found_ino;
     int         found;
+    int         match_count;
     char        actual_name[EXT2_NAME_LEN + 1];
 };
 
@@ -338,10 +369,20 @@ static int ci_lookup_cb(ext2_ino_t dir, int entry, struct ext2_dir_entry *dirent
     name_buf[de->name_len] = '\0';
 
     if (_stricmp(name_buf, c->target) == 0) {
-        c->found_ino = de->inode;
-        c->found = 1;
-        strcpy_s(c->actual_name, sizeof(c->actual_name), name_buf);
-        return DIRENT_ABORT;
+        c->match_count++;
+        /* Deterministic tie-breaker across case collisions: lexicographically smallest
+         * UTF-8/ASCII name, then lowest inode number. Do not abort early so collisions are detected. */
+        if (!c->found) {
+            c->found_ino = de->inode;
+            c->found = 1;
+            strcpy_s(c->actual_name, sizeof(c->actual_name), name_buf);
+        } else {
+            int cmp = strcmp(name_buf, c->actual_name);
+            if (cmp < 0 || (cmp == 0 && de->inode < c->found_ino)) {
+                c->found_ino = de->inode;
+                strcpy_s(c->actual_name, sizeof(c->actual_name), name_buf);
+            }
+        }
     }
     return 0;
 }
@@ -377,7 +418,8 @@ int ext4_vfs_lookup_locked_ex(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_i
 
     retval = ext2fs_namei(ctx->fs, EXT2_ROOT_INO, EXT2_ROOT_INO, norm_path, &cur);
     if (retval == 0) {
-        dentry_cache_put(ctx->dentry_cache, norm_path, norm_len, ctx->case_insensitive, cur);
+        dentry_cache_put(ctx->dentry_cache, norm_path, norm_len, ctx->case_insensitive, cur,
+                         ctx->case_insensitive ? 1 : 0);
         *out_ino = cur;
         if (out_leaf && out_leaf_sz > 0) {
             const char *slash = strrchr(norm_path, '/');
@@ -389,7 +431,7 @@ int ext4_vfs_lookup_locked_ex(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_i
     if (!ctx->case_insensitive) {
         int err_rc = ext4_errcode_to_errno(retval);
         if (err_rc == -ENOENT) {
-            dentry_cache_put(ctx->dentry_cache, norm_path, norm_len, 0, 0);
+            dentry_cache_put(ctx->dentry_cache, norm_path, norm_len, 0, 0, 0);
         }
         return err_rc;
     }
@@ -398,58 +440,74 @@ int ext4_vfs_lookup_locked_ex(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_i
     cur = EXT2_ROOT_INO;
     p = norm_path + 1;
     canon_path[0] = '\0';
+    canon_len = 0;
     last_leaf[0] = '\0';
-    while (*p) {
-        const char *slash = strchr(p, '/');
-        char comp[EXT2_NAME_LEN + 1];
-        size_t clen = slash ? (size_t)(slash - p) : strlen(p);
-        ext2_ino_t next_ino = 0;
-        const char *resolved_comp = comp;
-        size_t rlen;
+    {
+        int had_collision = 0;
+        while (*p) {
+            const char *slash = strchr(p, '/');
+            char comp[EXT2_NAME_LEN + 1];
+            size_t clen = slash ? (size_t)(slash - p) : strlen(p);
+            ext2_ino_t next_ino = 0;
+            const char *resolved_comp = comp;
+            size_t rlen;
 
-        if (clen == 0) {
-            p++;
-            continue;
-        }
-        if (clen > EXT2_NAME_LEN) return -ENAMETOOLONG;
-        memcpy(comp, p, clen);
-        comp[clen] = '\0';
-
-        retval = ext2fs_lookup(ctx->fs, cur, comp, (int)clen, NULL, &next_ino);
-        if (retval != 0) {
-            struct ci_lookup_ctx c;
-            errcode_t dret;
-            c.target = comp;
-            c.found_ino = 0;
-            c.found = 0;
-            c.actual_name[0] = '\0';
-            dret = ext2fs_dir_iterate2(ctx->fs, cur, 0, NULL, ci_lookup_cb, &c);
-            if (!c.found) {
-                if (dret == 0) {
-                    dentry_cache_put(ctx->dentry_cache, norm_path, norm_len, 1, 0);
-                }
-                return -ENOENT;
+            if (clen == 0) {
+                p++;
+                continue;
             }
-            next_ino = c.found_ino;
-            resolved_comp = c.actual_name;
+            if (clen > EXT2_NAME_LEN) return -ENAMETOOLONG;
+            memcpy(comp, p, clen);
+            comp[clen] = '\0';
+
+            retval = ext2fs_lookup(ctx->fs, cur, comp, (int)clen, NULL, &next_ino);
+            if (retval != 0) {
+                struct ci_lookup_ctx c;
+                errcode_t dret;
+                c.target = comp;
+                c.found_ino = 0;
+                c.found = 0;
+                c.match_count = 0;
+                c.actual_name[0] = '\0';
+                dret = ext2fs_dir_iterate2(ctx->fs, cur, 0, NULL, ci_lookup_cb, &c);
+                if (!c.found) {
+                    if (dret == 0) {
+                        dentry_cache_put(ctx->dentry_cache, norm_path, norm_len, 1, 0, 0);
+                    }
+                    return -ENOENT;
+                }
+                if (c.match_count > 1) {
+                    LONG64 n = InterlockedIncrement64(&ctx->stat_ci_collisions);
+                    had_collision = 1;
+                    if (n <= 16) {
+                        ext4_log(EXT4_LOG_WARN,
+                                 "Case-insensitive collision for '%s' (%d matches); selected '%s' (use --case-sensitive for exact POSIX access).",
+                                 comp, c.match_count, c.actual_name);
+                    }
+                }
+                next_ino = c.found_ino;
+                resolved_comp = c.actual_name;
+            }
+
+            rlen = strlen(resolved_comp);
+            if (canon_len + 1 + rlen < sizeof(canon_path)) {
+                canon_path[canon_len++] = '/';
+                memcpy(canon_path + canon_len, resolved_comp, rlen);
+                canon_len += rlen;
+                canon_path[canon_len] = '\0';
+            }
+            strcpy_s(last_leaf, sizeof(last_leaf), resolved_comp);
+
+            cur = next_ino;
+            if (!slash) break;
+            p = slash + 1;
         }
 
-        rlen = strlen(resolved_comp);
-        if (canon_len + 1 + rlen < sizeof(canon_path)) {
-            canon_path[canon_len++] = '/';
-            memcpy(canon_path + canon_len, resolved_comp, rlen);
-            canon_len += rlen;
-            canon_path[canon_len] = '\0';
+        if (had_collision) {
+            dentry_cache_put(ctx->dentry_cache, norm_path, norm_len, 1, cur, 1);
+        } else if (canon_len > 0) {
+            dentry_cache_put(ctx->dentry_cache, canon_path, canon_len, 1, cur, 0);
         }
-        strcpy_s(last_leaf, sizeof(last_leaf), resolved_comp);
-
-        cur = next_ino;
-        if (!slash) break;
-        p = slash + 1;
-    }
-
-    if (canon_len > 0) {
-        dentry_cache_put(ctx->dentry_cache, canon_path, canon_len, 1, cur);
     }
     *out_ino = cur;
     if (out_leaf && out_leaf_sz > 0) {

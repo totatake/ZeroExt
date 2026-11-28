@@ -115,6 +115,80 @@ namespace ZeroExt4.Gui.Services
             return ParseDoctorResponse(res.StdOut);
         }
 
+        public async Task<OverlayStatusResponse> GetOverlayDiffAsync(
+            string upperDir,
+            string? lowerSource = null,
+            uint? partitionNumber = null,
+            bool caseSensitive = false,
+            bool diff = true,
+            CancellationToken ct = default)
+        {
+            List<string> args = ZeroExt4ArgBuilder.BuildOverlayStatusArgs(
+                upperDir, lowerSource, partitionNumber, caseSensitive, diff, json: true);
+            CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
+            if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
+            {
+                string detail = string.IsNullOrWhiteSpace(res.StdErr) ? res.StdOut : res.StdErr;
+                throw new InvalidOperationException(
+                    LocalizationService.Format("Str_CoreOverlayFailFmt", res.ExitCode, detail).Trim());
+            }
+            return ParseOverlayStatusResponse(res.StdOut);
+        }
+
+        public async Task<OverlayValidateResponse> ValidateOverlayAsync(
+            string upperDir,
+            string? lowerSource = null,
+            uint? partitionNumber = null,
+            bool caseSensitive = false,
+            CancellationToken ct = default)
+        {
+            List<string> args = ZeroExt4ArgBuilder.BuildOverlayValidateArgs(
+                upperDir, lowerSource, partitionNumber, caseSensitive, json: true);
+            CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(res.StdOut))
+            {
+                string detail = string.IsNullOrWhiteSpace(res.StdErr) ? res.StdOut : res.StdErr;
+                throw new InvalidOperationException(
+                    LocalizationService.Format("Str_CoreOverlayFailFmt", res.ExitCode, detail).Trim());
+            }
+            return ParseOverlayValidateResponse(res.StdOut);
+        }
+
+        public async Task<OverlayExportResponse> ExportOverlayAsync(
+            string upperDir,
+            string outputTarPath,
+            string? lowerSource = null,
+            uint? partitionNumber = null,
+            bool caseSensitive = false,
+            CancellationToken ct = default)
+        {
+            List<string> args = ZeroExt4ArgBuilder.BuildOverlayExportArgs(
+                upperDir, outputTarPath, lowerSource, partitionNumber, caseSensitive, json: true);
+            CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
+            if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
+            {
+                string detail = string.IsNullOrWhiteSpace(res.StdErr) ? res.StdOut : res.StdErr;
+                throw new InvalidOperationException(
+                    LocalizationService.Format("Str_CoreOverlayFailFmt", res.ExitCode, detail).Trim());
+            }
+            return ParseOverlayExportResponse(res.StdOut);
+        }
+
+        public async Task<OverlayResetResponse> ResetOverlayAsync(
+            string upperDir,
+            CancellationToken ct = default)
+        {
+            List<string> args = ZeroExt4ArgBuilder.BuildOverlayResetArgs(upperDir, yes: true, json: true);
+            CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
+            if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
+            {
+                string detail = string.IsNullOrWhiteSpace(res.StdErr) ? res.StdOut : res.StdErr;
+                throw new InvalidOperationException(
+                    LocalizationService.Format("Str_CoreOverlayFailFmt", res.ExitCode, detail).Trim());
+            }
+            return ParseOverlayResetResponse(res.StdOut);
+        }
+
         public async Task<CoreCommandResult> RunCommandAsync(
             IReadOnlyList<string> args,
             CancellationToken ct = default)
@@ -185,6 +259,30 @@ namespace ZeroExt4.Gui.Services
         {
             DoctorResponse? parsed = JsonSerializer.Deserialize<DoctorResponse>(json, JsonOptions);
             return parsed ?? new DoctorResponse();
+        }
+
+        public static OverlayStatusResponse ParseOverlayStatusResponse(string json)
+        {
+            OverlayStatusResponse? parsed = JsonSerializer.Deserialize<OverlayStatusResponse>(json, JsonOptions);
+            return parsed ?? new OverlayStatusResponse();
+        }
+
+        public static OverlayValidateResponse ParseOverlayValidateResponse(string json)
+        {
+            OverlayValidateResponse? parsed = JsonSerializer.Deserialize<OverlayValidateResponse>(json, JsonOptions);
+            return parsed ?? new OverlayValidateResponse();
+        }
+
+        public static OverlayExportResponse ParseOverlayExportResponse(string json)
+        {
+            OverlayExportResponse? parsed = JsonSerializer.Deserialize<OverlayExportResponse>(json, JsonOptions);
+            return parsed ?? new OverlayExportResponse();
+        }
+
+        public static OverlayResetResponse ParseOverlayResetResponse(string json)
+        {
+            OverlayResetResponse? parsed = JsonSerializer.Deserialize<OverlayResetResponse>(json, JsonOptions);
+            return parsed ?? new OverlayResetResponse();
         }
 
         public static MountEventMessage? TryParseMountEvent(string line)

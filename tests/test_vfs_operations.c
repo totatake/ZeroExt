@@ -2636,6 +2636,73 @@ static int test_rw_fast_io_large_file_4gb_sparse_boundary(void) {
     return rc;
 }
 
+static int test_case_insensitive_collision_priority(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    uint32_t w = 0, r = 0;
+    char buf[32];
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_ci_collision.img");
+    DeleteFileA(img_path);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "CICOLLIDE"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/foo.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/foo.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "lower", 0, 5, 0, &w, NULL));
+    ext4_vfs_close_handle(h);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/Foo.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/Foo.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "upper", 0, 5, 0, &w, NULL));
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Mount case-insensitive: exact case matches must win, and CI fallback is deterministic ("Foo.txt" < "foo.txt") */
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/foo.txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, h->ino, buf, 0, 16, &r));
+    TEST_ASSERT_EQ_INT(5, r);
+    buf[sizeof(buf) - 1] = '\0';
+    TEST_ASSERT(strcmp(buf, "lower") == 0);
+    ext4_vfs_close_handle(h);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/Foo.txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, h->ino, buf, 0, 16, &r));
+    TEST_ASSERT_EQ_INT(5, r);
+    buf[sizeof(buf) - 1] = '\0';
+    TEST_ASSERT(strcmp(buf, "upper") == 0);
+    ext4_vfs_close_handle(h);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/FOO.TXT", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, h->ino, buf, 0, 16, &r));
+    TEST_ASSERT_EQ_INT(5, r);
+    buf[sizeof(buf) - 1] = '\0';
+    TEST_ASSERT(strcmp(buf, "upper") == 0);
+    ext4_vfs_close_handle(h);
+
+    TEST_ASSERT(ext4_vfs_get_ci_collision_count(ctx) >= 1);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -2656,5 +2723,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_rw_fast_io_fsx_fuzzer);
     RUN_TEST(test_rw_fast_io_concurrent_rw_stress);
     RUN_TEST(test_rw_fast_io_large_file_4gb_sparse_boundary);
+    RUN_TEST(test_case_insensitive_collision_priority);
     return suite_failures;
 }

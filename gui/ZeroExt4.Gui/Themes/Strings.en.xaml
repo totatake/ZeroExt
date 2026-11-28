@@ -365,4 +365,20 @@
     <sys:String x:Key="Str_DoctorHint">Click "Run Diagnostics (doctor)" to check WinFsp runtime, elevation, selected volume health, and Overlay upperdir status.</sys:String>
     <sys:String x:Key="Str_StatusDoctorDoneFmt">Diagnostics complete ({0})</sys:String>
     <sys:String x:Key="Str_StatusDoctorErrFmt">Diagnostics error: {0}</sys:String>
+
+    <!-- Phase 2 Overlay Tools -->
+    <sys:String x:Key="Str_CoreOverlayFailFmt">Overlay command failed (exit={0}): {1}</sys:String>
+    <sys:String x:Key="Str_OverlayRenameCopyUpNote">Note: Renaming a directory that originates on the lower ext4 volume copies its entire subtree into the NTFS Upperdir.</sys:String>
+    <sys:String x:Key="Str_OverlayInspectDiffBtn">Inspect Diff</sys:String>
+    <sys:String x:Key="Str_OverlayExportTarBtn">Export (.tar)</sys:String>
+    <sys:String x:Key="Str_OverlayResetDiffBtn">Reset Diff</sys:String>
+    <sys:String x:Key="Str_OverlayExportDialogTitle">Export Overlay Diff Archive</sys:String>
+    <sys:String x:Key="Str_OverlayExportDialogFilter">TAR Archive (*.tar)|*.tar|All Files (*.*)|*.*</sys:String>
+    <sys:String x:Key="Str_OverlayResetConfirmTitle">Reset Overlay Upperdir</sys:String>
+    <sys:String x:Key="Str_OverlayResetConfirmMsgFmt">Delete all modified/added files and whiteout markers inside '{0}'?&#x0a;&#x0a;The .wh.__ext4_lower_id guard marker will be preserved and the lower ext4 volume will remain untouched.</sys:String>
+    <sys:String x:Key="Str_OverlayDiffSummaryFmt">Added: {0}  |  Modified: {1}  |  Deleted: {2}  |  Opaque Dirs: {3}  |  Upper Size: {4}</sys:String>
+    <sys:String x:Key="Str_OverlayDiffEmptyNote">No pending changes detected in this Upperdir.</sys:String>
+    <sys:String x:Key="Str_OverlayExportDoneFmt">Exported {0} entries ({1}) to {2}</sys:String>
+    <sys:String x:Key="Str_OverlayResetDoneFmt">Reset complete ({0} items removed; .wh.__ext4_lower_id preserved)</sys:String>
+    <sys:String x:Key="Str_OverlayResetBlockedMounted">Cannot reset while an active Overlay mount is using this Upperdir. Unmount it first.</sys:String>
 </ResourceDictionary>

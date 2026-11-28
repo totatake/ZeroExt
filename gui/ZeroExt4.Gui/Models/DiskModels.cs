@@ -519,6 +519,168 @@ namespace ZeroExt4.Gui.Models
         public string Reason { get; set; } = string.Empty;
     }
 
+    public sealed class OverlayDiffEntry
+    {
+        [JsonPropertyName("kind")]
+        public string Kind { get; set; } = string.Empty;
+
+        [JsonPropertyName("path")]
+        public string Path { get; set; } = string.Empty;
+
+        [JsonPropertyName("is_dir")]
+        public bool IsDir { get; set; }
+
+        [JsonPropertyName("size")]
+        public ulong Size { get; set; }
+
+        [JsonPropertyName("mode")]
+        public uint Mode { get; set; }
+
+        [JsonPropertyName("mtime")]
+        public ulong MtimeUnix { get; set; }
+
+        [JsonIgnore]
+        public string KindBadge => Kind switch
+        {
+            "added" => "+",
+            "modified" => "M",
+            "deleted" => "-",
+            "opaque_dir" => "O",
+            _ => "U",
+        };
+
+        [JsonIgnore]
+        public string SizeFormatted => IsDir || Kind == "deleted" || Kind == "opaque_dir"
+            ? "-"
+            : ByteFormatter.Format(Size);
+    }
+
+    public sealed class OverlayDiffSummary
+    {
+        [JsonPropertyName("added_count")]
+        public ulong AddedCount { get; set; }
+
+        [JsonPropertyName("modified_count")]
+        public ulong ModifiedCount { get; set; }
+
+        [JsonPropertyName("deleted_count")]
+        public ulong DeletedCount { get; set; }
+
+        [JsonPropertyName("opaque_dir_count")]
+        public ulong OpaqueDirCount { get; set; }
+
+        [JsonPropertyName("upper_count")]
+        public ulong UpperCount { get; set; }
+
+        [JsonPropertyName("file_count")]
+        public ulong FileCount { get; set; }
+
+        [JsonPropertyName("dir_count")]
+        public ulong DirCount { get; set; }
+
+        [JsonPropertyName("total_upper_bytes")]
+        public ulong TotalUpperBytes { get; set; }
+    }
+
+    public sealed class OverlayStatusResponse
+    {
+        [JsonPropertyName("action")]
+        public string Action { get; set; } = string.Empty;
+
+        [JsonPropertyName("upper_dir")]
+        public string UpperDir { get; set; } = string.Empty;
+
+        [JsonPropertyName("lower_source")]
+        public string LowerSource { get; set; } = string.Empty;
+
+        [JsonPropertyName("partition")]
+        public uint Partition { get; set; }
+
+        [JsonPropertyName("case_sensitive")]
+        public bool CaseSensitive { get; set; }
+
+        [JsonPropertyName("upper_check")]
+        public DoctorOverlayInfo UpperCheck { get; set; } = new DoctorOverlayInfo();
+
+        [JsonPropertyName("summary")]
+        public OverlayDiffSummary Summary { get; set; } = new OverlayDiffSummary();
+
+        [JsonPropertyName("entries")]
+        public List<OverlayDiffEntry> Entries { get; set; } = new List<OverlayDiffEntry>();
+    }
+
+    public sealed class OverlayValidateIssue
+    {
+        [JsonPropertyName("severity")]
+        public string Severity { get; set; } = string.Empty;
+
+        [JsonPropertyName("code")]
+        public string Code { get; set; } = string.Empty;
+
+        [JsonPropertyName("path")]
+        public string Path { get; set; } = string.Empty;
+
+        [JsonPropertyName("message")]
+        public string Message { get; set; } = string.Empty;
+    }
+
+    public sealed class OverlayValidateResponse
+    {
+        [JsonPropertyName("action")]
+        public string Action { get; set; } = string.Empty;
+
+        [JsonPropertyName("upper_dir")]
+        public string UpperDir { get; set; } = string.Empty;
+
+        [JsonPropertyName("valid")]
+        public bool Valid { get; set; }
+
+        [JsonPropertyName("error_count")]
+        public ulong ErrorCount { get; set; }
+
+        [JsonPropertyName("warning_count")]
+        public ulong WarningCount { get; set; }
+
+        [JsonPropertyName("issues")]
+        public List<OverlayValidateIssue> Issues { get; set; } = new List<OverlayValidateIssue>();
+    }
+
+    public sealed class OverlayExportResponse
+    {
+        [JsonPropertyName("action")]
+        public string Action { get; set; } = string.Empty;
+
+        [JsonPropertyName("upper_dir")]
+        public string UpperDir { get; set; } = string.Empty;
+
+        [JsonPropertyName("output_path")]
+        public string OutputPath { get; set; } = string.Empty;
+
+        [JsonPropertyName("archive_bytes")]
+        public ulong ArchiveBytes { get; set; }
+
+        [JsonPropertyName("exported_entries")]
+        public ulong ExportedEntries { get; set; }
+
+        [JsonPropertyName("summary")]
+        public OverlayDiffSummary Summary { get; set; } = new OverlayDiffSummary();
+    }
+
+    public sealed class OverlayResetResponse
+    {
+        [JsonPropertyName("action")]
+        public string Action { get; set; } = string.Empty;
+
+        [JsonPropertyName("upper_dir")]
+        public string UpperDir { get; set; } = string.Empty;
+
+        [JsonPropertyName("kept_marker")]
+        public bool KeptMarker { get; set; }
+
+        [JsonPropertyName("removed_entries")]
+        public ulong RemovedEntries { get; set; }
+    }
+
     public static class ByteFormatter
     {
         public static string Format(ulong bytes)

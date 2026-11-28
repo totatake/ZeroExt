@@ -298,6 +298,20 @@ namespace ZeroExt4.Gui.Tests
             Assert(docArgs.Contains("--overlay") && docArgs.Contains(@"D:\ov"), "doctor overlay");
             Assert(docArgs.Contains("--case-sensitive"), "doctor cs");
             Assert(docArgs.Contains("--json"), "doctor json");
+
+            List<string> ovDiffArgs = ZeroExt4ArgBuilder.BuildOverlayStatusArgs(@"D:\ov", @"D:\test.img", 2, true, diff: true, json: true);
+            AssertEqual("overlay", ovDiffArgs[0], "overlay cmd");
+            AssertEqual("diff", ovDiffArgs[1], "overlay diff sub");
+            Assert(ovDiffArgs.Contains("--upper") && ovDiffArgs.Contains(@"D:\ov"), "overlay upper");
+            Assert(ovDiffArgs.Contains("--lower") && ovDiffArgs.Contains(@"D:\test.img"), "overlay lower");
+
+            List<string> ovExportArgs = ZeroExt4ArgBuilder.BuildOverlayExportArgs(@"D:\ov", @"D:\out.tar", @"D:\test.img", 2, false, true);
+            AssertEqual("export", ovExportArgs[1], "overlay export sub");
+            Assert(ovExportArgs.Contains("--output") && ovExportArgs.Contains(@"D:\out.tar"), "overlay output tar");
+
+            List<string> ovResetArgs = ZeroExt4ArgBuilder.BuildOverlayResetArgs(@"D:\ov", yes: true, json: true);
+            AssertEqual("reset", ovResetArgs[1], "overlay reset sub");
+            Assert(ovResetArgs.Contains("--yes"), "overlay reset yes");
         }
 
         private static void Test_DriveLetterAndOverlayValidation()
@@ -813,6 +827,33 @@ namespace ZeroExt4.Gui.Tests
                 LsResponse subLs = await client.ListDirectoryAsync(imgPath, "/ドキュメント", 0);
                 LsEntry? jpFile = subLs.Entries.FirstOrDefault(e => e.Name == "日本語.txt");
                 Assert(jpFile != null && !jpFile.IsDir && jpFile.Size > 0, "subdir contains 日本語.txt");
+
+                // Phase 2 live CLI overlay status/diff/validate/export/reset round-trip
+                string ovUpper = Path.Combine(tmpDir, "cli_ov_upper");
+                Directory.CreateDirectory(ovUpper);
+                string markerV2 = p.GetExpectedOverlayLowerIdV2(caseSensitive: false) ?? string.Empty;
+                Assert(!string.IsNullOrWhiteSpace(markerV2), "markerV2 populated");
+                File.WriteAllText(Path.Combine(ovUpper, ".wh.__ext4_lower_id"), markerV2);
+                File.WriteAllText(Path.Combine(ovUpper, "added_from_gui.txt"), "added-body");
+                File.WriteAllText(Path.Combine(ovUpper, ".wh.hello.txt"), string.Empty);
+
+                OverlayStatusResponse ovDiff = await client.GetOverlayDiffAsync(ovUpper, imgPath, 0, diff: true);
+                AssertEqual(1UL, ovDiff.Summary.AddedCount, "live overlay added count");
+                AssertEqual(1UL, ovDiff.Summary.DeletedCount, "live overlay deleted count");
+                Assert(ovDiff.Entries.Any(e => e.Kind == "added" && e.Path == "/added_from_gui.txt"), "live overlay added entry");
+                Assert(ovDiff.Entries.Any(e => e.Kind == "deleted" && e.Path == "/hello.txt"), "live overlay deleted entry");
+
+                OverlayValidateResponse ovVal = await client.ValidateOverlayAsync(ovUpper, imgPath, 0);
+                Assert(ovVal.Valid && ovVal.ErrorCount == 0, "live overlay valid");
+
+                string exportTar = Path.Combine(tmpDir, "overlay_export.tar");
+                OverlayExportResponse ovExp = await client.ExportOverlayAsync(ovUpper, exportTar, imgPath, 0);
+                Assert(File.Exists(exportTar) && ovExp.ArchiveBytes >= 1536, "live overlay tar exported");
+
+                OverlayResetResponse ovRes = await client.ResetOverlayAsync(ovUpper);
+                Assert(ovRes.KeptMarker && ovRes.RemovedEntries >= 2, "live overlay reset preserved marker");
+                Assert(File.Exists(Path.Combine(ovUpper, ".wh.__ext4_lower_id")), "marker remains after reset");
+                Assert(!File.Exists(Path.Combine(ovUpper, "added_from_gui.txt")), "added file deleted by reset");
             }
             finally
             {

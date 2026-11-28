@@ -50,7 +50,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
   - 起動時に接続中の物理ディスクを自動スキャンします（非管理者権限の場合はツールバーの **「管理者権限で再起動」** から UAC 昇格できます）。
   - `.img` / `.raw` ファイルの追加（**「イメージを追加...」** ボタンまたはドラッグ＆ドロップ）と新規 ext4 イメージ作成（**「新規作成...」**）は左ペイン下部から実行できます（非管理者権限のまま利用可能）。
 - **マウント設定タブ**:
-  - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（v2 `.wh.__ext4_lower_id` 事前検証・非空未識別フォルダ拒否ガード付き）・**Read-Write**（Dirty／エラー／暗号化検出時は安全のため自動抑止し RO / Overlay を推奨）を選択し、空きドライブレター（既定は `L:` 優先）または空 NTFS フォルダへワンクリックでマウントします。
+  - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（v2 `.wh.__ext4_lower_id` 事前検証・非空未識別フォルダ拒否ガード・**差分確認 / `.tar` エクスポート / 安全リセット** UI 付き）・**Read-Write**（Dirty／エラー／暗号化検出時は安全のため自動抑止し RO / Overlay を推奨）を選択し、空きドライブレター（既定は `L:` 優先）または空 NTFS フォルダへワンクリックでマウントします。
   - 詳細設定では Direct I/O 切替・大文字／小文字の区別（`--case-sensitive`）・LRU キャッシュブロック数・デバッグログ・Perfetto トレース出力・同等 CLI コマンドのコピーを行えます（「詳細 & ログ」タブの **「診断を実行 (`doctor`)」** ボタンから環境・ボリューム・Upperdir の一括診断も可能です）。
 - **アクティブマウントタブ & システムトレイ**:
   - 稼働中のマウントごとの読取／書込スループット（MB/s）および累計転送量をリアルタイム表示し、「エクスプローラーで開く」や安全なアンマウントを実行できます。
@@ -72,6 +72,13 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 .\build\zeroext4.exe list
 .\build\zeroext4.exe inspect <image_or_disk> [--partition <N>] [--json]
 .\build\zeroext4.exe doctor [--source <image_or_disk>] [--partition <N>] [--overlay <ntfs_upper_dir>] [--json]
+
+# Overlay Upperdir の差分確認・検証・.tar エクスポート・安全リセット
+.\build\zeroext4.exe overlay status   --upper D:\ext4_upper [--lower <image_or_disk>] [--partition <N>] [--json]
+.\build\zeroext4.exe overlay diff     --upper D:\ext4_upper [--lower <image_or_disk>] [--partition <N>] [--json]
+.\build\zeroext4.exe overlay validate --upper D:\ext4_upper [--lower <image_or_disk>] [--partition <N>] [--json]
+.\build\zeroext4.exe overlay export   --upper D:\ext4_upper --output overlay_diff.tar [--lower <image_or_disk>] [--json]
+.\build\zeroext4.exe overlay reset    --upper D:\ext4_upper --yes [--json]
 
 # ext4 イメージ新規作成（4KB ブロック・256B iノード・extents・64bit・metadata_csum 有効）
 .\build\zeroext4.exe mkfs test.img --size-mb 64 --label MYEXT4
@@ -135,9 +142,19 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 - `--stats-interval <ms>`: `--json-events` 併用時の I/O 統計イベント出力間隔 (ms)
 - `--trace <path.json>`: [Perfetto UI](https://ui.perfetto.dev/) 互換 Chrome Trace Event JSON を出力
 - `--trace-events <N>`: スレッドごとのトレースリングバッファ容量（既定 65536、2 のべき乗で `1024..1048576`）
-- `--json`: `list` / `inspect` / `ls` サブコマンドで UTF-8 構造化 JSON 出力
+- `--json`: `list` / `inspect` / `doctor` / `overlay` / `ls` サブコマンドで UTF-8 構造化 JSON 出力
 
-### 3.3 安全なアンマウントと管理者権限時のドライブ可視性
+### 3.3 シンボリックリンクと Windows 名前空間ガードの仕様
+
+- **シンボリックリンク (WinFsp Reparse Point `SYMLINK`)**:
+  - 通常の Read-Only / `--rw` マウントでは ext4 上のシンボリックリンクを Windows Reparse Point として公開します（ボリューム内の POSIX 絶対パスもボリューム相対パスへ自動変換）。ホスト側のパスへ越境する相対 `..` やドライブ文字・UNC を含むターゲットは安全のため解決を拒否します。
+  - `--overlay` モードでは下位 ext4 の symlink の読取（`readlink`）および Whiteout による削除が可能ですが、symlink 自体の Copy-up 書き込み・リネーム・Upper への新規 symlink 作成は非対応（`-ENOTSUP`）となります。
+  - また `--overlay` で下位 ext4 由来ディレクトリをリネームするとサブツリー全体が Upperdir へ Copy-up されるため、事前に空き容量検査・大容量警告・失敗時ロールバックが行われます。
+- **Windows 非互換名と大小文字衝突**:
+  - `CON`, `NUL`, `AUX`, `PRN`, `COM1..9`, `LPT1..9`（拡張子付き含む）や `< > : " | ? *` 等を含むパスは新規作成・リネーム・Upperdir Copy-up を安全に拒否します（Lower Read-Only 側での既存参照のみ維持）。
+  - 既定の大文字小文字を区別しないマウント下で `Foo.txt` と `foo.txt` が共存する場合は、厳密一致を最優先しつつフォールバック時に辞書順最小名 → 最小 inode の決定論的順序で解決し警告ログを出力します（完全一致アクセスが必要な場合は `--case-sensitive` を指定してください）。
+
+### 3.4 安全なアンマウントと管理者権限時のドライブ可視性
 
 アンマウントは実行中のコンソールで `Ctrl+C` を押下します（`ext2fs_flush` と I/O キャッシュフラッシュを実行したうえで安全に停止・解除します）。
 

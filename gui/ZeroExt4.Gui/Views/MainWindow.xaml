@@ -616,6 +616,72 @@
                                                 </Border.Style>
                                                 <TextBlock Text="{Binding UpperDirCheck.Message}" TextWrapping="Wrap" FontSize="12" />
                                             </Border>
+
+                                            <TextBlock Text="{DynamicResource Str_OverlayRenameCopyUpNote}"
+                                                       FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       TextWrapping="Wrap" Margin="0,8,0,8" />
+
+                                            <WrapPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                <Button Content="{DynamicResource Str_OverlayInspectDiffBtn}"
+                                                        Style="{StaticResource SecondaryButtonStyle}"
+                                                        Command="{Binding RefreshOverlayDiffCommand}"
+                                                        Margin="0,0,8,4" />
+                                                <Button Content="{DynamicResource Str_OverlayExportTarBtn}"
+                                                        Style="{StaticResource SecondaryButtonStyle}"
+                                                        IsEnabled="{Binding CanExportOverlay}"
+                                                        Click="OnExportOverlayClick"
+                                                        Margin="0,0,8,4" />
+                                                <Button Content="{DynamicResource Str_OverlayResetDiffBtn}"
+                                                        Style="{StaticResource DangerButtonStyle}"
+                                                        IsEnabled="{Binding CanResetOverlay}"
+                                                        Click="OnResetOverlayClick"
+                                                        Margin="0,0,0,4" />
+                                            </WrapPanel>
+
+                                            <TextBlock Text="{Binding OverlayDiffSummary}"
+                                                       FontSize="12" FontWeight="SemiBold"
+                                                       Visibility="{Binding HasOverlayDiffSummary, Converter={StaticResource BoolToVis}}"
+                                                       Margin="0,2,0,4" />
+                                            <TextBlock Text="{Binding OverlayActionNotice}"
+                                                       FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Visibility="{Binding HasOverlayActionNotice, Converter={StaticResource BoolToVis}}"
+                                                       Margin="0,0,0,4" />
+
+                                            <Border Background="{DynamicResource CardAltBackgroundBrush}"
+                                                    BorderBrush="{DynamicResource BorderBrush}"
+                                                    BorderThickness="1" CornerRadius="6" Padding="6"
+                                                    Visibility="{Binding HasOverlayDiffEntries, Converter={StaticResource BoolToVis}}">
+                                                <ScrollViewer MaxHeight="135" VerticalScrollBarVisibility="Auto">
+                                                    <ItemsControl ItemsSource="{Binding OverlayDiffEntries}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Grid Margin="2,2,2,2">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="26" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <Border Grid.Column="0" Background="{DynamicResource InfoBgBrush}"
+                                                                            CornerRadius="4" Padding="4,1" Margin="0,0,6,0"
+                                                                            HorizontalAlignment="Center">
+                                                                        <TextBlock Text="{Binding KindBadge}"
+                                                                                   FontFamily="Consolas" FontWeight="Bold"
+                                                                                   FontSize="11" HorizontalAlignment="Center" />
+                                                                    </Border>
+                                                                    <TextBlock Grid.Column="1" Text="{Binding Path}"
+                                                                               FontFamily="Consolas" FontSize="11.5"
+                                                                               TextTrimming="CharacterEllipsis"
+                                                                               VerticalAlignment="Center" />
+                                                                    <TextBlock Grid.Column="2" Text="{Binding SizeFormatted}"
+                                                                               FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                                               Margin="8,0,0,0" VerticalAlignment="Center" />
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Border>
                                         </StackPanel>
                                     </Border>
 

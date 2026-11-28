@@ -198,9 +198,14 @@ namespace ZeroExt4.Gui.ViewModels
         private string? _browseError;
         private LsEntry? _selectedBrowseEntry;
 
+        private bool _isOverlayBusy;
+        private string _overlayDiffSummary = string.Empty;
+        private string _overlayActionNotice = string.Empty;
+
         public ObservableCollection<DiskGroupItem> DiskGroups { get; } = new ObservableCollection<DiskGroupItem>();
         public ObservableCollection<string> AvailableDriveLetters { get; } = new ObservableCollection<string>();
         public ObservableCollection<LsEntry> BrowseEntries { get; } = new ObservableCollection<LsEntry>();
+        public ObservableCollection<OverlayDiffEntry> OverlayDiffEntries { get; } = new ObservableCollection<OverlayDiffEntry>();
         public ObservableCollection<string> LogEntries { get; } = new ObservableCollection<string>();
         public ObservableCollection<ActiveMountInfo> ActiveMounts => _mountManager.ActiveMounts;
 
@@ -215,6 +220,7 @@ namespace ZeroExt4.Gui.ViewModels
         public AsyncRelayCommand RefreshBrowseCommand { get; }
         public AsyncRelayCommand NavigateUpBrowseCommand { get; }
         public AsyncRelayCommand RunDoctorCommand { get; }
+        public AsyncRelayCommand RefreshOverlayDiffCommand { get; }
         public RelayCommand ToggleThemeCommand { get; }
         public RelayCommand SetAutoOverlayPathCommand { get; }
         public RelayCommand ClearLogsCommand { get; }
@@ -286,6 +292,9 @@ namespace ZeroExt4.Gui.ViewModels
             RunDoctorCommand = new AsyncRelayCommand(
                 RunDoctorAsync,
                 () => !IsRunningDoctor && HasCoreExe);
+            RefreshOverlayDiffCommand = new AsyncRelayCommand(
+                RefreshOverlayDiffAsync,
+                () => CanInspectOverlay);
 
             ToggleThemeCommand = new RelayCommand(() => IsDarkTheme = !IsDarkTheme);
             SetAutoOverlayPathCommand = new RelayCommand(ApplySuggestedOverlayPath, () => SelectedPartition != null);
@@ -620,7 +629,9 @@ namespace ZeroExt4.Gui.ViewModels
             {
                 if (SetProperty(ref _overlayUpperDir, value))
                 {
+                    ClearOverlayPreviewState();
                     RefreshUpperDirValidation();
+                    NotifyOverlayActionsChanged();
                     NotifyMountStateChanged();
                 }
             }
@@ -629,8 +640,67 @@ namespace ZeroExt4.Gui.ViewModels
         public UpperDirCheckResult UpperDirCheck
         {
             get => _upperDirCheck;
-            private set => SetProperty(ref _upperDirCheck, value);
+            private set
+            {
+                if (SetProperty(ref _upperDirCheck, value))
+                {
+                    NotifyOverlayActionsChanged();
+                }
+            }
         }
+
+        public bool IsOverlayBusy
+        {
+            get => _isOverlayBusy;
+            private set
+            {
+                if (SetProperty(ref _isOverlayBusy, value))
+                {
+                    NotifyOverlayActionsChanged();
+                }
+            }
+        }
+
+        public string OverlayDiffSummary
+        {
+            get => _overlayDiffSummary;
+            private set
+            {
+                if (SetProperty(ref _overlayDiffSummary, value))
+                {
+                    OnPropertyChanged(nameof(HasOverlayDiffSummary));
+                }
+            }
+        }
+
+        public bool HasOverlayDiffSummary => !string.IsNullOrWhiteSpace(OverlayDiffSummary);
+
+        public string OverlayActionNotice
+        {
+            get => _overlayActionNotice;
+            private set
+            {
+                if (SetProperty(ref _overlayActionNotice, value))
+                {
+                    OnPropertyChanged(nameof(HasOverlayActionNotice));
+                }
+            }
+        }
+
+        public bool HasOverlayActionNotice => !string.IsNullOrWhiteSpace(OverlayActionNotice);
+
+        public bool HasOverlayDiffEntries => OverlayDiffEntries.Count > 0;
+
+        public bool CanInspectOverlay =>
+            !IsOverlayBusy && HasCoreExe && !string.IsNullOrWhiteSpace(OverlayUpperDir) && Directory.Exists(OverlayUpperDir);
+
+        public bool CanExportOverlay => CanInspectOverlay;
+
+        public bool CanResetOverlay =>
+            CanInspectOverlay &&
+            UpperDirCheck.CanMount &&
+            UpperDirCheck.Status != UpperDirCheckStatus.WillCreate &&
+            !IsUpperDirActivelyMounted();
 
         public bool EnableDirectIo
         {
@@ -1306,6 +1376,162 @@ namespace ZeroExt4.Gui.ViewModels
             OverlayUpperDir = Path.Combine(localAppData, "ZeroExt4", "Overlays", $"{sanitized}{suffix}{csSuffix}");
         }
 
+        public async Task RefreshOverlayDiffAsync()
+        {
+            if (!CanInspectOverlay) return;
+            IsOverlayBusy = true;
+            OverlayActionNotice = string.Empty;
+            try
+            {
+                OverlayStatusResponse resp = await _coreClient.GetOverlayDiffAsync(
+                    OverlayUpperDir.Trim(),
+                    SelectedPartition?.ParentDisk.DevicePath,
+                    SelectedPartition?.Info.PartitionNumber,
+                    CaseSensitive,
+                    diff: true);
+
+                _marshalToUi(() =>
+                {
+                    OverlayDiffEntries.Clear();
+                    foreach (OverlayDiffEntry item in resp.Entries)
+                    {
+                        OverlayDiffEntries.Add(item);
+                    }
+                    OnPropertyChanged(nameof(HasOverlayDiffEntries));
+                    OverlayDiffSummary = LocalizationService.Format(
+                        "Str_OverlayDiffSummaryFmt",
+                        resp.Summary.AddedCount,
+                        resp.Summary.ModifiedCount,
+                        resp.Summary.DeletedCount,
+                        resp.Summary.OpaqueDirCount,
+                        ByteFormatter.Format(resp.Summary.TotalUpperBytes));
+                    if (resp.Entries.Count == 0)
+                    {
+                        OverlayActionNotice = LocalizationService.Get("Str_OverlayDiffEmptyNote");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[overlay] {ex.Message}");
+                OverlayActionNotice = ex.Message;
+            }
+            finally
+            {
+                IsOverlayBusy = false;
+            }
+        }
+
+        public async Task ExportOverlayAsync(string outputTarPath)
+        {
+            if (!CanExportOverlay || string.IsNullOrWhiteSpace(outputTarPath)) return;
+            IsOverlayBusy = true;
+            OverlayActionNotice = string.Empty;
+            try
+            {
+                OverlayExportResponse resp = await _coreClient.ExportOverlayAsync(
+                    OverlayUpperDir.Trim(),
+                    outputTarPath,
+                    SelectedPartition?.ParentDisk.DevicePath,
+                    SelectedPartition?.Info.PartitionNumber,
+                    CaseSensitive);
+
+                string notice = LocalizationService.Format(
+                    "Str_OverlayExportDoneFmt",
+                    resp.ExportedEntries,
+                    ByteFormatter.Format(resp.ArchiveBytes),
+                    resp.OutputPath);
+                OverlayActionNotice = notice;
+                StatusMessage = notice;
+                AppendLog($"[overlay] {notice}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[overlay] {ex.Message}");
+                OverlayActionNotice = ex.Message;
+            }
+            finally
+            {
+                IsOverlayBusy = false;
+            }
+        }
+
+        public async Task ResetOverlayAsync()
+        {
+            if (!HasCoreExe || IsOverlayBusy || string.IsNullOrWhiteSpace(OverlayUpperDir)) return;
+            if (IsUpperDirActivelyMounted())
+            {
+                OverlayActionNotice = LocalizationService.Get("Str_OverlayResetBlockedMounted");
+                return;
+            }
+
+            IsOverlayBusy = true;
+            OverlayActionNotice = string.Empty;
+            try
+            {
+                OverlayResetResponse resp = await _coreClient.ResetOverlayAsync(OverlayUpperDir.Trim());
+                string notice = LocalizationService.Format("Str_OverlayResetDoneFmt", resp.RemovedEntries);
+                _marshalToUi(() =>
+                {
+                    OverlayDiffEntries.Clear();
+                    OnPropertyChanged(nameof(HasOverlayDiffEntries));
+                    OverlayDiffSummary = string.Empty;
+                    OverlayActionNotice = notice;
+                    StatusMessage = notice;
+                });
+                AppendLog($"[overlay] {notice}");
+                RefreshUpperDirValidation();
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[overlay] {ex.Message}");
+                OverlayActionNotice = ex.Message;
+            }
+            finally
+            {
+                IsOverlayBusy = false;
+            }
+        }
+
+        private bool IsUpperDirActivelyMounted()
+        {
+            if (string.IsNullOrWhiteSpace(OverlayUpperDir)) return false;
+            string norm;
+            try
+            {
+                norm = Path.GetFullPath(OverlayUpperDir.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch
+            {
+                norm = OverlayUpperDir.Trim();
+            }
+            return ActiveMounts.Any(m =>
+                !string.IsNullOrWhiteSpace(m.OverlayUpperDir) &&
+                string.Equals(
+                    Path.GetFullPath(m.OverlayUpperDir.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    norm,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void ClearOverlayPreviewState()
+        {
+            if (OverlayDiffEntries.Count > 0)
+            {
+                OverlayDiffEntries.Clear();
+                OnPropertyChanged(nameof(HasOverlayDiffEntries));
+            }
+            OverlayDiffSummary = string.Empty;
+            OverlayActionNotice = string.Empty;
+        }
+
+        private void NotifyOverlayActionsChanged()
+        {
+            OnPropertyChanged(nameof(CanInspectOverlay));
+            OnPropertyChanged(nameof(CanExportOverlay));
+            OnPropertyChanged(nameof(CanResetOverlay));
+            RefreshOverlayDiffCommand?.RaiseCanExecuteChanged();
+        }
+
         public void RefreshAvailableDriveLetters()
         {
             var activeLetters = ActiveMounts
@@ -1358,6 +1584,7 @@ namespace ZeroExt4.Gui.ViewModels
             OnPropertyChanged(nameof(ActiveMountsTabHeader));
             UnmountAllCommand.RaiseCanExecuteChanged();
             UnmountSelectedCommand.RaiseCanExecuteChanged();
+            NotifyOverlayActionsChanged();
             NotifyMountStateChanged();
         }
 

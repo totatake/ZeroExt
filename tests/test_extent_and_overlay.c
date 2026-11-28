@@ -2,6 +2,8 @@
 #include "../src/vfs/ext4_vfs.h"
 #include "../src/extent/extent_map.h"
 #include "../src/overlay/overlay_vfs.h"
+#include "../src/overlay/overlay_tools.h"
+#include "../src/common/win_namespace.h"
 #include "../src/driver/winfsp_driver.h"
 #include "../src/disk/superblock_probe.h"
 #include <errno.h>
@@ -900,6 +902,275 @@ static int test_overlay_upperdir_guards_v2(void) {
     return 0;
 }
 
+static int test_overlay_hashmap_scalability_and_deterministic_inodes(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st_first, st_second;
+    ext2_ino_t synth_before = 0;
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_hash_scale.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "ov_hash_scale_upper");
+    DeleteFileA(img_path);
+    cleanup_dir_recursive(upper_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 16ULL * 1024ULL * 1024ULL, "OVHASH"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/base.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    cfg.overlay_upper_dir = upper_dir;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/many", 0755, NULL));
+
+    for (int i = 0; i < 650; i++) {
+        char fpath[128];
+        char payload[64];
+        uint32_t w = 0;
+        snprintf(fpath, sizeof(fpath), "/many/file_%04d.dat", i);
+        snprintf(payload, sizeof(payload), "item-%04d", i);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, fpath, 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, fpath, 1, &h));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, payload, 0, (uint32_t)strlen(payload), 0, &w, NULL));
+        ext4_vfs_close_handle(h);
+        h = NULL;
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/many/file_0420.dat", &st_first));
+    TEST_ASSERT(st_first.ino >= 0x80000000U);
+    synth_before = st_first.ino;
+
+    /* Rename parent directory and verify open handle / mapped inode stays stable */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/many", "/many_renamed", 0));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/many_renamed/file_0420.dat", &st_second));
+    TEST_ASSERT_EQ_INT((long long)synth_before, (long long)st_second.ino);
+
+    /* Unmount & remount twice with same upperdir: synthetic inode for renamed path must stay deterministic */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/many_renamed/file_0420.dat", &st_first));
+    TEST_ASSERT(st_first.ino >= 0x80000000U);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/many_renamed/file_0420.dat", &st_second));
+    TEST_ASSERT_EQ_INT((long long)st_first.ino, (long long)st_second.ino);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    cleanup_dir_recursive(upper_dir);
+    DeleteFileA(img_path);
+    return 0;
+}
+
+static int test_overlay_tools_status_diff_validate_export_reset(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    char unmarked_dir[MAX_PATH];
+    char tar_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    uint32_t w = 0;
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_tools.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "ov_tools_upper");
+    test_make_temp_path(unmarked_dir, sizeof(unmarked_dir), "ov_tools_unmarked");
+    test_make_temp_path(tar_path, sizeof(tar_path), "ov_tools_export.tar");
+    DeleteFileA(img_path);
+    DeleteFileA(tar_path);
+    cleanup_dir_recursive(upper_dir);
+    cleanup_dir_recursive(unmarked_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "OVTOOLS"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/mod.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/mod.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "before", 0, 6, 0, &w, NULL));
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/delme.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    cfg.overlay_upper_dir = upper_dir;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/mod.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "after-update", 0, 12, 0, &w, NULL));
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/added.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/added.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "new-data", 0, 8, 0, &w, NULL));
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/delme.txt"));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Mount lower RO for inspection */
+    cfg.overlay_upper_dir = NULL;
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    {
+        overlay_diff_report_t rep;
+        TEST_ASSERT_EQ_INT(0, overlay_tools_scan(upper_dir, ctx, NULL, 1, &rep));
+        TEST_ASSERT_EQ_INT(1, (long long)rep.summary.added_count);
+        TEST_ASSERT_EQ_INT(1, (long long)rep.summary.modified_count);
+        TEST_ASSERT_EQ_INT(1, (long long)rep.summary.deleted_count);
+        TEST_ASSERT_EQ_INT(20, (long long)rep.summary.total_upper_bytes);
+        TEST_ASSERT_EQ_INT(3, (long long)rep.entry_count);
+        overlay_tools_free_diff_report(&rep);
+    }
+
+    /* Inject stale tmp + orphan whiteout and validate warnings */
+    {
+        char tmp_f[MAX_PATH], orp_f[MAX_PATH];
+        FILE *fp;
+        snprintf(tmp_f, sizeof(tmp_f), "%s\\foo.ext4tmp_1_1", upper_dir);
+        snprintf(orp_f, sizeof(orp_f), "%s\\.wh.never_existed", upper_dir);
+        fp = fopen(tmp_f, "wb");
+        TEST_ASSERT(fp != NULL);
+        fputs("tmp", fp);
+        fclose(fp);
+        fp = fopen(orp_f, "wb");
+        TEST_ASSERT(fp != NULL);
+        fclose(fp);
+
+        overlay_validate_report_t vrep;
+        TEST_ASSERT_EQ_INT(0, overlay_tools_validate(upper_dir, ctx, NULL, &vrep));
+        TEST_ASSERT_EQ_INT(1, vrep.valid);
+        TEST_ASSERT_EQ_INT(0, (long long)vrep.error_count);
+        TEST_ASSERT(vrep.warning_count >= 2);
+        overlay_tools_free_validate_report(&vrep);
+    }
+
+    /* Export tar and check USTAR headers */
+    {
+        overlay_export_summary_t esum;
+        uint8_t *hdr = (uint8_t *)calloc(1, 512);
+        FILE *tfp;
+        TEST_ASSERT(hdr != NULL);
+        TEST_ASSERT_EQ_INT(0, overlay_tools_export_tar(upper_dir, ctx, NULL, tar_path, &esum));
+        TEST_ASSERT(esum.exported_entries >= 3);
+        TEST_ASSERT(esum.archive_bytes >= 1536);
+
+        tfp = fopen(tar_path, "rb");
+        TEST_ASSERT(tfp != NULL);
+        TEST_ASSERT_EQ_INT(512, (long long)fread(hdr, 1, 512, tfp));
+        TEST_ASSERT(strcmp((const char *)hdr, "manifest.json") == 0);
+        TEST_ASSERT(memcmp(hdr + 257, "ustar", 5) == 0);
+        fclose(tfp);
+        free(hdr);
+    }
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Reset upperdir preserves .wh.__ext4_lower_id and refuses unmarked non-empty dir */
+    {
+        uint64_t removed = 0;
+        char id_path[MAX_PATH];
+        char added_path[MAX_PATH];
+        char keep_file[MAX_PATH];
+        FILE *fp;
+
+        TEST_ASSERT_EQ_INT(0, overlay_tools_reset_upper(upper_dir, 1, &removed));
+        TEST_ASSERT(removed >= 4);
+        snprintf(id_path, sizeof(id_path), "%s\\.wh.__ext4_lower_id", upper_dir);
+        snprintf(added_path, sizeof(added_path), "%s\\added.txt", upper_dir);
+        TEST_ASSERT(GetFileAttributesA(id_path) != INVALID_FILE_ATTRIBUTES);
+        TEST_ASSERT(GetFileAttributesA(added_path) == INVALID_FILE_ATTRIBUTES);
+
+        CreateDirectoryA(unmarked_dir, NULL);
+        snprintf(keep_file, sizeof(keep_file), "%s\\precious.txt", unmarked_dir);
+        fp = fopen(keep_file, "wb");
+        TEST_ASSERT(fp != NULL);
+        fputs("do-not-delete", fp);
+        fclose(fp);
+        TEST_ASSERT_EQ_INT(-ENOTEMPTY, overlay_tools_reset_upper(unmarked_dir, 1, &removed));
+        TEST_ASSERT(GetFileAttributesA(keep_file) != INVALID_FILE_ATTRIBUTES);
+    }
+
+    cleanup_dir_recursive(upper_dir);
+    cleanup_dir_recursive(unmarked_dir);
+    DeleteFileA(tar_path);
+    DeleteFileA(img_path);
+    return 0;
+}
+
+static int test_overlay_symlink_and_windows_namespace_guards(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    char target[256];
+
+    TEST_ASSERT_EQ_INT(EXT4_WIN_NAME_OK, ext4_win_check_path("/normal/File.txt"));
+    TEST_ASSERT_EQ_INT(EXT4_WIN_NAME_RESERVED_DEVICE, ext4_win_check_path("/dir/CON"));
+    TEST_ASSERT_EQ_INT(EXT4_WIN_NAME_RESERVED_DEVICE, ext4_win_check_path("/nul.txt"));
+    TEST_ASSERT_EQ_INT(EXT4_WIN_NAME_INVALID_CHAR, ext4_win_check_path("/bad:name"));
+    TEST_ASSERT_EQ_INT(EXT4_WIN_NAME_TRAILING_DOT_SPACE, ext4_win_check_path("/trail."));
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_sym_ns.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "ov_sym_ns_upper");
+    DeleteFileA(img_path);
+    cleanup_dir_recursive(upper_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "OVSYMNS"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/hello.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/sym", "/hello.txt"));
+    /* Lower image holds reserved Windows name safely in read-only layer */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/CON", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    cfg.overlay_upper_dir = upper_dir;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readlink(ctx, "/sym", target, sizeof(target)));
+    TEST_ASSERT(strcmp(target, "/hello.txt") == 0);
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_symlink(ctx, "/new_sym", "/hello.txt"));
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_open(ctx, "/sym", 1, &h));
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_rename(ctx, "/sym", "/sym_moved", 0));
+
+    /* Reserved / invalid Windows names cannot be created or copied up in overlay */
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_create(ctx, "/AUX", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_create(ctx, "/com1.log", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_create(ctx, "/bad:file", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_open(ctx, "/CON", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/CON", 0, &h));
+    ext4_vfs_close_handle(h);
+
+    /* Unlinking a lower symlink creates a whiteout cleanly */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/sym"));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_readlink(ctx, "/sym", target, sizeof(target)));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    cleanup_dir_recursive(upper_dir);
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_extent_and_overlay(void) {
     int suite_failures = 0;
     printf("\n=== Suite: extent_and_overlay ===\n");
@@ -909,5 +1180,8 @@ int run_suite_extent_and_overlay(void) {
     RUN_TEST(test_read_handle_cached_extents);
     RUN_TEST(test_overlay_case_sensitive_upperdir);
     RUN_TEST(test_overlay_upperdir_guards_v2);
+    RUN_TEST(test_overlay_hashmap_scalability_and_deterministic_inodes);
+    RUN_TEST(test_overlay_tools_status_diff_validate_export_reset);
+    RUN_TEST(test_overlay_symlink_and_windows_namespace_guards);
     return suite_failures;
 }

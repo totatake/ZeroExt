@@ -1,5 +1,6 @@
 #include "overlay_vfs.h"
 #include "../common/ext4_errno.h"
+#include "../common/win_namespace.h"
 #include "../trace/perfetto_trace.h"
 #include <errno.h>
 #include <limits.h>
@@ -8,6 +9,7 @@
 #include <string.h>
 
 #define OV_SYNTHETIC_INO_BASE 0x80000000U
+#define OV_INO_INIT_BUCKETS   256U
 #define OV_WHITEOUT_PREFIX    ".wh."
 #define OV_OPAQUE_NAME        ".wh.__dir_opaque"
 #define OV_OPAQUE_NAME_W      L".wh.__dir_opaque"
@@ -17,8 +19,11 @@
 typedef struct ov_ino_entry {
     ext2_ino_t           ino;
     ext2_ino_t           lower_ino;
+    uint64_t             path_hash;
     char                 path[1024];
-    struct ov_ino_entry *next;
+    struct ov_ino_entry *next_all;
+    struct ov_ino_entry *next_ino;
+    struct ov_ino_entry *next_path;
 } ov_ino_entry_t;
 
 struct ext4_overlay_ctx {
@@ -26,8 +31,11 @@ struct ext4_overlay_ctx {
     int              case_sensitive;
     SRWLOCK          map_lock;
     CRITICAL_SECTION mut_cs;
-    ov_ino_entry_t  *entries;
-    uint32_t         next_synth_ino;
+    ov_ino_entry_t  *entries_all;
+    ov_ino_entry_t **ino_buckets;
+    ov_ino_entry_t **path_buckets;
+    size_t           bucket_cap;
+    size_t           entry_count;
     LONG             tmp_seq;
     volatile LONG64  copyup_bytes;
 };
@@ -341,55 +349,149 @@ static int delete_tree_w(const wchar_t *path_w) {
     return 0;
 }
 
-/* ---- Bidirectional inode <-> path registry ---- */
+/* ---- Bidirectional O(1) inode <-> path registry ---- */
 
 static int same_path(const ext4_vfs_ctx_t *ctx, const char *a, const char *b) {
     return (ctx && ctx->case_insensitive) ? (_stricmp(a, b) == 0) : (strcmp(a, b) == 0);
 }
 
+static uint64_t ov_hash_path(const char *path, int ci) {
+    uint64_t h = 14695981039346656037ULL;
+    if (!path) return h;
+    for (const unsigned char *p = (const unsigned char *)path; *p; p++) {
+        unsigned char c = *p;
+        if (ci && c >= 'A' && c <= 'Z') {
+            c = (unsigned char)(c + ('a' - 'A'));
+        }
+        h ^= (uint64_t)c;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static size_t ov_ino_bucket(ext2_ino_t ino, size_t cap) {
+    uint32_t x = (uint32_t)ino;
+    x ^= x >> 16;
+    x *= 0x85EBCA6BU;
+    x ^= x >> 13;
+    return (size_t)(x & (uint32_t)(cap - 1));
+}
+
+static ov_ino_entry_t *ov_find_by_path_locked(const ext4_vfs_ctx_t *ctx, uint64_t h, const char *norm_path) {
+    ext4_overlay_ctx_t *ov = ctx->overlay;
+    size_t b = (size_t)(h & (uint64_t)(ov->bucket_cap - 1));
+    for (ov_ino_entry_t *e = ov->path_buckets[b]; e; e = e->next_path) {
+        if (e->path_hash == h && same_path(ctx, e->path, norm_path)) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static ov_ino_entry_t *ov_find_by_ino_locked(const ext4_overlay_ctx_t *ov, ext2_ino_t ino) {
+    size_t b = ov_ino_bucket(ino, ov->bucket_cap);
+    for (ov_ino_entry_t *e = ov->ino_buckets[b]; e; e = e->next_ino) {
+        if (e->ino == ino) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static int ov_rehash_locked(ext4_overlay_ctx_t *ov, size_t new_cap) {
+    ov_ino_entry_t **new_ino = (ov_ino_entry_t **)calloc(new_cap, sizeof(ov_ino_entry_t *));
+    ov_ino_entry_t **new_path = (ov_ino_entry_t **)calloc(new_cap, sizeof(ov_ino_entry_t *));
+    if (!new_ino || !new_path) {
+        free(new_ino);
+        free(new_path);
+        return -ENOMEM;
+    }
+    for (ov_ino_entry_t *e = ov->entries_all; e; e = e->next_all) {
+        size_t ib = ov_ino_bucket(e->ino, new_cap);
+        size_t pb = (size_t)(e->path_hash & (uint64_t)(new_cap - 1));
+        e->next_ino = new_ino[ib];
+        new_ino[ib] = e;
+        e->next_path = new_path[pb];
+        new_path[pb] = e;
+    }
+    free(ov->ino_buckets);
+    free(ov->path_buckets);
+    ov->ino_buckets = new_ino;
+    ov->path_buckets = new_path;
+    ov->bucket_cap = new_cap;
+    return 0;
+}
+
 static ext2_ino_t overlay_assign_ino(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_ino_t lower_ino) {
     ext4_overlay_ctx_t *ov = ctx->overlay;
+    uint64_t h;
     ov_ino_entry_t *e;
-    int lower_ino_used = 0;
     ext2_ino_t assigned = 0;
 
     if (strcmp(norm_path, "/") == 0) {
         return EXT2_ROOT_INO;
     }
 
+    h = ov_hash_path(norm_path, ctx->case_insensitive);
+
+    /* Fast path under shared lock when entry already exists */
+    AcquireSRWLockShared(&ov->map_lock);
+    e = ov_find_by_path_locked(ctx, h, norm_path);
+    if (e && (lower_ino == 0 || e->lower_ino != 0)) {
+        assigned = e->ino;
+        ReleaseSRWLockShared(&ov->map_lock);
+        return assigned;
+    }
+    ReleaseSRWLockShared(&ov->map_lock);
+
     AcquireSRWLockExclusive(&ov->map_lock);
-    for (e = ov->entries; e; e = e->next) {
-        if (same_path(ctx, e->path, norm_path)) {
-            if (lower_ino != 0 && e->lower_ino == 0) {
-                e->lower_ino = lower_ino;
-            }
-            assigned = e->ino;
-            ReleaseSRWLockExclusive(&ov->map_lock);
-            return assigned;
+    e = ov_find_by_path_locked(ctx, h, norm_path);
+    if (e) {
+        if (lower_ino != 0 && e->lower_ino == 0) {
+            e->lower_ino = lower_ino;
         }
-        if (lower_ino != 0 && e->ino == lower_ino) {
-            lower_ino_used = 1;
+        assigned = e->ino;
+        ReleaseSRWLockExclusive(&ov->map_lock);
+        return assigned;
+    }
+
+    if ((ov->entry_count + 1) * 4 >= ov->bucket_cap * 3) {
+        (void)ov_rehash_locked(ov, ov->bucket_cap * 2);
+    }
+
+    if (lower_ino != 0 && ov_find_by_ino_locked(ov, lower_ino) == NULL) {
+        assigned = lower_ino;
+    } else {
+        uint32_t cand = OV_SYNTHETIC_INO_BASE | (uint32_t)((h ^ (h >> 32)) & 0x7FFFFFFFU);
+        if (cand < OV_SYNTHETIC_INO_BASE) cand = OV_SYNTHETIC_INO_BASE;
+        while (ov_find_by_ino_locked(ov, cand) != NULL) {
+            cand = (cand == 0xFFFFFFFFU) ? OV_SYNTHETIC_INO_BASE : (cand + 1U);
         }
+        assigned = cand;
     }
 
     e = (ov_ino_entry_t *)calloc(1, sizeof(*e));
     if (!e) {
         ReleaseSRWLockExclusive(&ov->map_lock);
-        return lower_ino ? lower_ino : ov->next_synth_ino++;
-    }
-
-    if (lower_ino != 0 && !lower_ino_used) {
-        assigned = lower_ino;
-    } else {
-        assigned = ov->next_synth_ino++;
-        if (assigned < OV_SYNTHETIC_INO_BASE) assigned = OV_SYNTHETIC_INO_BASE;
+        return assigned;
     }
 
     e->ino = assigned;
     e->lower_ino = lower_ino;
+    e->path_hash = h;
     strcpy_s(e->path, sizeof(e->path), norm_path);
-    e->next = ov->entries;
-    ov->entries = e;
+
+    {
+        size_t ib = ov_ino_bucket(e->ino, ov->bucket_cap);
+        size_t pb = (size_t)(h & (uint64_t)(ov->bucket_cap - 1));
+        e->next_all = ov->entries_all;
+        ov->entries_all = e;
+        e->next_ino = ov->ino_buckets[ib];
+        ov->ino_buckets[ib] = e;
+        e->next_path = ov->path_buckets[pb];
+        ov->path_buckets[pb] = e;
+        ov->entry_count++;
+    }
     ReleaseSRWLockExclusive(&ov->map_lock);
     return assigned;
 }
@@ -406,13 +508,12 @@ static int overlay_lookup_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
     }
 
     AcquireSRWLockShared(&ov->map_lock);
-    for (e = ov->entries; e; e = e->next) {
-        if (e->ino == ino) {
-            strcpy_s(out_path, out_sz, e->path);
-            if (out_lower_ino) *out_lower_ino = e->lower_ino;
-            ReleaseSRWLockShared(&ov->map_lock);
-            return 0;
-        }
+    e = ov_find_by_ino_locked(ov, ino);
+    if (e) {
+        strcpy_s(out_path, out_sz, e->path);
+        if (out_lower_ino) *out_lower_ino = e->lower_ino;
+        ReleaseSRWLockShared(&ov->map_lock);
+        return 0;
     }
     ReleaseSRWLockShared(&ov->map_lock);
     return -ENOENT;
@@ -422,11 +523,14 @@ static void overlay_rename_map(ext4_vfs_ctx_t *ctx, const char *old_norm, const 
     ext4_overlay_ctx_t *ov = ctx->overlay;
     size_t old_len = strlen(old_norm);
     ov_ino_entry_t *e;
+    int any_changed = 0;
 
     AcquireSRWLockExclusive(&ov->map_lock);
-    for (e = ov->entries; e; e = e->next) {
+    for (e = ov->entries_all; e; e = e->next_all) {
         if (same_path(ctx, e->path, old_norm)) {
             strcpy_s(e->path, sizeof(e->path), new_norm);
+            e->path_hash = ov_hash_path(e->path, ctx->case_insensitive);
+            any_changed = 1;
         } else {
             size_t plen = strlen(e->path);
             if (plen > old_len && e->path[old_len] == '/' &&
@@ -435,7 +539,17 @@ static void overlay_rename_map(ext4_vfs_ctx_t *ctx, const char *old_norm, const 
                 char updated[1024];
                 _snprintf_s(updated, sizeof(updated), _TRUNCATE, "%s%s", new_norm, e->path + old_len);
                 strcpy_s(e->path, sizeof(e->path), updated);
+                e->path_hash = ov_hash_path(e->path, ctx->case_insensitive);
+                any_changed = 1;
             }
+        }
+    }
+    if (any_changed) {
+        memset(ov->path_buckets, 0, ov->bucket_cap * sizeof(ov_ino_entry_t *));
+        for (e = ov->entries_all; e; e = e->next_all) {
+            size_t pb = (size_t)(e->path_hash & (uint64_t)(ov->bucket_cap - 1));
+            e->next_path = ov->path_buckets[pb];
+            ov->path_buckets[pb] = e;
         }
     }
     ReleaseSRWLockExclusive(&ov->map_lock);
@@ -495,6 +609,7 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
         char cur[1024];
         const char *p = norm + 1;
         int lower_active = 1;
+        int upper_win_ok = 1;
         wchar_t opq_w[1024];
 
         strcpy_s(cur, sizeof(cur), "/");
@@ -510,6 +625,7 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
             DWORD u_attrs = INVALID_FILE_ATTRIBUTES;
             int u_exists = 0;
             int l_exists = 0;
+            int seg_win_ok;
             ext4_stat_t l_st;
 
             while (p[slen] && p[slen] != '/') {
@@ -521,6 +637,9 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
             p += slen;
             if (*p == '/') p++;
 
+            seg_win_ok = (ext4_win_check_component(seg) == EXT4_WIN_NAME_OK) ? 1 : 0;
+            upper_win_ok = upper_win_ok && seg_win_ok;
+
             if (strcmp(cur, "/") == 0) {
                 _snprintf_s(cur, sizeof(cur), _TRUNCATE, "/%s", seg);
             } else {
@@ -529,15 +648,24 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
                 _snprintf_s(cur + clen, sizeof(cur) - clen, _TRUNCATE, "/%s", seg);
             }
 
-            if (make_whiteout_path_w(ov, cur, wh_w, _countof(wh_w)) == 0 && file_exists_w(wh_w, NULL)) {
+            if (upper_win_ok &&
+                make_whiteout_path_w(ov, cur, wh_w, _countof(wh_w)) == 0 && file_exists_w(wh_w, NULL)) {
                 memset(res, 0, sizeof(*res));
-                join_upper_path_w(ov, norm, res->upper_path_w, _countof(res->upper_path_w));
+                if (ext4_win_check_path(norm) == EXT4_WIN_NAME_OK) {
+                    join_upper_path_w(ov, norm, res->upper_path_w, _countof(res->upper_path_w));
+                }
                 if (*p == '\0') res->deleted_by_wh = 1;
                 return 0;
             }
 
-            if (join_upper_path_w(ov, cur, up_w, _countof(up_w)) != 0) return -ENAMETOOLONG;
-            u_exists = file_exists_w(up_w, &u_attrs);
+            if (upper_win_ok) {
+                if (join_upper_path_w(ov, cur, up_w, _countof(up_w)) != 0) return -ENAMETOOLONG;
+                u_exists = file_exists_w(up_w, &u_attrs);
+            } else {
+                up_w[0] = L'\0';
+                u_exists = 0;
+                u_attrs = INVALID_FILE_ATTRIBUTES;
+            }
 
             if (lower_active) {
                 memset(&l_st, 0, sizeof(l_st));
@@ -555,7 +683,9 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
                 if (u_exists) {
                     if (!(u_attrs & FILE_ATTRIBUTE_DIRECTORY)) {
                         memset(res, 0, sizeof(*res));
-                        join_upper_path_w(ov, norm, res->upper_path_w, _countof(res->upper_path_w));
+                        if (upper_win_ok && ext4_win_check_path(norm) == EXT4_WIN_NAME_OK) {
+                            join_upper_path_w(ov, norm, res->upper_path_w, _countof(res->upper_path_w));
+                        }
                         return 0; /* Blocked by upper regular file */
                     }
                     if (make_opaque_path_w(ov, cur, opq_w, _countof(opq_w)) == 0 &&
@@ -564,7 +694,9 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
                     }
                 } else if (!l_exists || !l_st.is_dir) {
                     memset(res, 0, sizeof(*res));
-                    join_upper_path_w(ov, norm, res->upper_path_w, _countof(res->upper_path_w));
+                    if (upper_win_ok && ext4_win_check_path(norm) == EXT4_WIN_NAME_OK) {
+                        join_upper_path_w(ov, norm, res->upper_path_w, _countof(res->upper_path_w));
+                    }
                     return 0;
                 }
             } else {
@@ -654,12 +786,24 @@ static void fill_stat_from_upper(ext4_vfs_ctx_t *ctx, const char *norm_path,
 
 static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_resolution_t *res) {
     ext4_overlay_ctx_t *ov = ctx->overlay;
+    ext4_win_name_issue_t win_issue;
     int rc;
+
+    win_issue = ext4_win_check_path(norm_path);
+    if (win_issue != EXT4_WIN_NAME_OK) {
+        ext4_log(EXT4_LOG_WARN,
+                 "Cannot copy-up '%s' to NTFS upperdir: incompatible Windows name (%s).",
+                 norm_path, ext4_win_name_issue_str(win_issue));
+        return -EINVAL;
+    }
 
     rc = overlay_resolve(ctx, norm_path, NULL, 0, res);
     if (rc != 0) return rc;
     if (!res->exists) return -ENOENT;
     if (res->in_upper) return 0;
+    if (res->in_lower && res->lower_st.is_symlink) {
+        return -ENOTSUP;
+    }
 
     rc = ensure_upper_parents_w(ov, norm_path);
     if (rc != 0) return rc;
@@ -1336,11 +1480,20 @@ int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
     ov = (ext4_overlay_ctx_t *)calloc(1, sizeof(*ov));
     if (!ov) return -ENOMEM;
 
+    ov->bucket_cap = OV_INO_INIT_BUCKETS;
+    ov->ino_buckets = (ov_ino_entry_t **)calloc(ov->bucket_cap, sizeof(ov_ino_entry_t *));
+    ov->path_buckets = (ov_ino_entry_t **)calloc(ov->bucket_cap, sizeof(ov_ino_entry_t *));
+    if (!ov->ino_buckets || !ov->path_buckets) {
+        free(ov->ino_buckets);
+        free(ov->path_buckets);
+        free(ov);
+        return -ENOMEM;
+    }
+
     wcscpy_s(ov->upper_dir_w, _countof(ov->upper_dir_w), full_w);
     ov->case_sensitive = case_sensitive;
     InitializeSRWLock(&ov->map_lock);
     InitializeCriticalSection(&ov->mut_cs);
-    ov->next_synth_ino = OV_SYNTHETIC_INO_BASE;
 
     *out_ov = ov;
     return 0;
@@ -1349,12 +1502,14 @@ int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
 void overlay_vfs_destroy(ext4_overlay_ctx_t *ov) {
     ov_ino_entry_t *e;
     if (!ov) return;
-    e = ov->entries;
+    e = ov->entries_all;
     while (e) {
-        ov_ino_entry_t *next = e->next;
+        ov_ino_entry_t *next = e->next_all;
         free(e);
         e = next;
     }
+    free(ov->ino_buckets);
+    free(ov->path_buckets);
     DeleteCriticalSection(&ov->mut_cs);
     free(ov);
 }
@@ -1442,29 +1597,72 @@ int overlay_vfs_set_times(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint32_t win_attr
 
 typedef struct ov_name_list {
     char  **names;
+    int    *next;
+    int    *buckets;
+    size_t  bucket_cap;
     size_t  count;
     size_t  cap;
 } ov_name_list_t;
 
-static int ov_name_list_add(ov_name_list_t *list, const char *name) {
+static int ov_name_list_rehash(ov_name_list_t *list, size_t new_bcap, int ci) {
+    int *nb = (int *)malloc(new_bcap * sizeof(int));
+    if (!nb) return -ENOMEM;
+    for (size_t i = 0; i < new_bcap; i++) nb[i] = -1;
+    for (size_t i = 0; i < list->count; i++) {
+        uint64_t h = ov_hash_path(list->names[i], ci);
+        size_t b = (size_t)(h & (uint64_t)(new_bcap - 1));
+        list->next[i] = nb[b];
+        nb[b] = (int)i;
+    }
+    free(list->buckets);
+    list->buckets = nb;
+    list->bucket_cap = new_bcap;
+    return 0;
+}
+
+static int ov_name_list_add(ov_name_list_t *list, const char *name, int ci) {
     char *dup;
     if (list->count == list->cap) {
-        size_t ncap = list->cap ? list->cap * 2 : 32;
-        char **grown = (char **)realloc(list->names, ncap * sizeof(char *));
-        if (!grown) return -ENOMEM;
-        list->names = grown;
+        size_t ncap = list->cap ? list->cap * 2 : 64;
+        char **grown_names = (char **)realloc(list->names, ncap * sizeof(char *));
+        int *grown_next;
+        if (!grown_names) return -ENOMEM;
+        list->names = grown_names;
+        grown_next = (int *)realloc(list->next, ncap * sizeof(int));
+        if (!grown_next) return -ENOMEM;
+        list->next = grown_next;
         list->cap = ncap;
+    }
+    if (!list->buckets || (list->count + 1) * 4 >= list->bucket_cap * 3) {
+        size_t nbcap = list->bucket_cap ? list->bucket_cap * 2 : 128;
+        if (ov_name_list_rehash(list, nbcap, ci) != 0) return -ENOMEM;
     }
     dup = _strdup(name);
     if (!dup) return -ENOMEM;
-    list->names[list->count++] = dup;
+    if (!list->buckets || list->bucket_cap == 0) {
+        free(dup);
+        return -ENOMEM;
+    }
+    {
+        uint64_t h = ov_hash_path(dup, ci);
+        size_t b = (size_t)(h & (uint64_t)(list->bucket_cap - 1));
+        int idx = (int)list->count++;
+        list->names[idx] = dup;
+        list->next[idx] = list->buckets[b];
+        list->buckets[b] = idx;
+    }
     return 0;
 }
 
 static int ov_name_list_contains(const ext4_vfs_ctx_t *ctx, const ov_name_list_t *list, const char *name) {
-    for (size_t i = 0; i < list->count; i++) {
-        if (ctx->case_insensitive ? (_stricmp(list->names[i], name) == 0)
-                                  : (strcmp(list->names[i], name) == 0)) {
+    uint64_t h;
+    size_t b;
+    if (!list || !list->buckets || list->count == 0 || list->bucket_cap == 0) return 0;
+    h = ov_hash_path(name, ctx->case_insensitive);
+    b = (size_t)(h & (uint64_t)(list->bucket_cap - 1));
+    for (int idx = list->buckets[b]; idx >= 0; idx = list->next[idx]) {
+        if (ctx->case_insensitive ? (_stricmp(list->names[idx], name) == 0)
+                                  : (strcmp(list->names[idx], name) == 0)) {
             return 1;
         }
     }
@@ -1476,6 +1674,8 @@ static void ov_name_list_free(ov_name_list_t *list) {
         free(list->names[i]);
     }
     free(list->names);
+    free(list->next);
+    free(list->buckets);
     memset(list, 0, sizeof(*list));
 }
 
@@ -1585,7 +1785,7 @@ int overlay_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb
                 if (strncmp(utf8_name, OV_WHITEOUT_PREFIX, 4) == 0) {
                     if (strcmp(utf8_name, OV_OPAQUE_NAME) != 0 &&
                         strcmp(utf8_name, OV_LOWER_ID_NAME) != 0) {
-                        ov_name_list_add(&whiteouts, utf8_name + 4);
+                        ov_name_list_add(&whiteouts, utf8_name + 4, ctx->case_insensitive);
                     }
                     continue;
                 }
@@ -1608,7 +1808,7 @@ int overlay_vfs_readdir(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, ext4_readdir_cb
                         }
                     }
                     fill_stat_from_upper(ctx, child_norm, child_w, lower_child_ino, &cst);
-                    ov_name_list_add(&seen_upper, utf8_name);
+                    ov_name_list_add(&seen_upper, utf8_name, ctx->case_insensitive);
                     if (cb(utf8_name, &cst, user_ctx) != 0) {
                         stopped = 1;
                         break;
@@ -1812,6 +2012,15 @@ int overlay_vfs_create_file(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, u
     rc = overlay_resolve(ctx, path, norm, sizeof(norm), &target_res);
     if (rc != 0) return rc;
     if (strcmp(norm, "/") == 0) return -EEXIST;
+    {
+        ext4_win_name_issue_t win_issue = ext4_win_check_path(norm);
+        if (win_issue != EXT4_WIN_NAME_OK) {
+            ext4_log(EXT4_LOG_WARN,
+                     "Refusing overlay create '%s': incompatible Windows name (%s).",
+                     norm, ext4_win_name_issue_str(win_issue));
+            return -EINVAL;
+        }
+    }
     if (target_res.exists) return -EEXIST;
 
     rc = ext4_vfs_split_parent(norm, parent, sizeof(parent), leaf, sizeof(leaf));
@@ -1975,50 +2184,167 @@ out_unlock:
 
 static int copy_lower_tree_to_upper(ext4_vfs_ctx_t *ctx, const char *norm_dir);
 
-typedef struct ov_copy_tree_ctx {
-    ext4_vfs_ctx_t *ctx;
-    const char     *src_dir_norm;
-    int             err;
-} ov_copy_tree_ctx_t;
+typedef struct ov_tree_child {
+    char     name[EXT2_NAME_LEN + 1];
+    uint64_t size;
+    int      is_dir;
+} ov_tree_child_t;
 
-static int ov_copy_tree_cb(const char *name, const ext4_stat_t *st, void *user_ctx) {
-    ov_copy_tree_ctx_t *ctc = (ov_copy_tree_ctx_t *)user_ctx;
-    char child_norm[1024];
-    ov_resolution_t child_res;
+typedef struct ov_tree_list {
+    ov_tree_child_t *items;
+    size_t           count;
+    size_t           cap;
+    int              oom;
+} ov_tree_list_t;
 
+static int ov_collect_lower_tree_cb(const char *name, const ext4_stat_t *st, void *user_ctx) {
+    ov_tree_list_t *list = (ov_tree_list_t *)user_ctx;
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) return 0;
     if (is_reserved_wh_name(name)) return 0;
-
-    join_child_norm(ctc->src_dir_norm, name, child_norm, sizeof(child_norm));
-    if (st->is_dir) {
-        ctc->err = ensure_upper_copy(ctc->ctx, child_norm, &child_res);
-        if (ctc->err == 0) {
-            ctc->err = copy_lower_tree_to_upper(ctc->ctx, child_norm);
+    if (list->count == list->cap) {
+        size_t ncap = list->cap ? list->cap * 2 : 32;
+        ov_tree_child_t *nb = (ov_tree_child_t *)realloc(list->items, ncap * sizeof(*nb));
+        if (!nb) {
+            list->oom = 1;
+            return 1;
         }
-    } else {
-        ctc->err = ensure_upper_copy(ctc->ctx, child_norm, &child_res);
+        list->items = nb;
+        list->cap = ncap;
     }
-    return ctc->err ? 1 : 0;
+    {
+        ov_tree_child_t *c = &list->items[list->count++];
+        memset(c, 0, sizeof(*c));
+        strcpy_s(c->name, sizeof(c->name), name);
+        c->size = st->size;
+        c->is_dir = st->is_dir ? 1 : 0;
+    }
+    return 0;
 }
 
-static int copy_lower_tree_to_upper(ext4_vfs_ctx_t *ctx, const char *norm_dir) {
-    ov_resolution_t res;
-    ov_copy_tree_ctx_t ctc;
-    int rc = ensure_upper_copy(ctx, norm_dir, &res);
-    if (rc != 0) return rc;
-    if (!res.lower_scope_active || !res.in_lower) return 0;
+static int measure_lower_tree_copyup(ext4_vfs_ctx_t *ctx, const char *norm_dir, int depth,
+                                     uint64_t *out_bytes, uint64_t *out_files) {
+    ov_resolution_t *res;
+    ov_tree_list_t children;
+    int rc;
 
-    ctc.ctx = ctx;
-    ctc.src_dir_norm = norm_dir;
-    ctc.err = 0;
-    rc = ext4_vfs_lower_readdir(ctx, res.lower_st.ino, ov_copy_tree_cb, &ctc);
-    if (ctc.err != 0) return ctc.err;
+    if (depth > 128) return -ELOOP;
+    res = (ov_resolution_t *)calloc(1, sizeof(*res));
+    if (!res) return -ENOMEM;
+
+    rc = overlay_resolve(ctx, norm_dir, NULL, 0, res);
+    if (rc != 0) {
+        free(res);
+        return rc;
+    }
+    if (!res->exists || !res->is_dir || !res->lower_scope_active || !res->in_lower) {
+        free(res);
+        return 0;
+    }
+
+    memset(&children, 0, sizeof(children));
+    rc = ext4_vfs_lower_readdir(ctx, res->lower_st.ino, ov_collect_lower_tree_cb, &children);
+    free(res);
+    if (children.oom) {
+        free(children.items);
+        return -ENOMEM;
+    }
+    if (rc != 0) {
+        free(children.items);
+        return rc;
+    }
+
+    for (size_t i = 0; i < children.count; i++) {
+        char child_norm[1024];
+        ov_resolution_t *cres = (ov_resolution_t *)calloc(1, sizeof(*cres));
+        if (!cres) {
+            rc = -ENOMEM;
+            break;
+        }
+        join_child_norm(norm_dir, children.items[i].name, child_norm, sizeof(child_norm));
+        rc = overlay_resolve(ctx, child_norm, NULL, 0, cres);
+        if (rc == 0 && cres->exists) {
+            if (cres->is_dir) {
+                (*out_files)++;
+                if (cres->lower_scope_active && cres->in_lower) {
+                    rc = measure_lower_tree_copyup(ctx, child_norm, depth + 1, out_bytes, out_files);
+                }
+            } else if (!cres->in_upper) {
+                (*out_files)++;
+                *out_bytes += children.items[i].size;
+            }
+        }
+        free(cres);
+        if (rc != 0) break;
+    }
+
+    free(children.items);
+    return rc;
+}
+
+static int copy_lower_tree_to_upper_depth(ext4_vfs_ctx_t *ctx, const char *norm_dir, int depth) {
+    ov_resolution_t *res;
+    ov_tree_list_t children;
+    int rc;
+
+    if (depth > 128) return -ELOOP;
+    res = (ov_resolution_t *)calloc(1, sizeof(*res));
+    if (!res) return -ENOMEM;
+
+    rc = ensure_upper_copy(ctx, norm_dir, res);
+    if (rc != 0) {
+        free(res);
+        return rc;
+    }
+    if (!res->lower_scope_active || !res->in_lower) {
+        free(res);
+        return 0;
+    }
+
+    memset(&children, 0, sizeof(children));
+    rc = ext4_vfs_lower_readdir(ctx, res->lower_st.ino, ov_collect_lower_tree_cb, &children);
+    free(res);
+    if (children.oom) {
+        free(children.items);
+        return -ENOMEM;
+    }
+    if (rc != 0) {
+        free(children.items);
+        return rc;
+    }
+
+    for (size_t i = 0; i < children.count; i++) {
+        char child_norm[1024];
+        ov_resolution_t *cres = (ov_resolution_t *)calloc(1, sizeof(*cres));
+        if (!cres) {
+            rc = -ENOMEM;
+            break;
+        }
+        join_child_norm(norm_dir, children.items[i].name, child_norm, sizeof(child_norm));
+        if (children.items[i].is_dir) {
+            rc = ensure_upper_copy(ctx, child_norm, cres);
+            if (rc == -ENOENT) {
+                rc = 0;
+            } else if (rc == 0) {
+                rc = copy_lower_tree_to_upper_depth(ctx, child_norm, depth + 1);
+            }
+        } else {
+            rc = ensure_upper_copy(ctx, child_norm, cres);
+            if (rc == -ENOENT) {
+                rc = 0;
+            }
+        }
+        free(cres);
+        if (rc != 0) break;
+    }
+
+    free(children.items);
     return rc;
 }
 
 int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *new_path, int replace_if_exists) {
     char old_norm[1024], new_norm[1024];
-    ov_resolution_t old_res, new_res, old_parent_res, new_parent_res;
+    ov_resolution_t *res_arr = NULL;
+    ov_resolution_t *old_res, *new_res, *old_parent_res, *new_parent_res;
     char new_parent[1024], new_leaf[EXT2_NAME_LEN + 1];
     char old_parent[1024], old_leaf[EXT2_NAME_LEN + 1];
     wchar_t new_wh_w[1024];
@@ -2027,50 +2353,110 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
     if (!ctx || !ctx->overlay || !old_path || !new_path) return -EINVAL;
     if (ctx->read_only) return -EROFS;
 
-    rc = overlay_resolve(ctx, old_path, old_norm, sizeof(old_norm), &old_res);
-    if (rc != 0) return rc;
-    rc = overlay_resolve(ctx, new_path, new_norm, sizeof(new_norm), &new_res);
-    if (rc != 0) return rc;
+    res_arr = (ov_resolution_t *)calloc(4, sizeof(ov_resolution_t));
+    if (!res_arr) return -ENOMEM;
+    old_res = &res_arr[0];
+    new_res = &res_arr[1];
+    old_parent_res = &res_arr[2];
+    new_parent_res = &res_arr[3];
 
-    if (strcmp(old_norm, "/") == 0 || strcmp(new_norm, "/") == 0) return -EINVAL;
-    if (!old_res.exists) return -ENOENT;
-    if (same_path(ctx, old_norm, new_norm)) return 0;
+    rc = overlay_resolve(ctx, old_path, old_norm, sizeof(old_norm), old_res);
+    if (rc != 0) goto out_free;
+    rc = overlay_resolve(ctx, new_path, new_norm, sizeof(new_norm), new_res);
+    if (rc != 0) goto out_free;
+
+    if (strcmp(old_norm, "/") == 0 || strcmp(new_norm, "/") == 0) {
+        rc = -EINVAL;
+        goto out_free;
+    }
+    if (!old_res->exists) {
+        rc = -ENOENT;
+        goto out_free;
+    }
+    if (!old_res->in_upper && old_res->in_lower && old_res->lower_st.is_symlink) {
+        rc = -ENOTSUP;
+        goto out_free;
+    }
+    {
+        ext4_win_name_issue_t win_issue = ext4_win_check_path(new_norm);
+        if (win_issue != EXT4_WIN_NAME_OK) {
+            ext4_log(EXT4_LOG_WARN,
+                     "Refusing overlay rename target '%s': incompatible Windows name (%s).",
+                     new_norm, ext4_win_name_issue_str(win_issue));
+            rc = -EINVAL;
+            goto out_free;
+        }
+    }
+    if (same_path(ctx, old_norm, new_norm)) {
+        rc = 0;
+        goto out_free;
+    }
 
     rc = ext4_vfs_split_parent(new_norm, new_parent, sizeof(new_parent), new_leaf, sizeof(new_leaf));
-    if (rc != 0) return rc;
-    if (is_reserved_wh_name(new_leaf)) return -EACCES;
+    if (rc != 0) goto out_free;
+    if (is_reserved_wh_name(new_leaf)) {
+        rc = -EACCES;
+        goto out_free;
+    }
     rc = ext4_vfs_split_parent(old_norm, old_parent, sizeof(old_parent), old_leaf, sizeof(old_leaf));
-    if (rc != 0) return rc;
+    if (rc != 0) goto out_free;
 
     EnterCriticalSection(&ctx->overlay->mut_cs);
-    rc = overlay_resolve(ctx, new_parent, NULL, 0, &new_parent_res);
+    rc = overlay_resolve(ctx, new_parent, NULL, 0, new_parent_res);
     if (rc != 0) goto out_unlock;
-    if (!new_parent_res.exists) { rc = -ENOENT; goto out_unlock; }
-    if (!new_parent_res.is_dir) { rc = -ENOTDIR; goto out_unlock; }
+    if (!new_parent_res->exists) { rc = -ENOENT; goto out_unlock; }
+    if (!new_parent_res->is_dir) { rc = -ENOTDIR; goto out_unlock; }
 
-    rc = overlay_resolve(ctx, old_parent, NULL, 0, &old_parent_res);
+    rc = overlay_resolve(ctx, old_parent, NULL, 0, old_parent_res);
     if (rc != 0) goto out_unlock;
 
-    if (new_res.exists) {
+    if (new_res->exists) {
         if (!replace_if_exists) { rc = -EEXIST; goto out_unlock; }
-        if (new_res.is_dir) {
+        if (new_res->is_dir) {
             ov_empty_check_t chk = {0};
-            ext2_ino_t dst_ino = overlay_assign_ino(ctx, new_norm, new_res.in_lower ? new_res.lower_st.ino : 0);
+            ext2_ino_t dst_ino = overlay_assign_ino(ctx, new_norm, new_res->in_lower ? new_res->lower_st.ino : 0);
             rc = overlay_vfs_readdir(ctx, dst_ino, ov_empty_cb, &chk);
             if (rc != 0) goto out_unlock;
             if (chk.has_entry) { rc = -ENOTEMPTY; goto out_unlock; }
         }
-        if (new_res.in_upper) {
-            rc = delete_tree_w(new_res.upper_path_w);
+        if (new_res->in_upper) {
+            rc = delete_tree_w(new_res->upper_path_w);
             if (rc != 0) goto out_unlock;
         }
     }
 
     /* Materialize old_norm completely in Upper before moving */
-    if (old_res.is_dir) {
-        rc = copy_lower_tree_to_upper(ctx, old_norm);
+    if (old_res->is_dir) {
+        int had_upper_before = old_res->in_upper ? 1 : 0;
+        if (old_res->in_lower && old_res->lower_scope_active) {
+            uint64_t bytes_needed = 0;
+            uint64_t file_count = 0;
+            rc = measure_lower_tree_copyup(ctx, old_norm, 0, &bytes_needed, &file_count);
+            if (rc != 0) goto out_unlock;
+            if (bytes_needed > 0) {
+                ULARGE_INTEGER avail;
+                if (GetDiskFreeSpaceExW(ctx->overlay->upper_dir_w, &avail, NULL, NULL) &&
+                    avail.QuadPart < bytes_needed) {
+                    ext4_log(EXT4_LOG_ERROR,
+                             "Insufficient free space in upperdir for directory rename copy-up of '%s' "
+                             "(need=%llu bytes, avail=%llu bytes).",
+                             old_norm, (unsigned long long)bytes_needed, (unsigned long long)avail.QuadPart);
+                    rc = -ENOSPC;
+                    goto out_unlock;
+                }
+            }
+            if (bytes_needed >= 64ULL * 1024ULL * 1024ULL || file_count >= 1000ULL) {
+                ext4_log(EXT4_LOG_WARN,
+                         "Large lower directory rename copy-up in overlay: '%s' (%llu items, %llu bytes).",
+                         old_norm, (unsigned long long)file_count, (unsigned long long)bytes_needed);
+            }
+        }
+        rc = copy_lower_tree_to_upper_depth(ctx, old_norm, 0);
+        if (rc != 0 && !had_upper_before) {
+            delete_tree_w(old_res->upper_path_w);
+        }
     } else {
-        rc = ensure_upper_copy(ctx, old_norm, &old_res);
+        rc = ensure_upper_copy(ctx, old_norm, old_res);
     }
     if (rc != 0) goto out_unlock;
 
@@ -2082,13 +2468,13 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
         DeleteFileW(new_wh_w);
     }
 
-    if (!MoveFileExW(old_res.upper_path_w, new_res.upper_path_w, MOVEFILE_REPLACE_EXISTING)) {
+    if (!MoveFileExW(old_res->upper_path_w, new_res->upper_path_w, MOVEFILE_REPLACE_EXISTING)) {
         rc = win32_err_to_errno(GetLastError());
         goto out_unlock;
     }
 
     /* If moving a directory and new_norm also existed as a lower dir, mark new_norm opaque */
-    if (old_res.is_dir && new_parent_res.lower_scope_active && new_parent_res.in_lower) {
+    if (old_res->is_dir && new_parent_res->lower_scope_active && new_parent_res->in_lower) {
         ext4_stat_t lower_dst;
         if (ext4_vfs_lower_stat(ctx, new_norm, &lower_dst) == 0 && lower_dst.is_dir) {
             wchar_t opq_w[1024];
@@ -2099,7 +2485,7 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
     }
 
     /* Whiteout old_norm if it still exists in Lower */
-    if (old_parent_res.lower_scope_active && old_parent_res.in_lower) {
+    if (old_parent_res->lower_scope_active && old_parent_res->in_lower) {
         ext4_stat_t lower_old;
         if (ext4_vfs_lower_stat(ctx, old_norm, &lower_old) == 0) {
             wchar_t old_wh_w[1024];
@@ -2114,6 +2500,8 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
 
 out_unlock:
     LeaveCriticalSection(&ctx->overlay->mut_cs);
+out_free:
+    free(res_arr);
     return rc;
 }
 
@@ -2170,4 +2558,18 @@ int overlay_vfs_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol) {
 int overlay_vfs_flush(ext4_vfs_ctx_t *ctx) {
     (void)ctx;
     return 0;
+}
+
+int overlay_vfs_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_target, size_t out_sz) {
+    char norm[1024];
+    ov_resolution_t res;
+    int rc;
+
+    if (!ctx || !ctx->overlay || !link_path || !out_target || out_sz == 0) return -EINVAL;
+    rc = overlay_resolve(ctx, link_path, norm, sizeof(norm), &res);
+    if (rc != 0) return rc;
+    if (!res.exists) return -ENOENT;
+    if (res.in_upper) return -EINVAL;
+    if (!res.in_lower || !res.lower_st.is_symlink) return -EINVAL;
+    return ext4_vfs_lower_readlink(ctx, norm, out_target, out_sz);
 }

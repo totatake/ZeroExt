@@ -66,6 +66,7 @@ typedef struct ext4_vfs_ctx {
     volatile LONG64           stat_write_bytes;
     volatile LONG64           stat_read_ops;
     volatile LONG64           stat_write_ops;
+    volatile LONG64           stat_ci_collisions;
 } ext4_vfs_ctx_t;
 
 typedef struct ext4_stat {
@@ -127,6 +128,7 @@ int ext4_vfs_lookup_locked_ex(ext4_vfs_ctx_t *ctx, const char *norm_path, ext2_i
                               char *out_leaf, size_t out_leaf_sz);
 void ext4_dentry_cache_invalidate(ext4_vfs_ctx_t *ctx);
 void ext4_vfs_get_dentry_cache_stats(ext4_vfs_ctx_t *ctx, ext4_dentry_cache_stats_t *out_stats);
+uint64_t ext4_vfs_get_ci_collision_count(ext4_vfs_ctx_t *ctx);
 void ext4_fill_stat_from_inode(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                                const struct ext2_inode_large *ino_st,
                                const char *leaf_name, ext4_stat_t *out_st);
@@ -186,6 +188,7 @@ int ext4_vfs_lower_readdir_from(ext4_vfs_ctx_t *ctx, ext2_ino_t dir_ino, const c
                                 ext4_readdir_cb cb, void *user_ctx);
 int ext4_vfs_lower_read(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, void *buf, uint64_t offset,
                         uint32_t length, uint32_t *out_read);
+int ext4_vfs_lower_readlink(ext4_vfs_ctx_t *ctx, const char *link_path, char *out_target, size_t out_sz);
 int ext4_vfs_lower_statfs(ext4_vfs_ctx_t *ctx, ext4_volume_stat_t *out_vol);
 int ext4_vfs_get_extents(ext4_vfs_ctx_t *ctx, const char *path, struct ext4_extent_map **out_map);
 
