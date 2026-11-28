@@ -128,4 +128,5 @@ sequenceDiagram
 | `ADR-0011` | `UmFileContextIsUserContext2 = 1` による 1 オープン＝1 クローズ保証 | `src/driver/`, `src/vfs/ext4_vfs.h` | [0011-handle-context-via-user-context2.md](adr/0011-handle-context-via-user-context2.md) |
 | `ADR-0012` | Lower RO 限定（RO / `--overlay` 既定 ON・`--rw` 自動無効）Direct Extent I/O | `src/extent/`, `src/vfs/op_read.c` | [0012-lockless-direct-extent-io-ro-overlay-default.md](adr/0012-lockless-direct-extent-io-ro-overlay-default.md) |
 | `ADR-0013` | NTFS Upperdir Overlay と `.wh.__ext4_lower_id` Lower-ID 照合 | `src/overlay/` | [0013-ntfs-overlay-mount-and-lower-id-guard.md](adr/0013-ntfs-overlay-mount-and-lower-id-guard.md) |
+| `ADR-0014` | NTFS Overlay における祖先パス成分のケース正規化 | `src/overlay/` | [0014-overlay-ancestor-case-normalization.md](adr/0014-overlay-ancestor-case-normalization.md) |
 

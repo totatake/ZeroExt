@@ -240,6 +240,7 @@ typedef struct ext4_vfs_ctx {
 - **基本原則 & Lower-ID v2 照合**: `cfg.overlay_upper_dir` 指定時、Lower (`ctx->fs`) は強制的に Read-Only でオープンし、すべての更新系操作は NTFS 上の `upper_dir` に向ける。マウント時に `<upper_dir>\.wh.__ext4_lower_id`（v2 形式: UUID・総ブロック数・ブロックサイズ・GPT PartUUID・パーティション配置・`:cs` フラグ。v1 も後方互換維持）を検査／記録し、異なる Lower ボリュームへの誤流用 (`-EINVAL`)・破損／未知バージョン (`-ENOTSUP`)・未マーカーの非空フォルダ (`-ENOTEMPTY`) をブロックする。
 - **解決規則 (`overlay_resolve`)**:
   - ルート `/` からパス要素ごとにたどり、`upper_dir` 上の `.wh.<name>`（ホワイトアウト）およびディレクトリ内 `.wh.__dir_opaque`（削除後再作成による不透過ディレクトリ）を判定した上で Upper 優先 → Lower フォールバックを行う。Upper に通常ファイルが存在する場合は同名の Lower ディレクトリおよび配下を遮蔽する。
+  - 既定の大文字小文字非区別モードでは、祖先ディレクトリおよび既存ターゲットの表記を **Upper NTFS 実表記 → Lower ext4 実表記（`ext4_vfs_lower_stat_with_name`） → 要求表記** の優先順位で正規化し、大文字パスでアクセスされても Upperdir・`.wh.*`・`readdir` 表記が Lower 実表記と一致するよう維持する（`rename` 宛先 leaf はケースのみリネームのため要求表記を保持。[ADR-0014](../adr/0014-overlay-ancestor-case-normalization.md)）。
 - **O(1) ハッシュマップ & iノード安定性 (`overlay_assign_ino` / `overlay_lookup_ino`)**:
   - Lower に由来するエントリには Lower の `ext2_ino_t` を引き継ぎ、Upper 新規作成エントリにはパスハッシュ由来の決定論的合成 `ext2_ino_t`（`0x80000000U+`）を割り当て、動的リサイズ可能な `ino_buckets` / `path_buckets` 双方向ハッシュテーブル（Shared ロック高速パス付き `O(1)` 検索）で管理（`rename` 時も `ino` を不変に保ちつつ配下パスを一括更新）。
 - **Copy-up (`ensure_upper_copy`) & マージ列挙 (`overlay_vfs_readdir`) & 管理ツール (`overlay_tools.c`)**:

@@ -1556,6 +1556,209 @@ static int test_overlay_ci_dir_and_self_symlink(void) {
     return 0;
 }
 
+static int find_upper_actual_name_utf8(const char *parent_dir_utf8, const char *query_leaf_utf8,
+                                       char *out_leaf, size_t out_sz) {
+    wchar_t pat_w[1040];
+    char combined[1024];
+    WIN32_FIND_DATAW fd;
+    HANDLE hfind;
+
+    if (!parent_dir_utf8 || !query_leaf_utf8 || !out_leaf || out_sz == 0) return -EINVAL;
+    out_leaf[0] = '\0';
+    _snprintf_s(combined, sizeof(combined), _TRUNCATE, "%s\\%s", parent_dir_utf8, query_leaf_utf8);
+    if (MultiByteToWideChar(CP_UTF8, 0, combined, -1, pat_w, (int)_countof(pat_w)) <= 0) {
+        return -EINVAL;
+    }
+    hfind = FindFirstFileW(pat_w, &fd);
+    if (hfind == INVALID_HANDLE_VALUE) {
+        return -ENOENT;
+    }
+    FindClose(hfind);
+    if (WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, out_leaf, (int)out_sz, NULL, NULL) <= 0) {
+        out_leaf[0] = '\0';
+        return -EIO;
+    }
+    return 0;
+}
+
+static int test_overlay_ancestor_case_normalization(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    char upper_sub[MAX_PATH];
+    char actual_leaf[EXT2_NAME_LEN + 1];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st1, st2;
+    uint32_t nw = 0, nr = 0;
+    char buf[64];
+    ov_case_readdir_check_t rchk;
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_anc_canon.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "ov_anc_canon_upper");
+    DeleteFileA(img_path);
+    cleanup_dir_recursive(upper_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "OVANCCAN"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/home", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/home/takeuchi", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/home/takeuchi/Documents", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/home/takeuchi/Documents/Strata", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/home/takeuchi/Documents/Strata/orig.txt",
+                                          0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/home/takeuchi/Documents/Strata/orig.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "lower-orig", 0, 10, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/home/takeuchi/Documents/Strata/to_delete.txt",
+                                          0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/home/takeuchi/Documents/Strata/to_delete.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "lower-del", 0, 9, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* Case collision pair in Lower: "Sub" < "sub" lexicographically */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/MixDir", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/MixDir/Sub", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/MixDir/Sub/marker_upper.txt",
+                                          0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/MixDir/sub", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/MixDir/sub/marker_lower.txt",
+                                          0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Mount CI Overlay */
+    cfg.case_insensitive = 1;
+    cfg.read_only = 0;
+    cfg.overlay_upper_dir = upper_dir;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    /* 1. Create file and directory using all-uppercase ancestor paths */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/new_file.txt",
+                                          0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/new_file.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "new-upper", 0, 9, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/NewSub", 0755, NULL));
+
+    /* 2. Verify stat_with_name reports Lower/Upper canonical leaf casing */
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/HOME", &st1, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "home") == 0);
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/HOME/TAKEUCHI", &st1, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "takeuchi") == 0);
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/HOME/TAKEUCHI/DOCUMENTS", &st1,
+                                                     actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "Documents") == 0);
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA", &st1,
+                                                     actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "Strata") == 0);
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/NEW_FILE.TXT",
+                                                     &st1, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "new_file.txt") == 0);
+
+    /* 3. Verify NTFS Upperdir directories and files on disk use canonical Lower casing */
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_dir, "HOME", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "home") == 0);
+    snprintf(upper_sub, sizeof(upper_sub), "%s\\home", upper_dir);
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "TAKEUCHI", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "takeuchi") == 0);
+    snprintf(upper_sub, sizeof(upper_sub), "%s\\home\\takeuchi", upper_dir);
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "DOCUMENTS", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "Documents") == 0);
+    snprintf(upper_sub, sizeof(upper_sub), "%s\\home\\takeuchi\\Documents", upper_dir);
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "STRATA", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "Strata") == 0);
+    snprintf(upper_sub, sizeof(upper_sub), "%s\\home\\takeuchi\\Documents\\Strata", upper_dir);
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "NEW_FILE.TXT", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "new_file.txt") == 0);
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "newsub", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "NewSub") == 0);
+
+    /* 4. Copy-up via uppercase path /HOME/TAKEUCHI/DOCUMENTS/STRATA/ORIG.TXT preserves Lower leaf & ancestors */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/ORIG.TXT", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "modified-upper", 0, 14, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "ORIG.TXT", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "orig.txt") == 0);
+
+    /* 5. Readdir at root and ancestor dirs never exposes uppercase variants */
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "home";
+    rchk.forbid_exact = "HOME";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, EXT2_ROOT_INO, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    TEST_ASSERT_EQ_INT(0, rchk.forbid_count);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/home/takeuchi", &st1));
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "Documents";
+    rchk.forbid_exact = "DOCUMENTS";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, st1.ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    TEST_ASSERT_EQ_INT(0, rchk.forbid_count);
+
+    /* 6. Whiteout & recreate via uppercase ancestor path */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/TO_DELETE.TXT"));
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, ".wh.TO_DELETE.TXT",
+                                                      actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, ".wh.to_delete.txt") == 0);
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/home/takeuchi/Documents/Strata/to_delete.txt", &st1));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/to_delete.txt",
+                                          0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(-ENOENT, find_upper_actual_name_utf8(upper_sub, ".wh.to_delete.txt",
+                                                           actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "TO_DELETE.TXT",
+                                                      actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "to_delete.txt") == 0);
+
+    /* 7. Case-only rename under uppercase ancestor keeps canonical ancestors and updates leaf case */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx,
+                                          "/HOME/TAKEUCHI/DOCUMENTS/STRATA/new_file.txt",
+                                          "/HOME/TAKEUCHI/DOCUMENTS/STRATA/New_File.TXT", 0));
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "new_file.txt",
+                                                      actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "New_File.TXT") == 0);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/NEW_FILE.TXT", &st1));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/home/takeuchi/Documents/Strata/New_File.TXT", &st2));
+    TEST_ASSERT_EQ_INT((long long)st1.ino, (long long)st2.ino);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/HOME/TAKEUCHI/DOCUMENTS/STRATA/new_file.txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, buf, 0, 9, &nr));
+    TEST_ASSERT_EQ_INT(9, (long long)nr);
+    TEST_ASSERT(memcmp(buf, "new-upper", 9) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* 8. Case-collision tie-break in Lower picks deterministic lexicographical minimum ("Sub" < "sub") */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/MIXDIR/SUB/upper_added.txt",
+                                          0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_dir, "mixdir", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "MixDir") == 0);
+    snprintf(upper_sub, sizeof(upper_sub), "%s\\MixDir", upper_dir);
+    TEST_ASSERT_EQ_INT(0, find_upper_actual_name_utf8(upper_sub, "sub", actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "Sub") == 0);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+    cleanup_dir_recursive(upper_dir);
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_extent_and_overlay(void) {
     int suite_failures = 0;
     printf("\n=== Suite: extent_and_overlay ===\n");
@@ -1570,5 +1773,6 @@ int run_suite_extent_and_overlay(void) {
     RUN_TEST(test_overlay_symlink_and_windows_namespace_guards);
     RUN_TEST(test_overlay_case_only_rename);
     RUN_TEST(test_overlay_ci_dir_and_self_symlink);
+    RUN_TEST(test_overlay_ancestor_case_normalization);
     return suite_failures;
 }

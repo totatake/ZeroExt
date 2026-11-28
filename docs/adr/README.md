@@ -19,6 +19,7 @@
 | `ADR-0011` | `UmFileContextIsUserContext2 = 1` によるハンドル単位コンテキスト管理 | Accepted | 2026-11-18 | [0011-handle-context-via-user-context2.md](0011-handle-context-via-user-context2.md) |
 | `ADR-0012` | RO / Overlay 既定有効・RW 自動無効のロックレス・エクステント直結 I/O | Accepted | 2026-11-18 | [0012-lockless-direct-extent-io-ro-overlay-default.md](0012-lockless-direct-extent-io-ro-overlay-default.md) |
 | `ADR-0013` | NTFS を Upper 層とする非破壊 Overlay マウント と Lower-ID 照合 | Accepted | 2026-11-18 | [0013-ntfs-overlay-mount-and-lower-id-guard.md](0013-ntfs-overlay-mount-and-lower-id-guard.md) |
+| `ADR-0014` | NTFS Overlay における祖先パス成分のケース正規化 | Accepted | 2026-11-29 | [0014-overlay-ancestor-case-normalization.md](0014-overlay-ancestor-case-normalization.md) |
 
 ## 新しい ADR を追加する手順
 

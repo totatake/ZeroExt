@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **57 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **58 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -110,6 +110,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_overlay_symlink_and_windows_namespace_guards` | Overlay における Lower symlink 読取／Whiteout 削除許可・Copy-up/書込/リネーム `-ENOTSUP` 拒否、Windows 予約名 (`CON`, `AUX`, `com1.log`)・禁止文字ガード検証 |
 | `test_overlay_case_only_rename` | Upper-only / Lower-only ファイル＆ディレクトリのケースのみリネーム（`replace=0/1`）、自己削除・自己ホワイトアウト抑止、事後 `unlink` マスク検証 |
 | `test_overlay_ci_dir_and_self_symlink` | CI Overlay 上での実ディレクトリ＋自己参照 symlink 共存時の `lower_ino` 分離、および Copy-up 後の Upper/Lower マージ列挙・読取整合性検証 |
+| `test_overlay_ancestor_case_normalization` | CI Overlay 上での大文字祖先パス経由の作成・Copy-up・削除/再作成・ケースのみリネーム・大小文字衝突時に、Upper NTFS 表記・`stat`・`readdir`・`.wh.*` が Lower 実表記へ正規化されることを検証 |
 
 ### 2.6 `perfetto_trace` ([tests/test_perfetto_trace.c](../tests/test_perfetto_trace.c))
 

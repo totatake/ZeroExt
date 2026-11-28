@@ -158,6 +158,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 - **Windows 非互換名と大小文字衝突**:
   - `CON`, `NUL`, `AUX`, `PRN`, `COM1..9`, `LPT1..9`（拡張子付き含む）や `< > : " | ? *` 等を含むパスは新規作成・リネーム・Upperdir Copy-up を安全に拒否します（Lower Read-Only 側での既存参照のみ維持）。
   - 既定の大文字小文字を区別しないマウント下で `Foo.txt` と `foo.txt` が共存する場合は、厳密一致を最優先しつつフォールバック時に辞書順最小名 → 最小 inode の決定論的順序で解決し警告ログを出力します（完全一致アクセスが必要な場合は `--case-sensitive` を指定してください）。
+  - `--overlay`（既定 CI モード）では、アプリが大文字表記のパスで書き込んでも祖先ディレクトリ・既存ファイルの表記を **Upperdir NTFS 実表記 ＞ Lower ext4 実表記 ＞ 呼び出し元の要求表記** の順で自動正規化します。旧バージョン等で Upperdir 側に大文字ディレクトリが作られてしまった場合は、`zeroext4 overlay reset --upper <dir> --yes` で Upperdir のみ初期化すると Lower の実表記で再構築できます（Lower ext4 は変更されません）。
 
 ### 3.4 安全なアンマウントと管理者権限時のドライブ可視性
 

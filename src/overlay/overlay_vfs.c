@@ -37,6 +37,7 @@ struct ext4_overlay_ctx {
     size_t           bucket_cap;
     size_t           entry_count;
     LONG             tmp_seq;
+    volatile LONG    case_norm_logged;
     volatile LONG64  copyup_bytes;
 };
 
@@ -601,7 +602,17 @@ typedef struct ov_resolution {
     ext4_stat_t lower_st;
 } ov_resolution_t;
 
-static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
+static int replace_cur_leaf(char *cur, size_t cur_sz, size_t prefix_len, const char *actual_leaf) {
+    size_t alen;
+    if (!cur || !actual_leaf || actual_leaf[0] == '\0') return -EINVAL;
+    alen = strlen(actual_leaf);
+    if (prefix_len + 1U + alen + 1U > cur_sz) return -ENAMETOOLONG;
+    cur[prefix_len] = '/';
+    memcpy(cur + prefix_len + 1U, actual_leaf, alen + 1U);
+    return 0;
+}
+
+static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path, int canonicalize_leaf,
                                 char *out_norm, size_t out_norm_sz, ov_resolution_t *res) {
     ext4_overlay_ctx_t *ov = ctx->overlay;
     char norm[1024];
@@ -635,7 +646,8 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
         return 0;
     }
 
-    /* Walk segment by segment from "/" so ancestor whiteouts / opaque dirs / upper non-dirs are honored. */
+    /* Walk segment by segment from "/" so ancestor whiteouts / opaque dirs / upper non-dirs are honored,
+     * and canonicalize existing ancestor/leaf names using CasePreservedNames priority (Upper > Lower > Caller). */
     {
         char cur[1024];
         const char *p = norm + 1;
@@ -657,6 +669,8 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
             int u_exists = 0;
             int l_exists = 0;
             int seg_win_ok;
+            int is_leaf;
+            int should_canon;
             ext4_stat_t l_st;
 
             while (p[slen] && p[slen] != '/') {
@@ -667,6 +681,9 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
             seg[slen] = '\0';
             p += slen;
             if (*p == '/') p++;
+
+            is_leaf = (*p == '\0') ? 1 : 0;
+            should_canon = (ctx->case_insensitive && (!is_leaf || canonicalize_leaf)) ? 1 : 0;
 
             seg_win_ok = (ext4_win_check_component(seg) == EXT4_WIN_NAME_OK) ? 1 : 0;
             upper_win_ok = upper_win_ok && seg_win_ok;
@@ -682,16 +699,35 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
             if (upper_win_ok &&
                 make_whiteout_path_w(ov, cur, wh_w, _countof(wh_w)) == 0 && file_exists_w(wh_w, NULL)) {
                 memset(res, 0, sizeof(*res));
-                if (ext4_win_check_path(norm) == EXT4_WIN_NAME_OK) {
-                    join_upper_path_w(ov, norm, res->upper_path_w, _countof(res->upper_path_w));
+                if (out_norm && out_norm_sz > 0) {
+                    strcpy_s(out_norm, out_norm_sz, cur);
                 }
-                if (*p == '\0') res->deleted_by_wh = 1;
+                if (upper_win_ok && ext4_win_check_path(cur) == EXT4_WIN_NAME_OK) {
+                    join_upper_path_w(ov, cur, res->upper_path_w, _countof(res->upper_path_w));
+                }
+                if (is_leaf) res->deleted_by_wh = 1;
                 return 0;
             }
 
             if (upper_win_ok) {
                 if (join_upper_path_w(ov, cur, up_w, _countof(up_w)) != 0) return -ENAMETOOLONG;
                 u_exists = file_exists_w(up_w, &u_attrs);
+                if (u_exists && should_canon) {
+                    char actual_upper_leaf[EXT2_NAME_LEN + 1];
+                    if (overlay_get_upper_actual_leaf(up_w, actual_upper_leaf,
+                                                      sizeof(actual_upper_leaf)) == 0 &&
+                        actual_upper_leaf[0] != '\0' &&
+                        strcmp(actual_upper_leaf, seg) != 0) {
+                        rc = replace_cur_leaf(cur, sizeof(cur), prefix_len, actual_upper_leaf);
+                        if (rc != 0) return rc;
+                        if (join_upper_path_w(ov, cur, up_w, _countof(up_w)) != 0) return -ENAMETOOLONG;
+                        if (InterlockedCompareExchange(&ov->case_norm_logged, 1, 0) == 0) {
+                            ext4_log(EXT4_LOG_INFO,
+                                     "Overlay canonicalized upper component '%s' -> '%s'.",
+                                     seg, actual_upper_leaf);
+                        }
+                    }
+                }
             } else {
                 up_w[0] = L'\0';
                 u_exists = 0;
@@ -700,10 +736,26 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
 
             {
                 int parent_lower_active = lower_active;
+                char lower_leaf[EXT2_NAME_LEN + 1];
+                lower_leaf[0] = '\0';
                 if (lower_active) {
                     memset(&l_st, 0, sizeof(l_st));
-                    if (ext4_vfs_lower_stat(ctx, cur, &l_st) == 0) {
+                    if (ext4_vfs_lower_stat_with_name(ctx, cur, &l_st, lower_leaf, sizeof(lower_leaf)) == 0) {
                         l_exists = 1;
+                        if (should_canon && !u_exists &&
+                            lower_leaf[0] != '\0' && strcmp(lower_leaf, seg) != 0) {
+                            rc = replace_cur_leaf(cur, sizeof(cur), prefix_len, lower_leaf);
+                            if (rc != 0) return rc;
+                            if (upper_win_ok &&
+                                join_upper_path_w(ov, cur, up_w, _countof(up_w)) != 0) {
+                                return -ENAMETOOLONG;
+                            }
+                            if (InterlockedCompareExchange(&ov->case_norm_logged, 1, 0) == 0) {
+                                ext4_log(EXT4_LOG_INFO,
+                                         "Overlay canonicalized lower component '%s' -> '%s'.",
+                                         seg, lower_leaf);
+                            }
+                        }
                     } else {
                         lower_active = 0;
                     }
@@ -711,7 +763,7 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
                     memset(&l_st, 0, sizeof(l_st));
                 }
 
-                if (ctx->case_insensitive && parent_lower_active &&
+                if (!should_canon && ctx->case_insensitive && parent_lower_active &&
                     u_exists && (u_attrs & FILE_ATTRIBUTE_DIRECTORY) &&
                     (!l_exists || !l_st.is_dir)) {
                     char actual_upper_leaf[EXT2_NAME_LEN + 1];
@@ -741,7 +793,7 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
                 }
             }
 
-            if (*p != '\0') {
+            if (!is_leaf) {
                 /* Intermediate directory component */
                 if (u_exists) {
                     if (!(u_attrs & FILE_ATTRIBUTE_DIRECTORY)) {
@@ -764,6 +816,9 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
                 }
             } else {
                 /* Target leaf */
+                if (out_norm && out_norm_sz > 0) {
+                    strcpy_s(out_norm, out_norm_sz, cur);
+                }
                 res->in_upper = u_exists;
                 res->upper_attrs = u_attrs;
                 wcscpy_s(res->upper_path_w, _countof(res->upper_path_w), up_w);
@@ -802,16 +857,21 @@ static int overlay_resolve_impl(ext4_vfs_ctx_t *ctx, const char *raw_path,
     return 0;
 }
 
-static int overlay_resolve(ext4_vfs_ctx_t *ctx, const char *raw_path,
-                           char *out_norm, size_t out_norm_sz, ov_resolution_t *res) {
+static int overlay_resolve_ex(ext4_vfs_ctx_t *ctx, const char *raw_path, int canonicalize_leaf,
+                              char *out_norm, size_t out_norm_sz, ov_resolution_t *res) {
     uint64_t _zt0 = ztrace_is_enabled() ? ztrace_now_qpc() : 0;
-    int rc = overlay_resolve_impl(ctx, raw_path, out_norm, out_norm_sz, res);
+    int rc = overlay_resolve_impl(ctx, raw_path, canonicalize_leaf, out_norm, out_norm_sz, res);
     if (_zt0) {
         ztrace_record_complete("overlay", "overlay_resolve", _zt0, ztrace_now_qpc() - _zt0,
                                0, (rc == 0 && res) ? (uint64_t)res->in_upper : 0ULL,
                                (int64_t)rc, ZTRACE_ARGS_OVERLAY);
     }
     return rc;
+}
+
+static int overlay_resolve(ext4_vfs_ctx_t *ctx, const char *raw_path,
+                           char *out_norm, size_t out_norm_sz, ov_resolution_t *res) {
+    return overlay_resolve_ex(ctx, raw_path, 1, out_norm, out_norm_sz, res);
 }
 
 static void fill_stat_from_upper(ext4_vfs_ctx_t *ctx, const char *norm_path,
@@ -860,6 +920,7 @@ static void fill_stat_from_upper(ext4_vfs_ctx_t *ctx, const char *norm_path,
 static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_resolution_t *res) {
     ext4_overlay_ctx_t *ov = ctx->overlay;
     ext4_win_name_issue_t win_issue;
+    char canon_norm[1024];
     int rc;
 
     win_issue = ext4_win_check_path(norm_path);
@@ -870,7 +931,7 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
         return -EINVAL;
     }
 
-    rc = overlay_resolve(ctx, norm_path, NULL, 0, res);
+    rc = overlay_resolve(ctx, norm_path, canon_norm, sizeof(canon_norm), res);
     if (rc != 0) return rc;
     if (!res->exists) return -ENOENT;
     if (res->in_upper) return 0;
@@ -878,7 +939,7 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
         return -ENOTSUP;
     }
 
-    rc = ensure_upper_parents_w(ov, norm_path);
+    rc = ensure_upper_parents_w(ov, canon_norm);
     if (rc != 0) return rc;
 
     if (res->is_dir) {
@@ -890,7 +951,7 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
             rc = ensure_dir_case_sensitive_w(res->upper_path_w);
             if (rc != 0) return rc;
         }
-        return overlay_resolve(ctx, norm_path, NULL, 0, res);
+        return overlay_resolve(ctx, canon_norm, NULL, 0, res);
     }
 
     /* Stream regular file content from Lower (Direct Extent I/O) into a temp file on Upper, then atomically replace */
@@ -984,7 +1045,7 @@ static int ensure_upper_copy(ext4_vfs_ctx_t *ctx, const char *norm_path, ov_reso
         }
     }
 
-    return overlay_resolve(ctx, norm_path, NULL, 0, res);
+    return overlay_resolve(ctx, canon_norm, NULL, 0, res);
 }
 
 static int upper_dir_has_entries_w(const wchar_t *dir_w) {
@@ -2456,7 +2517,7 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
 
     rc = overlay_resolve(ctx, old_path, old_norm, sizeof(old_norm), old_res);
     if (rc != 0) goto out_free;
-    rc = overlay_resolve(ctx, new_path, new_norm, sizeof(new_norm), new_res);
+    rc = overlay_resolve_ex(ctx, new_path, 0, new_norm, sizeof(new_norm), new_res);
     if (rc != 0) goto out_free;
 
     if (strcmp(old_norm, "/") == 0 || strcmp(new_norm, "/") == 0) {

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Canonicalized ancestor directory and existing-entry casing in CI `--overlay` mode (`src/overlay/overlay_vfs.c`, [ADR-0014](docs/adr/0014-overlay-ancestor-case-normalization.md)): `overlay_resolve_impl()` now resolves each path component in priority order **Upper NTFS > Lower ext4 (`ext4_vfs_lower_stat_with_name`) > caller leaf** (preserving caller target-leaf casing during `overlay_vfs_rename`), preventing uppercase Windows paths from creating permanent uppercase Upperdir directory trees, `.wh.*` markers, or Explorer / `overlay diff` / `overlay export` path mismatches. Note: any pre-existing uppercase Upperdir trees created prior to this fix can be reset via `zeroext4 overlay reset --upper <dir> --yes`.
+
+### Added
+- Added `test_overlay_ancestor_case_normalization` in `tests/test_extent_and_overlay.c` (58 CTest functions total).
+
 ## [0.11.1] - 2026-11-28
 
 ### Fixed
