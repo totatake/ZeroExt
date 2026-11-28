@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-29
+
 ### Fixed
 - Canonicalized ancestor directory and existing-entry casing in CI `--overlay` mode (`src/overlay/overlay_vfs.c`, [ADR-0014](docs/adr/0014-overlay-ancestor-case-normalization.md)): `overlay_resolve_impl()` now resolves each path component in priority order **Upper NTFS > Lower ext4 (`ext4_vfs_lower_stat_with_name`) > caller leaf** (preserving caller target-leaf casing during `overlay_vfs_rename`), preventing uppercase Windows paths from creating permanent uppercase Upperdir directory trees, `.wh.*` markers, or Explorer / `overlay diff` / `overlay export` path mismatches. Note: any pre-existing uppercase Upperdir trees created prior to this fix can be reset via `zeroext4 overlay reset --upper <dir> --yes`.
 
 ### Added
 - Added `test_overlay_ancestor_case_normalization` in `tests/test_extent_and_overlay.c` (58 CTest functions total).
+
+### Changed
+- Updated `docs/roadmap.md` with refined Phase 4 packaging/WSL2 precheck items and Phase 5A–5C roadmap (JBD2 / `--rw-fast-io` promotion criteria / POSIX gaps / WinFsp dirnotify & callbacks), and synchronized release documentation to `v0.11.2`.
 
 ## [0.11.1] - 2026-11-28
 
@@ -170,7 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt4 / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/totatake/ZeroExt4/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/totatake/ZeroExt4/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/totatake/ZeroExt4/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/totatake/ZeroExt4/compare/v0.10.1...v0.10.2

@@ -1,6 +1,6 @@
 # ロードマップ
 
-本書は **ZeroExt4**（`v0.11.1` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
+本書は **ZeroExt4**（`v0.11.2` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
 
 ---
 
@@ -23,6 +23,7 @@
 | `v0.10.2` | 2026-11-28 | `--rw-fast-io` のデータ先行書込＆部分失敗ロールバック・R/W ガード対称化・`win32_io` 書込エラー時キャッシュ無条件破棄、`ZEROEXT4_FSX_SEED`/`ZEROEXT4_FSX_OPS` 可変ファザー・4 GiB スパース境界テスト（計 40 関数）・WinFsp 実マウント乱数 I/O + WSL2 検証拡充 |
 | `v0.11.0` | 2026-11-28 | **Phase 1〜3 完了**: Overlay v2 識別子・非空未識別フォルダ拒否・`inspect` 拡張診断／`doctor`（GUI Dirty 時 RW 自動抑止含む）、`overlay status/diff/validate/export/reset`・O(1) 双方向ハッシュマップ＆決定論的 inode・WinFsp Reparse Point symlink・Windows 予約名／大小文字衝突ガード・ケースのみリネーム修正、未対応 ext4 機能明示検出＆`--ignore-csum-errors`・非破壊 4 パス診断 `fsck-lite`・既定 `--rw` ステートレス方針明確化・POSIX UID/GID/パーミッション設定（CLI/GUI・ブラウザ `UID:GID` 表示含む、CTest 54 関数・GUI 12 テスト）・性能評価レポート `v0.11.0` 全項目再計測 |
 | `v0.11.1` | 2026-11-28 | ケース非区別環境での実ディレクトリ／自己参照 symlink 共存時のオープン不具合修正（`dentry_cache` 衝突ガード・Overlay `lower_ino` 分離・Copy-up 後実表記解決）、リリースアーカイブへ [利用ガイド](guides/usage.md) 同梱（CTest 57 関数・GUI 12 テスト） |
+| `v0.11.2` | 2026-11-29 | CI `--overlay` における祖先ディレクトリ・既存 leaf の 3 段優先順位ケース正規化（[ADR-0014](adr/0014-overlay-ancestor-case-normalization.md)：`Upper NTFS > Lower ext4 > 要求表記`、`rename` 宛先 leaf 保持・`test_overlay_ancestor_case_normalization` 追加・CTest 58 関数／GUI 12 テスト）、Phase 4〜5 ロードマップ具体化 |
 
 ---
 
@@ -51,7 +52,10 @@
 | **Phase 1**<br>（短期） | **安全性・診断の強化** | 非空未識別 Upperdir の拒否＆v2 `.wh.__ext4_lower_id` 強化、GUI Dirty/エラー時 RW 抑止、`inspect` 診断拡充・`zeroext4 doctor`（GUI i18n は `v0.5.0`、安全 `unmount` 検証は `v0.6.0`、`--case-sensitive` は `v0.8.0` で完了） | **完了** |
 | **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export/reset`、ハッシュ化による inode/path マップ O(1) 高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **完了** |
 | **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出＆`--ignore-csum-errors`、非破壊診断 `zeroext4 fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、既定 `--rw` のステートレス `libext2fs` 経路維持＆`inline_data` 境界修正 | **完了** |
-| **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／ポータブル配布評価、停止済み WSL2 `ext4.vhdx` 連携ワークフロー強化 | **低〜中** |
+| **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／AOT 配布評価、停止済み WSL2 `ext4.vhdx` 連携・稼働中衝突プリチェック | **低〜中** |
+| **Phase 5A**<br>（最優先） | **RW 整合性・検証自動化の強化** | `--rw` の JBD2 ジャーナル方針 ADR 化、`--rw-fast-io` 昇格基準定義、WSL2 / `winfsp-tests` の Nightly CI ジョブ化 | **高** |
+| **Phase 5B**<br>（中期） | **POSIX 互換境界の明確化** | ハードリンク・`xattr` / EA・`PersistentAcls` について `docs/requirements.md` 非目標明記または `ADR-0015` 以降で境界定義 | **中** |
+| **Phase 5C**<br>（中期） | **WinFsp 拡張コールバック・変更通知** | `ReadDirectoryChangeNotification` (dirnotify) 検討、バイトレンジロック (`LockArea`/`UnlockArea`)・`GetStreamInfo` 等未実装コールバックの要否整理 | **中** |
 
 ---
 
@@ -143,9 +147,31 @@
 
 ### 7.1 パッケージ配布 (`winget` / ポータブル ZIP / 自己完結ビルド)
 
-- GitHub Actions の `v*.*.*` リリース自動公開ワークフロー（[.github/workflows/release.yml](../.github/workflows/release.yml)）を基盤に、`winget` 公式パッケージ登録（`winget-pkgs`）を検討する。
-- 現在 `ZeroExt4Gui.exe` はフレームワーク依存の `.NET 10 Desktop Runtime` 前提となっているため、ランタイム未導入環境でもそのまま起動できる自己完結（`self-contained`）配布版の提供要否・サイズトレードオフを評価する。
+- GitHub Actions の `v*.*.*` リリース自動公開ワークフロー（[.github/workflows/release.yml](../.github/workflows/release.yml)）が生成する ZIP + SHA256 を基盤に、`winget-pkgs` 用マニフェストテンプレートの整備と WinFsp 依存宣言 (`Dependencies`) を検討する。
+- 現在 `ZeroExt4Gui.exe` はフレームワーク依存の `.NET 10 Desktop Runtime` 前提となっているため、ランタイム未導入環境でもそのまま起動できる `SelfContained` / `PublishAot` 配布版のバイナリサイズ・起動時間トレードオフを実測評価する。
 
 ### 7.2 WSL2 `ext4.vhdx` 連携ワークフロー強化
 
-- 停止済み WSL2 仮想ディスク（`ext4.vhdx`）の安全な Read-Only 検査・高速参照手順について、WSL 稼働中の二重アクセス衝突を防ぐプリチェックや GUI/CLI 補助ガイドを拡充する。
+- 停止済み WSL2 仮想ディスク（`ext4.vhdx`）の安全な Read-Only 検査・高速参照手順について、`zeroext4 doctor` への WSL 稼働中プリチェック（`wsl --list --running` による二重アクセス衝突検出）および GUI/CLI 補助ガイドを拡充する。
+
+---
+
+## 8. Phase 5：RW 整合性・POSIX 境界・WinFsp 拡張
+
+### 8.1 Phase 5A — RW 整合性・検証自動化の強化（最優先）
+
+- **`--rw` の JBD2 ジャーナル方針の ADR 化**: 現行の `--rw` は `libext2fs` の非ジャーナル更新（`non-journaled updates`）であり、クラッシュ時整合性は ext4 構造自体に依存する。JBD2 トランザクション対応の採否および異常終了時の `EXT2_ERROR_FS` 自動設定方針を ADR として明文化する。
+- **`--rw-fast-io` の既定昇格基準と Nightly 検証ジョブ化**: `fsx` 型ファザー・4 GiB スパース境界・10 スレッド並列 RW ストレス・WinFsp 公式 `winfsp-tests`（45/45 PASS）に加え、`scripts/verify_e2fsck_wsl.ps1 -RandOps` と `scripts/run_winfsp_tests.ps1` を Nightly CI ジョブ化し、既定昇格の合否基準を定義する。
+
+### 8.2 Phase 5B — POSIX 互換境界の明確化
+
+| 機能 | 現状 | 今後の方針 |
+| :--- | :--- | :--- |
+| ハードリンク | `i_links_count` の参照・デクリメントのみ実装（新規リンク作成経路なし） | [要件定義書](requirements.md) で非目標と明記するか、対応する場合は `ADR-0015` 以降で境界を定義 |
+| `xattr` / EA | `libext2fs` の `ext_attr.c` はリンク済みだが WinFsp `GetEa`/`SetEa` および `user.*` 読取 API 未実装 | コンテナイメージ・SELinux/ACL 付きボリューム閲覧以外の対応要否を整理 |
+| UID/GID・ACL | `PersistentAcls = 0`・既定 SD 返却（`v0.11.0` で `--uid`/`--gid`/`--inherit-owner`/`--fmode`/`--dmode` を追加済み） | Windows 側からの動的 `chown`/`chmod`/ACL 変更をスコープ外とするか検討 |
+
+### 8.3 Phase 5C — WinFsp 拡張コールバック・変更通知
+
+- **`ReadDirectoryChangeNotification` (dirnotify) の検討**: 未実装のため Explorer の自動更新（F5 不要化）やビルドツールのファイル監視に影響する。RO / Overlay / RW 各モードでの実装コストと通知精度を評価する。
+- **未実装 WinFsp コールバックの整理**: `GetStreamInfo` / `Control` / `CreateEx` / `LockArea`・`UnlockArea`（バイトレンジロック）および 255 UTF-8 バイト上限（ext4 仕様）の扱いを整理する。特にバイトレンジロック未実装下で `--rw` と共有 `mmap`（GGUF モデル共有等）を併用する際の注意点を [SECURITY.md](../SECURITY.md) や利用ガイドへ明記する。
