@@ -479,15 +479,18 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     part_offset = cfg->partition_offset;
     part_size = cfg->partition_size;
     sector_size = cfg->sector_size;
+    char part_uuid[48] = {0};
 
     if (part_offset == 0 && part_size == 0) {
         if (cfg->partition_number > 0) {
-            if (pt_resolve_partition(cfg->source_path, cfg->partition_number,
-                                     &part_offset, &part_size, &sector_size) != 0) {
+            if (pt_resolve_partition_ex(cfg->source_path, cfg->partition_number,
+                                        &part_offset, &part_size, &sector_size,
+                                        part_uuid, sizeof(part_uuid)) != 0) {
                 return -ENOENT;
             }
         } else {
-            pt_resolve_partition(cfg->source_path, 0, &part_offset, &part_size, &sector_size);
+            pt_resolve_partition_ex(cfg->source_path, 0, &part_offset, &part_size, &sector_size,
+                                    part_uuid, sizeof(part_uuid));
         }
     }
 
@@ -557,6 +560,7 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     ctx->journal_state = probe.journal_state;
     ctx->partition_offset = part_offset;
     ctx->partition_size = part_size;
+    strcpy_s(ctx->partition_uuid, sizeof(ctx->partition_uuid), part_uuid);
     strcpy_s(ctx->source_path, sizeof(ctx->source_path), cfg->source_path);
     strcpy_s(ctx->volume_label, sizeof(ctx->volume_label), probe.volume_label);
 

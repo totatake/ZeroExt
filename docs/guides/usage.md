@@ -11,7 +11,7 @@
 
 > [!IMPORTANT]
 > 実機のドライブレター（例: `L:`）や NTFS 空フォルダへマウントするには、事前に **WinFsp ランタイム** がインストールされている必要があります（`zeroext4.exe` が実行時に `winfsp-x64.dll` を自動検出・ロードします）。
-> なお、`ZeroExt4Gui.exe` の「ファイルブラウザ」タブや CLI のオフラインコマンド（`list` / `inspect` / `mkfs` / `ls` / `cat` / `write` 等）は WinFsp なしでも動作します。
+> なお、`ZeroExt4Gui.exe` の「ファイルブラウザ」タブや CLI のオフラインコマンド（`list` / `inspect` / `doctor` / `mkfs` / `ls` / `cat` / `write` 等）は WinFsp なしでも動作します。
 
 ### 1.1 インストール方法
 
@@ -50,8 +50,8 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
   - 起動時に接続中の物理ディスクを自動スキャンします（非管理者権限の場合はツールバーの **「管理者権限で再起動」** から UAC 昇格できます）。
   - `.img` / `.raw` ファイルの追加（**「イメージを追加...」** ボタンまたはドラッグ＆ドロップ）と新規 ext4 イメージ作成（**「新規作成...」**）は左ペイン下部から実行できます（非管理者権限のまま利用可能）。
 - **マウント設定タブ**:
-  - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（NTFS Upperdir の `.wh.__ext4_lower_id` 事前チェック機能付き）・**Read-Write**（Dirty 時の自動 RO フォールバック選択可）を選択し、空きドライブレター（既定は `L:` 優先）または空 NTFS フォルダへワンクリックでマウントします。
-  - 詳細設定では Direct I/O 切替・大文字／小文字の区別（`--case-sensitive`）・LRU キャッシュブロック数・デバッグログ・Perfetto トレース出力・同等 CLI コマンドのコピーを行えます。
+  - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（v2 `.wh.__ext4_lower_id` 事前検証・非空未識別フォルダ拒否ガード付き）・**Read-Write**（Dirty／エラー／暗号化検出時は安全のため自動抑止し RO / Overlay を推奨）を選択し、空きドライブレター（既定は `L:` 優先）または空 NTFS フォルダへワンクリックでマウントします。
+  - 詳細設定では Direct I/O 切替・大文字／小文字の区別（`--case-sensitive`）・LRU キャッシュブロック数・デバッグログ・Perfetto トレース出力・同等 CLI コマンドのコピーを行えます（「詳細 & ログ」タブの **「診断を実行 (`doctor`)」** ボタンから環境・ボリューム・Upperdir の一括診断も可能です）。
 - **アクティブマウントタブ & システムトレイ**:
   - 稼働中のマウントごとの読取／書込スループット（MB/s）および累計転送量をリアルタイム表示し、「エクスプローラーで開く」や安全なアンマウントを実行できます。
   - マウント中にウィンドウを閉じた場合はシステムトレイへ最小化してマウントを維持できます（トレイメニューから再表示・開く・一括アンマウント終了が可能）。
@@ -68,9 +68,10 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 ### 3.1 オフライン検査・イメージ操作
 
 ```powershell
-# 物理ドライブ一覧またはイメージファイルのパーティション解析（管理者権限で物理ディスクアクセス可）
+# 物理ドライブ一覧またはイメージファイルのパーティション解析・診断（管理者権限で物理ディスクアクセス可）
 .\build\zeroext4.exe list
-.\build\zeroext4.exe inspect <image_or_disk> [--partition <N>]
+.\build\zeroext4.exe inspect <image_or_disk> [--partition <N>] [--json]
+.\build\zeroext4.exe doctor [--source <image_or_disk>] [--partition <N>] [--overlay <ntfs_upper_dir>] [--json]
 
 # ext4 イメージ新規作成（4KB ブロック・256B iノード・extents・64bit・metadata_csum 有効）
 .\build\zeroext4.exe mkfs test.img --size-mb 64 --label MYEXT4
@@ -120,7 +121,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 主なオプション一覧：
 - `--rw`: ext4 への直接 Read-Write マウントを有効化（未指定時は Read-Only、`--overlay` とは併用不可、既定は上流 `e2fsprogs` 準拠）
 - `--rw-fast-io`: `--rw` 併用時のみ有効な実験的オプション。`ext2fs_file_read`/`write` をバイパスし、独自のバッチ連続エクステント書込・`fs_lock` 外並列読込を有効化（想定外の不具合リスクを避けるため既定は無効）
-- `--overlay <dir>`: NTFS Upperdir を指定して非破壊 Overlay RW マウント（Lower ext4 は厳密 RO、`--rw` とは併用不可）
+- `--overlay <dir>`: NTFS Upperdir を指定して非破壊 Overlay RW マウント（Lower ext4 は厳密 RO、`--rw` とは併用不可、v2 `.wh.__ext4_lower_id` で UUID・GPT PartUUID・パーティション配置・`:cs` モードを照合し、マーカー無し非空フォルダは `-ENOTEMPTY` で拒否）
 - `--case-sensitive`: ファイル名・ディレクトリ名の大文字・小文字を区別してマウント（`--overlay` 併用時は空の NTFS Upperdir に `FileCaseSensitiveInfo` 属性を設定し、`.wh.__ext4_lower_id` に `:cs` 識別子を記録）
 - `--no-direct-io`: RO / `--overlay` 時の既定 Direct Extent I/O を無効化し、標準ブロックキャッシュ経路を使用
 - `--direct-io`: Direct Extent I/O を明示有効化（RO / `--overlay` では既定 ON のため通常不要、`--rw` とは併用不可）

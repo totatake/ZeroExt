@@ -35,6 +35,8 @@ int winfsp_driver_force_unmount(const wchar_t *drive);
 
 /* Runtime capability helpers */
 int winfsp_driver_is_runtime_available(void);
+int winfsp_driver_get_runtime_info(char *out_dll_path, size_t path_sz,
+                                   char *out_version, size_t ver_sz);
 int winfsp_driver_is_process_elevated(void);
 
 #ifdef __cplusplus

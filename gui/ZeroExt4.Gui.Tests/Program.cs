@@ -118,6 +118,7 @@ namespace ZeroExt4.Gui.Tests
                       "type_id": "0FC63DAF",
                       "type_description": "Linux filesystem",
                       "partition_name": "LinuxRoot",
+                      "partition_uuid": "99887766-5544-4333-8222-1100ffeeddcc",
                       "fs_kind": "ext4",
                       "journal_state": "NEEDS_RECOVERY",
                       "volume_label": "テスト領域",
@@ -126,7 +127,18 @@ namespace ZeroExt4.Gui.Tests
                       "inode_size": 256,
                       "blocks_count": 131072,
                       "total_bytes": 536870912,
-                      "free_bytes": 134217728
+                      "free_bytes": 134217728,
+                      "feature_incompat_names": ["extents", "64bit"],
+                      "last_mount_time": 1700000000,
+                      "metadata_csum_enabled": true,
+                      "sb_checksum_valid": true,
+                      "mount_advice": {
+                        "read_only_allowed": true,
+                        "overlay_allowed": true,
+                        "read_write_allowed": false,
+                        "recommended_mode": "read_only",
+                        "rw_reason": "Unreplayed journal"
+                      }
                     }
                   ]
                 }
@@ -148,7 +160,27 @@ namespace ZeroExt4.Gui.Tests
             Assert(p1.IsDirty, "NEEDS_RECOVERY should mark IsDirty=true");
             AssertEqual("テスト領域", p1.VolumeLabel, "VolumeLabel");
             AssertEqual("11223344-5566-4777-8888-99aabbccddee:131072:4096", p1.ExpectedOverlayLowerId, "ExpectedOverlayLowerId");
+            AssertEqual("v2;uuid=11223344-5566-4777-8888-99aabbccddee;blocks=131072;bsize=4096;part_uuid=99887766-5544-4333-8222-1100ffeeddcc;part_off=104857600;part_size=536870912;cs=0", p1.GetExpectedOverlayLowerIdV2(false), "ExpectedOverlayLowerIdV2");
+            Assert(p1.FeatureIncompatNames.Contains("extents"), "FeatureIncompatNames should contain extents");
+            AssertEqual(1700000000UL, p1.LastMountTime, "LastMountTime");
+            Assert(p1.MetadataCsumEnabled && p1.SbChecksumValid, "MetadataCsum flags");
+            Assert(p1.MountAdvice != null && !p1.MountAdvice.ReadWriteAllowed && p1.MountAdvice.ReadOnlyAllowed, "MountAdvice parsed");
             AssertEqual(75.0, Math.Round(p1.UsedPercent, 2), "UsedPercent");
+
+            const string docJson = """
+            {
+              "overall_status": "warn",
+              "is_elevated": false,
+              "physical_disk_access": false,
+              "can_mount_drive": true,
+              "winfsp": { "available": true, "dll_path": "C:\\Program Files (x86)\\WinFsp\\bin\\winfsp-x64.dll", "version": "2.0.23075" },
+              "overlay": { "upper_dir": "D:\\upper", "case_sensitive": false, "status": "non_empty_unmarked", "can_mount": false, "marker_version": 0, "reason": "unmarked" }
+            }
+            """;
+            DoctorResponse doc = ZeroExt4CoreClient.ParseDoctorResponse(docJson);
+            AssertEqual("warn", doc.OverallStatus, "DoctorResponse.OverallStatus");
+            Assert(doc.WinFsp.Available && doc.WinFsp.Version == "2.0.23075", "DoctorWinFspInfo parsed");
+            Assert(doc.Overlay != null && doc.Overlay.Status == "non_empty_unmarked" && !doc.Overlay.CanMount, "DoctorOverlayInfo parsed");
         }
 
         private static void Test_JsonParsing_LsAndMountEvents()
@@ -258,6 +290,14 @@ namespace ZeroExt4.Gui.Tests
             ovReq.EnableRwFastIo = true;
             Assert(!ZeroExt4ArgBuilder.BuildMountArgs(roReq).Contains("--rw-fast-io"), "RO must not pass --rw-fast-io");
             Assert(!ZeroExt4ArgBuilder.BuildMountArgs(ovReq).Contains("--rw-fast-io"), "Overlay must not pass --rw-fast-io");
+
+            List<string> docArgs = ZeroExt4ArgBuilder.BuildDoctorArgs(@"D:\test.img", 2, @"D:\ov", caseSensitive: true, json: true);
+            AssertEqual("doctor", docArgs[0], "doctor subcommand");
+            Assert(docArgs.Contains("--source") && docArgs.Contains(@"D:\test.img"), "doctor source");
+            Assert(docArgs.Contains("--partition") && docArgs.Contains("2"), "doctor partition");
+            Assert(docArgs.Contains("--overlay") && docArgs.Contains(@"D:\ov"), "doctor overlay");
+            Assert(docArgs.Contains("--case-sensitive"), "doctor cs");
+            Assert(docArgs.Contains("--json"), "doctor json");
         }
 
         private static void Test_DriveLetterAndOverlayValidation()
@@ -329,10 +369,59 @@ namespace ZeroExt4.Gui.Tests
                 File.WriteAllText(Path.Combine(unmarkedUpper, "existing.txt"), "hi");
                 UpperDirCheckResult r5 = DriveLetterService.CheckOverlayUpperDir(unmarkedUpper, "uuid1:100:4096");
                 AssertEqual(UpperDirCheckStatus.NonEmptyUnmarked, r5.Status, "non-empty unmarked");
-                Assert(r5.CanMount, "NonEmptyUnmarked warns but allows mount");
+                Assert(!r5.CanMount, "NonEmptyUnmarked must block mount unconditionally");
 
                 UpperDirCheckResult r5cs = DriveLetterService.CheckOverlayUpperDir(unmarkedUpper, "uuid1:100:4096", caseSensitive: true);
                 Assert(!r5cs.CanMount, "non-empty non-CS folder must be blocked in case-sensitive mode");
+
+                // v2 marker check including GPT partition UUID discrimination
+                var partA = new PartitionInfo
+                {
+                    PartitionNumber = 2,
+                    OffsetBytes = 2097152,
+                    SizeBytes = 67108864,
+                    PartitionUuid = "aaaaaaaa-0000-4000-8000-000000000001",
+                    FsKind = "ext4",
+                    Uuid = "11111111-2222-4333-8444-555555555555",
+                    BlockSize = 4096,
+                    BlocksCount = 16384,
+                };
+                var partBClone = new PartitionInfo
+                {
+                    PartitionNumber = 2,
+                    OffsetBytes = 2097152,
+                    SizeBytes = 67108864,
+                    PartitionUuid = "bbbbbbbb-0000-4000-8000-000000000002",
+                    FsKind = "ext4",
+                    Uuid = partA.Uuid,
+                    BlockSize = partA.BlockSize,
+                    BlocksCount = partA.BlocksCount,
+                };
+                string v2Dir = Path.Combine(rootDir, "upper_v2");
+                Directory.CreateDirectory(v2Dir);
+                File.WriteAllText(Path.Combine(v2Dir, ".wh.__ext4_lower_id"), partA.GetExpectedOverlayLowerIdV2(false));
+                UpperDirCheckResult rv2Ok = DriveLetterService.CheckOverlayUpperDir(v2Dir, partA, false);
+                AssertEqual(UpperDirCheckStatus.MatchingExisting, rv2Ok.Status, "v2 matches partA");
+                Assert(rv2Ok.CanMount, "v2 matching partA allows mount");
+                UpperDirCheckResult rv2Clone = DriveLetterService.CheckOverlayUpperDir(v2Dir, partBClone, false);
+                AssertEqual(UpperDirCheckStatus.MismatchedLower, rv2Clone.Status, "v2 rejects same-UUID different part_uuid");
+                Assert(!rv2Clone.CanMount, "v2 clone mismatch blocks mount");
+
+                // Corrupted & unsupported version marker checks
+                File.WriteAllText(Path.Combine(v2Dir, ".wh.__ext4_lower_id"), "corrupt-marker-text");
+                UpperDirCheckResult rCorrupt = DriveLetterService.CheckOverlayUpperDir(v2Dir, partA, false);
+                AssertEqual(UpperDirCheckStatus.CorruptMarker, rCorrupt.Status, "corrupt marker detected");
+                Assert(!rCorrupt.CanMount, "corrupt marker blocks mount");
+
+                File.WriteAllText(Path.Combine(v2Dir, ".wh.__ext4_lower_id"), "");
+                UpperDirCheckResult rEmptyMarker = DriveLetterService.CheckOverlayUpperDir(v2Dir, partA, false);
+                AssertEqual(UpperDirCheckStatus.CorruptMarker, rEmptyMarker.Status, "empty marker rejected as corrupt");
+                Assert(!rEmptyMarker.CanMount, "empty marker blocks mount");
+
+                File.WriteAllText(Path.Combine(v2Dir, ".wh.__ext4_lower_id"), "v99;uuid=11111111-2222-4333-8444-555555555555");
+                UpperDirCheckResult rFuture = DriveLetterService.CheckOverlayUpperDir(v2Dir, partA, false);
+                AssertEqual(UpperDirCheckStatus.UnsupportedMarkerVersion, rFuture.Status, "v99 unsupported version detected");
+                Assert(!rFuture.CanMount, "v99 blocks mount");
 
                 UpperDirCheckResult r6 = DriveLetterService.CheckOverlayUpperDir("C:\\", "uuid1:100:4096");
                 AssertEqual(UpperDirCheckStatus.InvalidPath, r6.Status, "drive root rejected");
@@ -456,6 +545,27 @@ namespace ZeroExt4.Gui.Tests
                 new MountEventMessage { Event = "error", Code = -95, Message = "Failed" },
                 new[] { "[zeroext4:ERROR] Failed to enable NTFS case sensitivity on 'D:\\u' (winerr=50)." });
             Assert(eCsUnsupEn.Title.Contains("Not Supported"), "cs winerr=50 translated (en)");
+
+            var eOvVerEn = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -95, Message = "Failed" },
+                new[] { "[zeroext4:ERROR] Unsupported .wh.__ext4_lower_id marker format version" });
+            Assert(eOvVerEn.Title.Contains("Unsupported"), "overlay unsupported version translated (en)");
+
+            var eOvCorruptEn = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -22, Message = "Failed" },
+                new[] { "[zeroext4:ERROR] Corrupted .wh.__ext4_lower_id v2 marker" });
+            Assert(eOvCorruptEn.Title.Contains("Corrupted"), "overlay corrupt marker translated (en)");
+
+            var eOvLegacyEn = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -41, Message = "Failed" },
+                new[] { "[zeroext4:ERROR] Refusing non-empty upperdir without .wh.__ext4_lower_id marker; choose an empty or new directory." });
+            Assert(eOvLegacyEn.Title.Contains("Unmarked"), "overlay legacy refused translated (en)");
+
+            LocalizationService.ApplyLanguage(null, "ja");
+            var eOvLegacyJa = MountErrorTranslator.Translate(
+                new MountEventMessage { Event = "error", Code = -41, Message = "Failed" },
+                new[] { "[zeroext4:ERROR] Refusing non-empty upperdir without .wh.__ext4_lower_id marker; choose an empty or new directory." });
+            Assert(eOvLegacyJa.Title.Contains("非空"), "overlay legacy refused translated (ja)");
         }
 
         private static void Test_SettingsService_RoundTrip()
@@ -547,11 +657,32 @@ namespace ZeroExt4.Gui.Tests
                 vm.SelectedPartition = group.AllPartitions[1];
 
                 Assert(vm.SelectedIsDirty, "SelectedIsDirty true");
+                Assert(vm.IsReadWriteBlockedByHealth, "IsReadWriteBlockedByHealth true on dirty partition");
+                Assert(!vm.CanSelectReadWrite, "CanSelectReadWrite false on dirty partition");
                 vm.SelectedMode = MountMode.ReadWrite;
                 Assert(vm.ShowDirtyRwWarning, "ShowDirtyRwWarning visible in RW mode");
                 Assert(!vm.DirectIoEditable, "DirectIO disabled in RW mode");
                 Assert(!vm.EffectiveDirectIo, "EffectiveDirectIo false in RW mode");
                 Assert(vm.CliPreviewCommand.Contains("--rw"), "CLI preview shows --rw");
+                Assert(!vm.CanMount, "Dirty partition RW mount must be blocked unless ForceDirty is enabled");
+                vm.ForceDirty = true;
+                Assert(vm.CanMount, "Dirty partition RW mount allowed only when ForceDirty is explicitly checked");
+                vm.ForceDirty = false;
+
+                // Preset with RW saved for a dirty partition must automatically coerce to ReadOnly
+                vm.SelectedPartition = null;
+                var svcWithPreset = new SettingsService(tmpSettings);
+                svcWithPreset.Save(new GuiSettings
+                {
+                    VolumePresets = new Dictionary<string, VolumePreset>
+                    {
+                        [group.AllPartitions[1].UniqueKey] = new VolumePreset { Mode = MountMode.ReadWrite },
+                    },
+                });
+                using var vmCoerce = new MainViewModel(svcWithPreset, null, exe, act => act());
+                vmCoerce.DiskGroups.Add(group);
+                vmCoerce.SelectedPartition = group.AllPartitions[1];
+                AssertEqual(MountMode.ReadOnly, vmCoerce.SelectedMode, "Dirty partition coerces saved RW preset to RO");
 
                 vm.SelectedMode = MountMode.Overlay;
                 Assert(vm.DirectIoEditable, "DirectIO editable in Overlay mode");
@@ -654,6 +785,19 @@ namespace ZeroExt4.Gui.Tests
                 AssertEqual("ext4", p.FsKind, "FsKind");
                 AssertEqual("テストEXT4", p.VolumeLabel, "VolumeLabel");
                 Assert(!string.IsNullOrWhiteSpace(p.ExpectedOverlayLowerId), "ExpectedOverlayLowerId populated");
+                Assert(p.FeatureIncompatNames.Contains("extents"), "inspect returns readable feature_incompat_names");
+                Assert(p.MetadataCsumEnabled && p.SbChecksumValid, "inspect validates superblock CRC32C");
+                Assert(p.MountAdvice != null && p.MountAdvice.ReadWriteAllowed && p.MountAdvice.ReadOnlyAllowed, "inspect returns mount_advice");
+
+                string doctorUpper = Path.Combine(tmpDir, "doc_upper");
+                DoctorResponse doc1 = await client.RunDoctorAsync(imgPath, 0, doctorUpper);
+                Assert(doc1.Source != null && doc1.Source.Readable && doc1.Source.PartitionFound, "doctor reads source image");
+                Assert(doc1.Overlay != null && doc1.Overlay.Status == "will_create" && doc1.Overlay.CanMount, "doctor detects will_create upperdir");
+
+                Directory.CreateDirectory(doctorUpper);
+                File.WriteAllText(Path.Combine(doctorUpper, "existing.txt"), "unmarked");
+                DoctorResponse doc2 = await client.RunDoctorAsync(imgPath, 0, doctorUpper);
+                Assert(doc2.Overlay != null && doc2.Overlay.Status == "non_empty_unmarked" && !doc2.Overlay.CanMount, "doctor refuses non-empty unmarked upperdir");
 
                 await client.CreateImageAsync(imgLongLabelPath, 16, "テストラベル長すぎ");
                 ScanResponse inspectLong = await client.InspectSourceAsync(imgLongLabelPath);

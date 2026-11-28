@@ -4,6 +4,7 @@
 #include "../disk/superblock_probe.h"
 #include "../vfs/ext4_vfs.h"
 #include "../extent/extent_map.h"
+#include "../overlay/overlay_vfs.h"
 #include "../driver/winfsp_driver.h"
 #include "../trace/perfetto_trace.h"
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
+#include <time.h>
 #include <dbghelp.h>
 #include <psapi.h>
 #include <shellapi.h>
@@ -91,6 +93,7 @@ static void print_usage(void) {
         "Usage:\n"
         "  zeroext4 list [<image_or_disk>] [--json]\n"
         "  zeroext4 inspect <image_or_disk> [--partition <N>] [--json]\n"
+        "  zeroext4 doctor [--source <image_or_disk>] [--partition <N>] [--overlay <ntfs_upper_dir>] [--case-sensitive] [--json]\n"
         "  zeroext4 mkfs <image_path> --size-mb <N> [--label <label>]\n"
         "  zeroext4 ls <image_path> [<ext4_path>] [--partition <N>] [--json]\n"
         "  zeroext4 stat <image_path> <ext4_path> [--partition <N>]\n"
@@ -189,7 +192,62 @@ static void print_json_str(const char *s) {
     putchar('"');
 }
 
+static void print_json_str_array(const char **items, size_t count) {
+    putchar('[');
+    for (size_t i = 0; i < count; i++) {
+        if (i > 0) putchar(',');
+        print_json_str(items[i]);
+    }
+    putchar(']');
+}
+
+static void format_unix_utc(uint64_t ts, char *out, size_t out_sz) {
+    struct tm tm_utc;
+    __time64_t t64;
+    if (!out || out_sz == 0) return;
+    if (ts == 0) {
+        strcpy_s(out, out_sz, "never");
+        return;
+    }
+    t64 = (__time64_t)ts;
+    if (_gmtime64_s(&tm_utc, &t64) != 0) {
+        _snprintf_s(out, out_sz, _TRUNCATE, "%llu", (unsigned long long)ts);
+        return;
+    }
+    strftime(out, out_sz, "%Y-%m-%d %H:%M:%S UTC", &tm_utc);
+}
+
+static void format_feature_csv(const char **names, size_t count, char *out, size_t out_sz) {
+    size_t pos = 0;
+    if (!out || out_sz == 0) return;
+    if (count == 0) {
+        strcpy_s(out, out_sz, "(none)");
+        return;
+    }
+    out[0] = '\0';
+    for (size_t i = 0; i < count; i++) {
+        int n = _snprintf_s(out + pos, out_sz - pos, _TRUNCATE, "%s%s", (i > 0) ? ", " : "", names[i]);
+        if (n < 0 || pos + (size_t)n >= out_sz) break;
+        pos += (size_t)n;
+    }
+}
+
 static void print_partition_json(const pt_partition_entry_t *p) {
+    const char *compat_names[32];
+    const char *incompat_names[32];
+    const char *ro_compat_names[32];
+    size_t compat_cnt = (p->probe.fs_kind != EXT4_FS_UNKNOWN)
+                            ? ext4_feature_compat_names(p->probe.feature_compat, compat_names, 32)
+                            : 0;
+    size_t incompat_cnt = (p->probe.fs_kind != EXT4_FS_UNKNOWN)
+                              ? ext4_feature_incompat_names(p->probe.feature_incompat, incompat_names, 32)
+                              : 0;
+    size_t ro_compat_cnt = (p->probe.fs_kind != EXT4_FS_UNKNOWN)
+                               ? ext4_feature_ro_compat_names(p->probe.feature_ro_compat, ro_compat_names, 32)
+                               : 0;
+    ext4_mount_advice_t advice;
+    ext4_evaluate_mount_advice(&p->probe, &advice);
+
     printf("{");
     printf("\"partition_number\":%u,", p->partition_number);
     printf("\"start_sector\":%llu,", (unsigned long long)p->start_sector);
@@ -199,6 +257,7 @@ static void print_partition_json(const pt_partition_entry_t *p) {
     printf("\"type_id\":"); print_json_str(p->type_id); putchar(',');
     printf("\"type_description\":"); print_json_str(p->type_description); putchar(',');
     printf("\"partition_name\":"); print_json_str(p->partition_name); putchar(',');
+    printf("\"partition_uuid\":"); print_json_str(p->partition_uuid); putchar(',');
     printf("\"fs_kind\":"); print_json_str(ext4_fs_kind_name(p->probe.fs_kind)); putchar(',');
     printf("\"journal_state\":"); print_json_str(ext4_journal_state_name(p->probe.journal_state)); putchar(',');
     printf("\"volume_label\":"); print_json_str(p->probe.volume_label); putchar(',');
@@ -211,10 +270,27 @@ static void print_partition_json(const pt_partition_entry_t *p) {
     printf("\"feature_compat\":%u,", p->probe.feature_compat);
     printf("\"feature_incompat\":%u,", p->probe.feature_incompat);
     printf("\"feature_ro_compat\":%u,", p->probe.feature_ro_compat);
+    printf("\"feature_compat_names\":"); print_json_str_array(compat_names, compat_cnt); putchar(',');
+    printf("\"feature_incompat_names\":"); print_json_str_array(incompat_names, incompat_cnt); putchar(',');
+    printf("\"feature_ro_compat_names\":"); print_json_str_array(ro_compat_names, ro_compat_cnt); putchar(',');
     printf("\"journal_inum\":%u,", p->probe.journal_inum);
     printf("\"journal_start\":%u,", p->probe.journal_start);
     printf("\"journal_errno\":%d,", p->probe.journal_errno);
-    printf("\"state_flags\":%u", (unsigned)p->probe.state_flags);
+    printf("\"state_flags\":%u,", (unsigned)p->probe.state_flags);
+    printf("\"last_mount_time\":%llu,", (unsigned long long)p->probe.last_mount_time);
+    printf("\"last_fsck_time\":%llu,", (unsigned long long)p->probe.last_fsck_time);
+    printf("\"fsck_error_count\":%u,", p->probe.fsck_error_count);
+    printf("\"metadata_csum_enabled\":%s,", p->probe.metadata_csum_enabled ? "true" : "false");
+    printf("\"sb_checksum_valid\":%s,", p->probe.sb_checksum_valid ? "true" : "false");
+    printf("\"mount_advice\":{");
+    printf("\"read_only_allowed\":%s,", advice.read_only_allowed ? "true" : "false");
+    printf("\"overlay_allowed\":%s,", advice.overlay_allowed ? "true" : "false");
+    printf("\"read_write_allowed\":%s,", advice.read_write_allowed ? "true" : "false");
+    printf("\"recommended_mode\":"); print_json_str(advice.recommended_mode); putchar(',');
+    printf("\"ro_reason\":"); print_json_str(advice.ro_reason); putchar(',');
+    printf("\"overlay_reason\":"); print_json_str(advice.overlay_reason); putchar(',');
+    printf("\"rw_reason\":"); print_json_str(advice.rw_reason);
+    printf("}");
     printf("}");
 }
 
@@ -340,21 +416,58 @@ static int cmd_inspect(int argc, char **argv) {
             const pt_partition_entry_t *p = &res->partitions[i];
             if (part != 0 && p->partition_number != part) continue;
             if (p->probe.fs_kind == EXT4_FS_UNKNOWN) continue;
+            const char *compat_names[32];
+            const char *incompat_names[32];
+            const char *ro_compat_names[32];
+            char compat_csv[256], incompat_csv[256], ro_compat_csv[256];
+            char mtime_str[40], fsck_str[40];
+            ext4_mount_advice_t advice;
+
+            format_feature_csv(compat_names,
+                               ext4_feature_compat_names(p->probe.feature_compat, compat_names, 32),
+                               compat_csv, sizeof(compat_csv));
+            format_feature_csv(incompat_names,
+                               ext4_feature_incompat_names(p->probe.feature_incompat, incompat_names, 32),
+                               incompat_csv, sizeof(incompat_csv));
+            format_feature_csv(ro_compat_names,
+                               ext4_feature_ro_compat_names(p->probe.feature_ro_compat, ro_compat_names, 32),
+                               ro_compat_csv, sizeof(ro_compat_csv));
+            format_unix_utc(p->probe.last_mount_time, mtime_str, sizeof(mtime_str));
+            format_unix_utc(p->probe.last_fsck_time, fsck_str, sizeof(fsck_str));
+            ext4_evaluate_mount_advice(&p->probe, &advice);
+
             printf("\n[Partition %u Detail]\n", p->partition_number);
             printf("  Filesystem   : %s\n", ext4_fs_kind_name(p->probe.fs_kind));
             printf("  Label        : %s\n", p->probe.volume_label);
             printf("  UUID         : %s\n", p->probe.uuid);
+            if (p->partition_uuid[0] != '\0') {
+                printf("  PartUUID     : %s\n", p->partition_uuid);
+            }
+            printf("  Sectors      : start=%llu count=%llu\n",
+                   (unsigned long long)p->start_sector, (unsigned long long)p->sector_count);
             printf("  BlockSize    : %u\n", p->probe.block_size);
             printf("  InodeSize    : %u\n", p->probe.inode_size);
             printf("  Blocks       : %llu\n", (unsigned long long)p->probe.blocks_count);
             printf("  TotalBytes   : %llu\n", (unsigned long long)p->probe.total_bytes);
             printf("  FreeBytes    : %llu\n", (unsigned long long)p->probe.free_bytes);
-            printf("  Compat       : 0x%08X\n", p->probe.feature_compat);
-            printf("  Incompat     : 0x%08X\n", p->probe.feature_incompat);
-            printf("  RoCompat     : 0x%08X\n", p->probe.feature_ro_compat);
+            printf("  Compat       : 0x%08X (%s)\n", p->probe.feature_compat, compat_csv);
+            printf("  Incompat     : 0x%08X (%s)\n", p->probe.feature_incompat, incompat_csv);
+            printf("  RoCompat     : 0x%08X (%s)\n", p->probe.feature_ro_compat, ro_compat_csv);
             printf("  JournalState : %s (inum=%u, s_start=%u, s_errno=%d)\n",
                    ext4_journal_state_name(p->probe.journal_state),
                    p->probe.journal_inum, p->probe.journal_start, p->probe.journal_errno);
+            printf("  LastMount    : %s | LastFsck: %s | ErrorCount: %u\n",
+                   mtime_str, fsck_str, p->probe.fsck_error_count);
+            printf("  MetadataCsum : %s\n",
+                   p->probe.metadata_csum_enabled
+                       ? (p->probe.sb_checksum_valid ? "enabled (superblock CRC32C OK)" : "enabled (SUPERBLOCK CHECKSUM MISMATCH)")
+                       : "disabled");
+            printf("  MountAdvice  : recommended=%s | RO=%s | Overlay=%s | RW=%s (%s)\n",
+                   advice.recommended_mode,
+                   advice.read_only_allowed ? "allowed" : "blocked",
+                   advice.overlay_allowed ? "allowed" : "blocked",
+                   advice.read_write_allowed ? "allowed" : "blocked",
+                   advice.rw_reason);
         }
     }
     free(res);
@@ -1138,6 +1251,217 @@ static void free_utf8_argv(int argc, char **argv) {
     free(argv);
 }
 
+static int cmd_doctor(int argc, char **argv) {
+    if (has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
+        print_usage();
+        return 0;
+    }
+
+    const char *src = parse_str_opt(argc, argv, "--source", NULL);
+    if (!src) src = find_positional_skip_opts(argc, argv, 2, 0);
+    uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
+    const char *overlay_dir = parse_str_opt(argc, argv, "--overlay", NULL);
+    int case_sensitive = has_flag(argc, argv, "--case-sensitive");
+    int json = has_flag(argc, argv, "--json");
+
+    int elevated = winfsp_driver_is_process_elevated();
+    char winfsp_dll[512] = {0};
+    char winfsp_ver[64] = {0};
+    int winfsp_ok = winfsp_driver_get_runtime_info(winfsp_dll, sizeof(winfsp_dll),
+                                                   winfsp_ver, sizeof(winfsp_ver));
+
+    pt_table_result_t *res = NULL;
+    const pt_partition_entry_t *matched_part = NULL;
+    ext4_mount_advice_t advice;
+    memset(&advice, 0, sizeof(advice));
+    int src_readable = 0;
+    int part_found = 0;
+    int requires_elevation = 0;
+    char src_error[256] = {0};
+
+    if (src && src[0] != '\0') {
+        int is_phys = (_strnicmp(src, "\\\\.\\PhysicalDrive", 17) == 0);
+        res = (pt_table_result_t *)calloc(1, sizeof(*res));
+        if (!res) return 1;
+        if (pt_read_partitions(src, 0, res) == 0) {
+            src_readable = 1;
+            if (part > 0) {
+                for (uint32_t i = 0; i < res->count; i++) {
+                    if (res->partitions[i].partition_number == part) {
+                        matched_part = &res->partitions[i];
+                        break;
+                    }
+                }
+                if (!matched_part) {
+                    _snprintf_s(src_error, sizeof(src_error), _TRUNCATE,
+                                "Partition %u was not found in '%s'.", part, src);
+                }
+            } else if (strcmp(res->style, "RAW") == 0 && res->count == 1) {
+                matched_part = &res->partitions[0];
+            } else {
+                for (uint32_t i = 0; i < res->count; i++) {
+                    if (res->partitions[i].probe.fs_kind != EXT4_FS_UNKNOWN) {
+                        matched_part = &res->partitions[i];
+                        break;
+                    }
+                }
+                if (!matched_part) {
+                    _snprintf_s(src_error, sizeof(src_error), _TRUNCATE,
+                                "No ext2/ext3/ext4 partition detected in '%s'.", src);
+                }
+            }
+            if (matched_part) {
+                if (matched_part->probe.fs_kind == EXT4_FS_UNKNOWN) {
+                    _snprintf_s(src_error, sizeof(src_error), _TRUNCATE,
+                                "Partition %u in '%s' is not an ext2/ext3/ext4 filesystem.",
+                                matched_part->partition_number, src);
+                } else {
+                    part_found = 1;
+                    ext4_evaluate_mount_advice(&matched_part->probe, &advice);
+                }
+            }
+        } else {
+            requires_elevation = (is_phys && !elevated) ? 1 : 0;
+            _snprintf_s(src_error, sizeof(src_error), _TRUNCATE,
+                        requires_elevation
+                            ? "Access denied opening physical disk '%s'; restart as Administrator."
+                            : "Failed to read disk or image '%s'.",
+                        src);
+        }
+    }
+
+    int has_overlay = (overlay_dir && overlay_dir[0] != '\0');
+    overlay_upper_check_t ov_chk;
+    memset(&ov_chk, 0, sizeof(ov_chk));
+    if (has_overlay) {
+        if (matched_part && part_found) {
+            overlay_lower_identity_t lower_id;
+            memset(&lower_id, 0, sizeof(lower_id));
+            strcpy_s(lower_id.fs_uuid, sizeof(lower_id.fs_uuid), matched_part->probe.uuid);
+            lower_id.blocks_count = matched_part->probe.blocks_count;
+            lower_id.block_size = matched_part->probe.block_size;
+            strcpy_s(lower_id.partition_uuid, sizeof(lower_id.partition_uuid), matched_part->partition_uuid);
+            lower_id.partition_offset = matched_part->offset_bytes;
+            lower_id.partition_size = matched_part->size_bytes;
+            lower_id.case_sensitive = case_sensitive ? 1 : 0;
+            overlay_check_upper_dir(overlay_dir, &lower_id, &ov_chk);
+        } else {
+            overlay_check_upper_dir(overlay_dir, NULL, &ov_chk);
+        }
+    }
+
+    int has_error = 0;
+    int has_warn = (!winfsp_ok) ? 1 : 0;
+    if (src && src[0] != '\0') {
+        if (!src_readable || !part_found || !advice.read_only_allowed) {
+            has_error = 1;
+        } else if (!advice.read_write_allowed) {
+            has_warn = 1;
+        }
+    }
+    if (has_overlay && !ov_chk.can_mount) {
+        has_error = 1;
+    }
+
+    const char *overall = has_error ? "error" : (has_warn ? "warn" : "ok");
+    int can_mount_drive = winfsp_ok && !has_error &&
+                          (!src || (part_found && advice.read_only_allowed)) &&
+                          (!has_overlay || ov_chk.can_mount);
+
+    if (json) {
+        printf("{");
+        printf("\"overall_status\":"); print_json_str(overall); putchar(',');
+        printf("\"is_elevated\":%s,", elevated ? "true" : "false");
+        printf("\"physical_disk_access\":%s,", elevated ? "true" : "false");
+        printf("\"can_mount_drive\":%s,", can_mount_drive ? "true" : "false");
+        printf("\"winfsp\":{\"available\":%s,\"dll_path\":", winfsp_ok ? "true" : "false");
+        print_json_str(winfsp_dll);
+        printf(",\"version\":");
+        print_json_str(winfsp_ver);
+        printf("}");
+
+        if (src && src[0] != '\0') {
+            printf(",\"source\":{");
+            printf("\"path\":"); print_json_str(src); putchar(',');
+            printf("\"requested_partition\":%u,", part);
+            printf("\"readable\":%s,", src_readable ? "true" : "false");
+            printf("\"requires_elevation\":%s,", requires_elevation ? "true" : "false");
+            printf("\"partition_found\":%s,", part_found ? "true" : "false");
+            printf("\"error\":"); print_json_str(src_error);
+            if (matched_part) {
+                printf(",\"partition\":");
+                print_partition_json(matched_part);
+            }
+            printf("}");
+        }
+
+        if (has_overlay) {
+            printf(",\"overlay\":{");
+            printf("\"upper_dir\":"); print_json_str(overlay_dir); putchar(',');
+            printf("\"case_sensitive\":%s,", case_sensitive ? "true" : "false");
+            printf("\"status\":"); print_json_str(overlay_upper_status_name(ov_chk.status)); putchar(',');
+            printf("\"can_mount\":%s,", ov_chk.can_mount ? "true" : "false");
+            printf("\"marker_version\":%d,", ov_chk.marker_version);
+            printf("\"expected_id\":"); print_json_str(ov_chk.expected_id); putchar(',');
+            printf("\"found_id\":"); print_json_str(ov_chk.found_id); putchar(',');
+            printf("\"reason\":"); print_json_str(ov_chk.reason);
+            printf("}");
+        }
+        printf("}\n");
+        fflush(stdout);
+    } else {
+        printf("ZeroExt4 Doctor (%s)\n", overall);
+        printf("  Process Elevation : %s (%s)\n",
+               elevated ? "Administrator" : "Standard User",
+               elevated ? "physical disk access enabled" : "image files only; elevate for \\\\.\\PhysicalDriveX");
+        printf("  WinFsp Runtime    : %s", winfsp_ok ? "available" : "NOT INSTALLED");
+        if (winfsp_ok) {
+            printf(" (ver=%s, dll=%s)", winfsp_ver[0] ? winfsp_ver : "?", winfsp_dll);
+        }
+        printf("\n");
+        printf("  Drive Mounting    : %s\n", can_mount_drive ? "ready" : "blocked / unavailable");
+
+        if (src && src[0] != '\0') {
+            printf("\n[Source Check] %s (partition=%u)\n", src, part);
+            if (!src_readable || !part_found) {
+                printf("  Status : ERROR - %s\n", src_error);
+            } else if (matched_part) {
+                printf("  FS / Label / UUID : %s / \"%s\" / %s\n",
+                       ext4_fs_kind_name(matched_part->probe.fs_kind),
+                       matched_part->probe.volume_label,
+                       matched_part->probe.uuid);
+                if (matched_part->partition_uuid[0] != '\0') {
+                    printf("  PartUUID          : %s\n", matched_part->partition_uuid);
+                }
+                printf("  Journal / Csum    : %s | MetadataCsum=%s\n",
+                       ext4_journal_state_name(matched_part->probe.journal_state),
+                       matched_part->probe.metadata_csum_enabled
+                           ? (matched_part->probe.sb_checksum_valid ? "OK" : "MISMATCH")
+                           : "disabled");
+                printf("  Mount Advice      : recommended=%s | RO=%s | Overlay=%s | RW=%s\n",
+                       advice.recommended_mode,
+                       advice.read_only_allowed ? "yes" : "no",
+                       advice.overlay_allowed ? "yes" : "no",
+                       advice.read_write_allowed ? "yes" : "no");
+                printf("    RW note         : %s\n", advice.rw_reason);
+            }
+        }
+
+        if (has_overlay) {
+            printf("\n[Overlay Upperdir Check] %s\n", overlay_dir);
+            printf("  Status            : %s (can_mount=%s, marker_ver=%d)\n",
+                   overlay_upper_status_name(ov_chk.status),
+                   ov_chk.can_mount ? "yes" : "no",
+                   ov_chk.marker_version);
+            printf("  Detail            : %s\n", ov_chk.reason);
+        }
+        fflush(stdout);
+    }
+
+    free(res);
+    return has_error ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     int uargc = 0;
     char **uargv = NULL;
@@ -1160,6 +1484,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "unmount") == 0 || strcmp(cmd, "umount") == 0) rc = cmd_unmount(argc, argv);
     else if (strcmp(cmd, "list") == 0) rc = cmd_list(argc, argv);
     else if (strcmp(cmd, "inspect") == 0) rc = cmd_inspect(argc, argv);
+    else if (strcmp(cmd, "doctor") == 0) rc = cmd_doctor(argc, argv);
     else if (strcmp(cmd, "mkfs") == 0) rc = cmd_mkfs(argc, argv);
     else if (strcmp(cmd, "ls") == 0) rc = cmd_ls(argc, argv);
     else if (strcmp(cmd, "stat") == 0) rc = cmd_stat(argc, argv);

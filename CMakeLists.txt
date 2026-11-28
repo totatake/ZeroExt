@@ -201,7 +201,7 @@ if(MSVC)
         target_compile_options(zeroext4_core PRIVATE /analyze)
     endif()
 endif()
-target_link_libraries(zeroext4_core PUBLIC ext2fs advapi32 shell32 user32)
+target_link_libraries(zeroext4_core PUBLIC ext2fs advapi32 shell32 user32 version)
 
 # CLI executable: zeroext4.exe
 add_executable(zeroext4 src/cli/main.c)

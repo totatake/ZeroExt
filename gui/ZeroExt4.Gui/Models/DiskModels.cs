@@ -86,6 +86,9 @@ namespace ZeroExt4.Gui.Models
         [JsonPropertyName("partition_name")]
         public string PartitionName { get; set; } = string.Empty;
 
+        [JsonPropertyName("partition_uuid")]
+        public string PartitionUuid { get; set; } = string.Empty;
+
         [JsonPropertyName("fs_kind")]
         public string FsKind { get; set; } = string.Empty;
 
@@ -134,6 +137,33 @@ namespace ZeroExt4.Gui.Models
         [JsonPropertyName("state_flags")]
         public uint StateFlags { get; set; }
 
+        [JsonPropertyName("feature_compat_names")]
+        public List<string> FeatureCompatNames { get; set; } = new List<string>();
+
+        [JsonPropertyName("feature_incompat_names")]
+        public List<string> FeatureIncompatNames { get; set; } = new List<string>();
+
+        [JsonPropertyName("feature_ro_compat_names")]
+        public List<string> FeatureRoCompatNames { get; set; } = new List<string>();
+
+        [JsonPropertyName("last_mount_time")]
+        public ulong LastMountTime { get; set; }
+
+        [JsonPropertyName("last_fsck_time")]
+        public ulong LastFsckTime { get; set; }
+
+        [JsonPropertyName("fsck_error_count")]
+        public uint FsckErrorCount { get; set; }
+
+        [JsonPropertyName("metadata_csum_enabled")]
+        public bool MetadataCsumEnabled { get; set; }
+
+        [JsonPropertyName("sb_checksum_valid")]
+        public bool SbChecksumValid { get; set; }
+
+        [JsonPropertyName("mount_advice")]
+        public MountAdviceInfo? MountAdvice { get; set; }
+
         [JsonIgnore]
         public bool IsExtFs =>
             string.Equals(FsKind, "ext2", StringComparison.OrdinalIgnoreCase) ||
@@ -150,6 +180,40 @@ namespace ZeroExt4.Gui.Models
             (!string.IsNullOrWhiteSpace(Uuid) && BlockSize > 0 && BlocksCount > 0)
                 ? $"{Uuid}:{BlocksCount}:{BlockSize}"
                 : null;
+
+        public string? GetExpectedOverlayLowerIdV2(bool caseSensitive = false)
+        {
+            if (string.IsNullOrWhiteSpace(Uuid) || BlockSize == 0 || BlocksCount == 0)
+            {
+                return null;
+            }
+            ulong partSize = SizeBytes > 0 ? SizeBytes : EffectiveTotalBytes;
+            int cs = caseSensitive ? 1 : 0;
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"v2;uuid={Uuid};blocks={BlocksCount};bsize={BlockSize};part_uuid={PartitionUuid};part_off={OffsetBytes};part_size={partSize};cs={cs}");
+        }
+
+        [JsonIgnore]
+        public string FeaturesSummary
+        {
+            get
+            {
+                var all = new List<string>();
+                if (FeatureCompatNames != null) all.AddRange(FeatureCompatNames);
+                if (FeatureIncompatNames != null) all.AddRange(FeatureIncompatNames);
+                if (FeatureRoCompatNames != null) all.AddRange(FeatureRoCompatNames);
+                return all.Count > 0 ? string.Join(", ", all) : "-";
+            }
+        }
+
+        [JsonIgnore]
+        public string ChecksumSummary =>
+            !IsExtFs
+                ? "-"
+                : (!MetadataCsumEnabled
+                    ? "disabled"
+                    : (SbChecksumValid ? "CRC32C OK" : "CHECKSUM MISMATCH"));
 
         [JsonIgnore]
         public ulong EffectiveTotalBytes => TotalBytes > 0 ? TotalBytes : SizeBytes;
@@ -342,6 +406,117 @@ namespace ZeroExt4.Gui.Models
 
         [JsonPropertyName("trace_dropped")]
         public ulong? TraceDropped { get; set; }
+    }
+
+    public sealed class MountAdviceInfo
+    {
+        [JsonPropertyName("read_only_allowed")]
+        public bool ReadOnlyAllowed { get; set; }
+
+        [JsonPropertyName("overlay_allowed")]
+        public bool OverlayAllowed { get; set; }
+
+        [JsonPropertyName("read_write_allowed")]
+        public bool ReadWriteAllowed { get; set; }
+
+        [JsonPropertyName("recommended_mode")]
+        public string RecommendedMode { get; set; } = string.Empty;
+
+        [JsonPropertyName("ro_reason")]
+        public string RoReason { get; set; } = string.Empty;
+
+        [JsonPropertyName("overlay_reason")]
+        public string OverlayReason { get; set; } = string.Empty;
+
+        [JsonPropertyName("rw_reason")]
+        public string RwReason { get; set; } = string.Empty;
+    }
+
+    public sealed class DoctorResponse
+    {
+        [JsonPropertyName("overall_status")]
+        public string OverallStatus { get; set; } = string.Empty;
+
+        [JsonPropertyName("is_elevated")]
+        public bool IsElevated { get; set; }
+
+        [JsonPropertyName("physical_disk_access")]
+        public bool PhysicalDiskAccess { get; set; }
+
+        [JsonPropertyName("can_mount_drive")]
+        public bool CanMountDrive { get; set; }
+
+        [JsonPropertyName("winfsp")]
+        public DoctorWinFspInfo WinFsp { get; set; } = new DoctorWinFspInfo();
+
+        [JsonPropertyName("source")]
+        public DoctorSourceInfo? Source { get; set; }
+
+        [JsonPropertyName("overlay")]
+        public DoctorOverlayInfo? Overlay { get; set; }
+    }
+
+    public sealed class DoctorWinFspInfo
+    {
+        [JsonPropertyName("available")]
+        public bool Available { get; set; }
+
+        [JsonPropertyName("dll_path")]
+        public string DllPath { get; set; } = string.Empty;
+
+        [JsonPropertyName("version")]
+        public string Version { get; set; } = string.Empty;
+    }
+
+    public sealed class DoctorSourceInfo
+    {
+        [JsonPropertyName("path")]
+        public string Path { get; set; } = string.Empty;
+
+        [JsonPropertyName("requested_partition")]
+        public uint RequestedPartition { get; set; }
+
+        [JsonPropertyName("readable")]
+        public bool Readable { get; set; }
+
+        [JsonPropertyName("requires_elevation")]
+        public bool RequiresElevation { get; set; }
+
+        [JsonPropertyName("partition_found")]
+        public bool PartitionFound { get; set; }
+
+        [JsonPropertyName("error")]
+        public string Error { get; set; } = string.Empty;
+
+        [JsonPropertyName("partition")]
+        public PartitionInfo? Partition { get; set; }
+    }
+
+    public sealed class DoctorOverlayInfo
+    {
+        [JsonPropertyName("upper_dir")]
+        public string UpperDir { get; set; } = string.Empty;
+
+        [JsonPropertyName("case_sensitive")]
+        public bool CaseSensitive { get; set; }
+
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = string.Empty;
+
+        [JsonPropertyName("can_mount")]
+        public bool CanMount { get; set; }
+
+        [JsonPropertyName("marker_version")]
+        public int MarkerVersion { get; set; }
+
+        [JsonPropertyName("expected_id")]
+        public string ExpectedId { get; set; } = string.Empty;
+
+        [JsonPropertyName("found_id")]
+        public string FoundId { get; set; } = string.Empty;
+
+        [JsonPropertyName("reason")]
+        public string Reason { get; set; } = string.Empty;
     }
 
     public static class ByteFormatter

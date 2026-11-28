@@ -1,6 +1,7 @@
 #include "test_common.h"
 #include "../src/vfs/ext4_vfs.h"
 #include "../src/extent/extent_map.h"
+#include "../src/overlay/overlay_vfs.h"
 #include "../src/driver/winfsp_driver.h"
 #include "../src/disk/superblock_probe.h"
 #include <errno.h>
@@ -645,6 +646,260 @@ static int test_overlay_case_sensitive_upperdir(void) {
     return 0;
 }
 
+static void write_le32_ov(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)((v >> 8) & 0xFF);
+    p[2] = (uint8_t)((v >> 16) & 0xFF);
+    p[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+
+static void write_le64_ov(uint8_t *p, uint64_t v) {
+    write_le32_ov(p, (uint32_t)(v & 0xFFFFFFFFULL));
+    write_le32_ov(p + 4, (uint32_t)(v >> 32));
+}
+
+static int create_gpt_with_raw_part(const char *disk_path, const char *part_img, const uint8_t part_guid[16]) {
+    uint8_t *hdr = (uint8_t *)calloc(64, 512);
+    uint8_t *buf = (uint8_t *)calloc(1, 65536);
+    const uint64_t part2_lba = 4096;
+    const uint64_t part_sectors = (4ULL * 1024ULL * 1024ULL) / 512ULL;
+    FILE *fp;
+    size_t n;
+
+    if (!hdr || !buf) {
+        free(hdr);
+        free(buf);
+        return -1;
+    }
+
+    fp = fopen(disk_path, "wb");
+    if (!fp) {
+        free(hdr);
+        free(buf);
+        return -1;
+    }
+    for (int i = 0; i < 128; i++) fwrite(buf, 1, 65536, fp);
+    fclose(fp);
+
+    hdr[446 + 4] = 0xEE;
+    write_le32_ov(hdr + 446 + 8, 1);
+    write_le32_ov(hdr + 446 + 12, 16383);
+    hdr[510] = 0x55;
+    hdr[511] = 0xAA;
+
+    memcpy(hdr + 512, "EFI PART", 8);
+    write_le64_ov(hdr + 512 + 0x48, 2);
+    write_le32_ov(hdr + 512 + 0x50, 128);
+    write_le32_ov(hdr + 512 + 0x54, 128);
+
+    {
+        uint8_t *e2 = hdr + 1024 + 128;
+        uint8_t linux_guid[16] = { 0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4 };
+        memcpy(e2, linux_guid, 16);
+        memcpy(e2 + 0x10, part_guid, 16);
+        write_le64_ov(e2 + 0x20, part2_lba);
+        write_le64_ov(e2 + 0x28, part2_lba + part_sectors - 1);
+        e2[0x38] = 'r'; e2[0x3A] = 'o'; e2[0x3C] = 'o'; e2[0x3E] = 't';
+    }
+
+    fp = fopen(disk_path, "r+b");
+    if (!fp) {
+        free(hdr);
+        free(buf);
+        return -1;
+    }
+    fwrite(hdr, 1, 64 * 512, fp);
+    fclose(fp);
+
+    {
+        FILE *src = fopen(part_img, "rb");
+        FILE *dst = fopen(disk_path, "r+b");
+        if (!src || !dst) {
+            if (src) fclose(src);
+            if (dst) fclose(dst);
+            free(hdr);
+            free(buf);
+            return -1;
+        }
+        _fseeki64(dst, (__int64)(part2_lba * 512ULL), SEEK_SET);
+        while ((n = fread(buf, 1, 65536, src)) > 0) {
+            fwrite(buf, 1, n, dst);
+        }
+        fclose(src);
+        fclose(dst);
+    }
+    free(hdr);
+    free(buf);
+    return 0;
+}
+
+static int test_overlay_upperdir_guards_v2(void) {
+    char img_path[MAX_PATH];
+    char legacy_upper[MAX_PATH];
+    char fresh_upper[MAX_PATH];
+    char clone_a[MAX_PATH], clone_b[MAX_PATH], clone_part[MAX_PATH], clone_upper[MAX_PATH];
+    char existing_file[MAX_PATH], legacy_marker[MAX_PATH], marker_file[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext2_ino_t ino = 0;
+    ext4_stat_t st;
+    uint32_t w = 0, r = 0;
+    char buf[512];
+    FILE *fp;
+    ext4_probe_result_t probe;
+    overlay_lower_identity_t lid;
+    overlay_upper_check_t chk;
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_guard_base.img");
+    test_make_temp_path(legacy_upper, sizeof(legacy_upper), "ov_guard_legacy_upper");
+    test_make_temp_path(fresh_upper, sizeof(fresh_upper), "ov_guard_fresh_upper");
+    test_make_temp_path(clone_a, sizeof(clone_a), "ov_clone_a.img");
+    test_make_temp_path(clone_b, sizeof(clone_b), "ov_clone_b.img");
+    test_make_temp_path(clone_part, sizeof(clone_part), "ov_clone_part.img");
+    test_make_temp_path(clone_upper, sizeof(clone_upper), "ov_clone_upper");
+
+    DeleteFileA(img_path);
+    DeleteFileA(clone_a);
+    DeleteFileA(clone_b);
+    DeleteFileA(clone_part);
+    cleanup_dir_recursive(legacy_upper);
+    cleanup_dir_recursive(fresh_upper);
+    cleanup_dir_recursive(clone_upper);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 16ULL * 1024ULL * 1024ULL, "OVGUARD"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/hello.txt", 0, 0644, 0, &ino));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ino, "lower-hi", 0, 8, 0, &w, NULL));
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    /* 1. Non-empty unmarked upperdir must be unconditionally refused without modifying directory */
+    TEST_ASSERT(CreateDirectoryA(legacy_upper, NULL) != 0);
+    _snprintf_s(existing_file, sizeof(existing_file), _TRUNCATE, "%s\\existing.txt", legacy_upper);
+    _snprintf_s(legacy_marker, sizeof(legacy_marker), _TRUNCATE, "%s\\.wh.__ext4_lower_id", legacy_upper);
+    fp = fopen(existing_file, "wb");
+    TEST_ASSERT(fp != NULL);
+    fwrite("user-data", 1, 9, fp);
+    fclose(fp);
+
+    TEST_ASSERT_EQ_INT(0, ext4_probe_partition(img_path, 0, 0, 4096, &probe));
+    memset(&lid, 0, sizeof(lid));
+    strcpy_s(lid.fs_uuid, sizeof(lid.fs_uuid), probe.uuid);
+    lid.blocks_count = probe.blocks_count;
+    lid.block_size = probe.block_size;
+    lid.partition_size = probe.total_bytes;
+    lid.case_sensitive = 0;
+    overlay_check_upper_dir(legacy_upper, &lid, &chk);
+    TEST_ASSERT_EQ_INT(OV_UPPER_NON_EMPTY_UNMARKED, chk.status);
+    TEST_ASSERT_EQ_INT(0, chk.can_mount);
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    cfg.overlay_upper_dir = legacy_upper;
+    TEST_ASSERT_EQ_INT(-ENOTEMPTY, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx == NULL);
+    TEST_ASSERT_EQ_INT(INVALID_FILE_ATTRIBUTES, GetFileAttributesA(legacy_marker));
+
+    /* 2. Fresh empty upperdir writes v2 marker and remounts cleanly */
+    cfg.overlay_upper_dir = fresh_upper;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/hello.txt", &st));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read(ctx, st.ino, buf, 0, 8, &r));
+    TEST_ASSERT_EQ_INT(8, r);
+    TEST_ASSERT(memcmp(buf, "lower-hi", 8) == 0);
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    _snprintf_s(marker_file, sizeof(marker_file), _TRUNCATE, "%s\\.wh.__ext4_lower_id", fresh_upper);
+    fp = fopen(marker_file, "rb");
+    TEST_ASSERT(fp != NULL);
+    memset(buf, 0, sizeof(buf));
+    fread(buf, 1, sizeof(buf) - 1, fp);
+    buf[sizeof(buf) - 1] = '\0';
+    fclose(fp);
+    TEST_ASSERT(strncmp(buf, "v2;", 3) == 0);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    /* 3. Corrupted marker & unknown future format version rejection */
+    SetFileAttributesA(marker_file, FILE_ATTRIBUTE_NORMAL);
+    fp = fopen(marker_file, "wb");
+    TEST_ASSERT(fp != NULL);
+    fwrite("corrupt-garbage", 1, 15, fp);
+    fclose(fp);
+    overlay_check_upper_dir(fresh_upper, &lid, &chk);
+    TEST_ASSERT_EQ_INT(OV_UPPER_CORRUPT_MARKER, chk.status);
+    TEST_ASSERT_EQ_INT(0, chk.can_mount);
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+
+    fp = fopen(marker_file, "wb");
+    TEST_ASSERT(fp != NULL);
+    fclose(fp);
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+
+    fp = fopen(marker_file, "wb");
+    TEST_ASSERT(fp != NULL);
+    fprintf(fp, "v99;uuid=%s;blocks=%llu;bsize=%u",
+            probe.uuid, (unsigned long long)probe.blocks_count, (unsigned)probe.block_size);
+    fclose(fp);
+    overlay_check_upper_dir(fresh_upper, &lid, &chk);
+    TEST_ASSERT_EQ_INT(OV_UPPER_UNSUPPORTED_VERSION, chk.status);
+    TEST_ASSERT_EQ_INT(0, chk.can_mount);
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_mount(&cfg, &ctx));
+
+    /* 4. Backward-compatible v1 marker remains mountable */
+    fp = fopen(marker_file, "wb");
+    TEST_ASSERT(fp != NULL);
+    fprintf(fp, "%s:%llu:%u",
+            probe.uuid, (unsigned long long)probe.blocks_count, (unsigned)probe.block_size);
+    fclose(fp);
+    overlay_check_upper_dir(fresh_upper, &lid, &chk);
+    TEST_ASSERT_EQ_INT(OV_UPPER_OK_MATCH_V1, chk.status);
+    TEST_ASSERT_EQ_INT(1, chk.can_mount);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    /* 5. Cloned partition with identical ext4 UUID/size but distinct GPT PartUUID must be rejected */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(clone_part, 4ULL * 1024ULL * 1024ULL, "CLONEEXT4"));
+    {
+        uint8_t guid_a[16] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x48, 0x89, 0xAB, 0xCD, 0xEF, 0x00, 0x00, 0x00, 0x0A };
+        uint8_t guid_b[16] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x48, 0x89, 0xAB, 0xCD, 0xEF, 0x00, 0x00, 0x00, 0x0B };
+        TEST_ASSERT_EQ_INT(0, create_gpt_with_raw_part(clone_a, clone_part, guid_a));
+        TEST_ASSERT_EQ_INT(0, create_gpt_with_raw_part(clone_b, clone_part, guid_b));
+    }
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = clone_a;
+    cfg.partition_number = 2;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    cfg.overlay_upper_dir = clone_upper;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    ext4_vfs_unmount(ctx);
+    ctx = NULL;
+
+    cfg.source_path = clone_b;
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT(ctx == NULL);
+
+    cleanup_dir_recursive(legacy_upper);
+    cleanup_dir_recursive(fresh_upper);
+    cleanup_dir_recursive(clone_upper);
+    DeleteFileA(img_path);
+    DeleteFileA(clone_a);
+    DeleteFileA(clone_b);
+    DeleteFileA(clone_part);
+    return 0;
+}
+
 int run_suite_extent_and_overlay(void) {
     int suite_failures = 0;
     printf("\n=== Suite: extent_and_overlay ===\n");
@@ -653,5 +908,6 @@ int run_suite_extent_and_overlay(void) {
     RUN_TEST(test_overlay_vfs_and_persistence);
     RUN_TEST(test_read_handle_cached_extents);
     RUN_TEST(test_overlay_case_sensitive_upperdir);
+    RUN_TEST(test_overlay_upperdir_guards_v2);
     return suite_failures;
 }

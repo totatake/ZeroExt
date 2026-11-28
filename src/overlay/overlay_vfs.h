@@ -9,6 +9,45 @@ extern "C" {
 
 typedef struct ext4_overlay_ctx ext4_overlay_ctx_t;
 
+typedef enum overlay_upper_status {
+    OV_UPPER_OK_WILL_CREATE = 0,
+    OV_UPPER_OK_EMPTY = 1,
+    OV_UPPER_OK_MATCH_V2 = 2,
+    OV_UPPER_OK_MATCH_V1 = 3,
+    OV_UPPER_NON_EMPTY_UNMARKED = 4,
+    OV_UPPER_MISMATCH_LOWER = 5,
+    OV_UPPER_MISMATCH_CASE_MODE = 6,
+    OV_UPPER_CORRUPT_MARKER = 7,
+    OV_UPPER_UNSUPPORTED_VERSION = 8,
+    OV_UPPER_INVALID_PATH = 9,
+    OV_UPPER_CS_NOT_SUPPORTED = 10,
+} overlay_upper_status_t;
+
+typedef struct overlay_lower_identity {
+    char     fs_uuid[37];
+    uint64_t blocks_count;
+    uint32_t block_size;
+    char     partition_uuid[48];
+    uint64_t partition_offset;
+    uint64_t partition_size;
+    int      case_sensitive;
+} overlay_lower_identity_t;
+
+typedef struct overlay_upper_check {
+    overlay_upper_status_t status;
+    int                    can_mount;
+    int                    marker_version; /* 0=none, 1=v1, 2=v2, >2=future, -1=corrupt */
+    char                   expected_id[256];
+    char                   found_id[256];
+    char                   reason[256];
+} overlay_upper_check_t;
+
+void overlay_format_lower_id_v2(const overlay_lower_identity_t *id, char *out, size_t out_sz);
+void overlay_check_upper_dir(const char *upper_dir_utf8,
+                             const overlay_lower_identity_t *expected,
+                             overlay_upper_check_t *out);
+const char *overlay_upper_status_name(overlay_upper_status_t status);
+
 int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
                        ext4_overlay_ctx_t **out_ov);
 void overlay_vfs_destroy(ext4_overlay_ctx_t *ov);

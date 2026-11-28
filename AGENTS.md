@@ -4,7 +4,7 @@ This file provides concise repository context, build/test commands, and non-nego
 
 ## 1. Repository Map
 
-- `src/cli/` — `zeroext4.exe` CLI entry point (`list`, `inspect`, `mkfs`, `mount`, `unmount`, offline ops, `--json`, `--json-events`)
+- `src/cli/` — `zeroext4.exe` CLI entry point (`list`, `inspect`, `doctor`, `mkfs`, `mount`, `unmount`, offline ops, `--json`, `--json-events`)
 - `src/driver/` — WinFsp `FSP_FILE_SYSTEM_INTERFACE` callbacks, dynamic `winfsp-x64.dll` loader, UAC session mount-point helper
 - `src/vfs/` — Modular VFS operations (`ext4_vfs.h`, `op_init.c` .. `op_flush.c`) and 16-shard dentry cache
 - `src/extent/` — Lockless Direct Extent I/O engine & 16-shard `extent_cache` (`O(log N)` binary search)
@@ -15,7 +15,7 @@ This file provides concise repository context, build/test commands, and non-nego
 - `src/common/` — `libext2fs` / errno / `NTSTATUS` translation helpers and UTF-8/UTF-16 conversion
 - `compat/` — Non-invasive MSVC C11 & POSIX header shims (`msvc_compat.h`, `msvc_public_compat.h`, `compat/include/`)
 - `third_party/` — Bundled upstream `e2fsprogs` `1.47.4` and standalone WinFsp ABI headers (`winfsp.h`)
-- `tests/` — CTest suite (`test_main.c` + 6 suites / 40 tests) and `bench_direct_io.c` (`zeroext4_bench.exe`)
+- `tests/` — CTest suite (`test_main.c` + 6 suites / 42 tests) and `bench_direct_io.c` (`zeroext4_bench.exe`)
 - `gui/` — `.NET 10` WPF desktop manager (`ZeroExt4.Gui`, zero NuGet deps) and automated tests (`ZeroExt4.Gui.Tests`)
 - `scripts/` — PowerShell build/test/sanitizer/benchmark/upstream-sync scripts and `generate_e2fsprogs_headers.py`
 - `docs/` — Engineering documentation (Japanese default, lowercase `kebab-case`)

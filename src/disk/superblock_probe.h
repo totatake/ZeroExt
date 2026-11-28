@@ -1,6 +1,7 @@
 #ifndef ZEROEXT4_SUPERBLOCK_PROBE_H
 #define ZEROEXT4_SUPERBLOCK_PROBE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef JBD2_MAGIC_NUMBER
@@ -42,15 +43,37 @@ typedef struct ext4_probe_result {
     uint32_t             journal_start;
     int32_t              journal_errno;
     uint16_t             state_flags;
+    uint64_t             last_mount_time;
+    uint64_t             last_fsck_time;
+    uint32_t             fsck_error_count;
+    int                  metadata_csum_enabled;
+    int                  sb_checksum_valid;
+    uint32_t             sb_checksum_stored;
+    uint32_t             sb_checksum_computed;
     char                 volume_label[17];
     char                 uuid[37];
 } ext4_probe_result_t;
+
+typedef struct ext4_mount_advice {
+    int  read_only_allowed;
+    int  overlay_allowed;
+    int  read_write_allowed;
+    char recommended_mode[16]; /* "read_only", "overlay", "read_write", "none" */
+    char ro_reason[160];
+    char overlay_reason[160];
+    char rw_reason[160];
+} ext4_mount_advice_t;
 
 int ext4_probe_superblock_buffer(const uint8_t *sb_1024, ext4_probe_result_t *out);
 int ext4_probe_partition(const char *path_utf8, uint64_t offset_bytes, uint64_t size_bytes,
                          uint32_t sector_size, ext4_probe_result_t *out);
 const char *ext4_fs_kind_name(ext4_fs_kind_t kind);
 const char *ext4_journal_state_name(ext4_journal_state_t state);
+
+size_t ext4_feature_compat_names(uint32_t mask, const char **out_names, size_t max_names);
+size_t ext4_feature_incompat_names(uint32_t mask, const char **out_names, size_t max_names);
+size_t ext4_feature_ro_compat_names(uint32_t mask, const char **out_names, size_t max_names);
+void ext4_evaluate_mount_advice(const ext4_probe_result_t *probe, ext4_mount_advice_t *out);
 
 #ifdef __cplusplus
 }

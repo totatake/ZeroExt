@@ -56,6 +56,7 @@ typedef struct ext4_vfs_ctx {
     char                      source_path[1024];
     uint64_t                  partition_offset;
     uint64_t                  partition_size;
+    char                      partition_uuid[48];
     char                      volume_label[32];
     struct ext4_extent_cache *extent_cache;
     struct ext4_dentry_cache *dentry_cache;

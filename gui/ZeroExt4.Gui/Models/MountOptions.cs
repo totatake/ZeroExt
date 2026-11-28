@@ -21,6 +21,8 @@ namespace ZeroExt4.Gui.Models
         NonEmptyUnmarked = 4,
         MismatchedLower = 5,
         InvalidPath = 6,
+        CorruptMarker = 7,
+        UnsupportedMarkerVersion = 8,
     }
 
     public sealed class UpperDirCheckResult

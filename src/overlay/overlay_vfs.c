@@ -2,6 +2,7 @@
 #include "../common/ext4_errno.h"
 #include "../trace/perfetto_trace.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -789,56 +790,492 @@ static int upper_dir_has_entries_w(const wchar_t *dir_w) {
     return non_empty;
 }
 
-static int overlay_validate_lower_id(const ext4_overlay_ctx_t *ov, ext4_vfs_ctx_t *lower_ctx) {
-    wchar_t id_w[1040];
-    char expected[128];
-    const __u8 *u;
-    HANDLE hr;
+static int is_dir_case_sensitive_readonly_w(const wchar_t *dir_w) {
+    FILE_CASE_SENSITIVE_INFO cs;
+    HANDLE h = CreateFileW(dir_w, FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    memset(&cs, 0, sizeof(cs));
+    BOOL ok = GetFileInformationByHandleEx(h, FileCaseSensitiveInfo, &cs, sizeof(cs));
+    CloseHandle(h);
+    return (ok && (cs.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR)) ? 1 : 0;
+}
 
-    if (!ov || !lower_ctx || !lower_ctx->fs || !lower_ctx->fs->super) return 0;
+static int normalize_upper_dir_w(const char *upper_dir_utf8, wchar_t *out_full_w, size_t out_cch, int *out_is_file) {
+    wchar_t wdir[1024];
+    DWORD full_len;
+    size_t len;
+    DWORD attrs;
 
-    u = lower_ctx->fs->super->s_uuid;
-    _snprintf_s(expected, sizeof(expected), _TRUNCATE,
-                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x:%llu:%u%s",
-                u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
-                u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
-                (unsigned long long)ext2fs_blocks_count(lower_ctx->fs->super),
-                (unsigned)lower_ctx->fs->blocksize,
-                ov->case_sensitive ? ":cs" : "");
+    if (out_is_file) *out_is_file = 0;
+    if (!upper_dir_utf8 || !upper_dir_utf8[0] || !out_full_w || out_cch == 0) return -EINVAL;
+    if (ext4_utf8_to_wide(upper_dir_utf8, wdir, _countof(wdir)) != 0) return -EINVAL;
 
-    _snwprintf_s(id_w, _countof(id_w), _TRUNCATE, L"%ls\\%ls", ov->upper_dir_w, OV_LOWER_ID_NAME_W);
-    hr = CreateFileW(id_w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hr != INVALID_HANDLE_VALUE) {
-        char stored[128] = {0};
-        DWORD got = 0;
-        BOOL ok = ReadFile(hr, stored, sizeof(stored) - 1, &got, NULL);
-        CloseHandle(hr);
-        if (!ok || got == 0 || strcmp(stored, expected) != 0) {
-            ext4_log(EXT4_LOG_ERROR,
-                     "Overlay upperdir '%ls' belongs to a different lower ext4 filesystem "
-                     "(expected='%s', found='%s'). Clean or choose a separate upperdir.",
-                     ov->upper_dir_w, expected, stored);
-            return -EINVAL;
-        }
-        return 0;
+    full_len = GetFullPathNameW(wdir, (DWORD)out_cch, out_full_w, NULL);
+    if (full_len == 0 || full_len >= out_cch) return -EINVAL;
+
+    len = wcslen(out_full_w);
+    while (len > 3 && (out_full_w[len - 1] == L'\\' || out_full_w[len - 1] == L'/')) {
+        out_full_w[--len] = 0;
+    }
+    if (len == 3 && out_full_w[1] == L':' && (out_full_w[2] == L'\\' || out_full_w[2] == L'/')) {
+        return -EINVAL;
     }
 
-    if (upper_dir_has_entries_w(ov->upper_dir_w)) {
-        ext4_log(EXT4_LOG_WARN,
-                 "Overlay upperdir '%ls' is not empty and has no %s marker; "
-                 "existing files will shadow lower ext4 entries.",
-                 ov->upper_dir_w, OV_LOWER_ID_NAME);
+    attrs = GetFileAttributesW(out_full_w);
+    if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        if (out_is_file) *out_is_file = 1;
+        return -ENOTDIR;
+    }
+    return 0;
+}
+
+static int is_valid_uuid_str(const char *s) {
+    if (!s || strlen(s) != 36) return 0;
+    for (int i = 0; i < 36; i++) {
+        char c = s[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return 0;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int parse_strict_u64(const char *s, uint64_t *out) {
+    char *end = NULL;
+    unsigned long long v;
+    if (!s || !s[0]) return -1;
+    for (const char *p = s; *p; p++) {
+        if (*p < '0' || *p > '9') return -1;
+    }
+    errno = 0;
+    v = strtoull(s, &end, 10);
+    if (errno == ERANGE || !end || *end != '\0') return -1;
+    *out = (uint64_t)v;
+    return 0;
+}
+
+static int parse_strict_u32(const char *s, uint32_t *out) {
+    uint64_t v = 0;
+    if (parse_strict_u64(s, &v) != 0 || v > UINT32_MAX) return -1;
+    *out = (uint32_t)v;
+    return 0;
+}
+
+static void build_lower_identity_from_ctx(const ext4_vfs_ctx_t *lower_ctx, overlay_lower_identity_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!lower_ctx || !lower_ctx->fs || !lower_ctx->fs->super) return;
+    const __u8 *u = lower_ctx->fs->super->s_uuid;
+    _snprintf_s(out->fs_uuid, sizeof(out->fs_uuid), _TRUNCATE,
+                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
+                u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+    out->blocks_count = (uint64_t)ext2fs_blocks_count(lower_ctx->fs->super);
+    out->block_size = (uint32_t)lower_ctx->fs->blocksize;
+    strcpy_s(out->partition_uuid, sizeof(out->partition_uuid), lower_ctx->partition_uuid);
+    out->partition_offset = lower_ctx->partition_offset;
+    out->partition_size = (lower_ctx->partition_size > 0)
+                              ? lower_ctx->partition_size
+                              : (out->blocks_count * (uint64_t)out->block_size);
+    out->case_sensitive = !lower_ctx->case_insensitive ? 1 : 0;
+}
+
+void overlay_format_lower_id_v2(const overlay_lower_identity_t *id, char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return;
+    if (!id) {
+        out[0] = '\0';
+        return;
+    }
+    _snprintf_s(out, out_sz, _TRUNCATE,
+                "v2;uuid=%s;blocks=%llu;bsize=%u;part_uuid=%s;part_off=%llu;part_size=%llu;cs=%d",
+                id->fs_uuid,
+                (unsigned long long)id->blocks_count,
+                (unsigned)id->block_size,
+                id->partition_uuid,
+                (unsigned long long)id->partition_offset,
+                (unsigned long long)id->partition_size,
+                id->case_sensitive ? 1 : 0);
+}
+
+const char *overlay_upper_status_name(overlay_upper_status_t status) {
+    switch (status) {
+    case OV_UPPER_OK_WILL_CREATE:      return "will_create";
+    case OV_UPPER_OK_EMPTY:            return "empty_ready";
+    case OV_UPPER_OK_MATCH_V2:         return "matching_v2";
+    case OV_UPPER_OK_MATCH_V1:         return "matching_v1";
+    case OV_UPPER_NON_EMPTY_UNMARKED:  return "non_empty_unmarked";
+    case OV_UPPER_MISMATCH_LOWER:      return "mismatch_lower";
+    case OV_UPPER_MISMATCH_CASE_MODE:  return "mismatch_case_mode";
+    case OV_UPPER_CORRUPT_MARKER:      return "corrupt_marker";
+    case OV_UPPER_UNSUPPORTED_VERSION: return "unsupported_version";
+    case OV_UPPER_INVALID_PATH:        return "invalid_path";
+    case OV_UPPER_CS_NOT_SUPPORTED:    return "cs_not_supported";
+    default:                           return "unknown";
+    }
+}
+
+static void parse_v2_marker(const char *stored, const overlay_lower_identity_t *expected,
+                            overlay_upper_check_t *out) {
+    char copy[512];
+    char uuid[37] = {0};
+    char part_uuid[48] = {0};
+    uint64_t blocks = 0, part_off = 0, part_size = 0;
+    uint32_t bsize = 0;
+    int cs = 0;
+    unsigned seen = 0;
+    char *p;
+
+    strcpy_s(copy, sizeof(copy), stored + 3);
+    p = copy;
+    while (*p) {
+        char *semi = strchr(p, ';');
+        char *eq;
+        const char *k;
+        const char *v;
+        if (semi) *semi = '\0';
+        if (*p == '\0') {
+            seen = 0;
+            break;
+        }
+        eq = strchr(p, '=');
+        if (!eq) {
+            seen = 0;
+            break;
+        }
+        *eq = '\0';
+        k = p;
+        v = eq + 1;
+
+        if (strcmp(k, "uuid") == 0 && !(seen & 0x01U) && is_valid_uuid_str(v)) {
+            strcpy_s(uuid, sizeof(uuid), v);
+            seen |= 0x01U;
+        } else if (strcmp(k, "blocks") == 0 && !(seen & 0x02U) && parse_strict_u64(v, &blocks) == 0) {
+            seen |= 0x02U;
+        } else if (strcmp(k, "bsize") == 0 && !(seen & 0x04U) && parse_strict_u32(v, &bsize) == 0 && bsize >= 1024U) {
+            seen |= 0x04U;
+        } else if (strcmp(k, "part_uuid") == 0 && !(seen & 0x08U) && (v[0] == '\0' || is_valid_uuid_str(v))) {
+            strcpy_s(part_uuid, sizeof(part_uuid), v);
+            seen |= 0x08U;
+        } else if (strcmp(k, "part_off") == 0 && !(seen & 0x10U) && parse_strict_u64(v, &part_off) == 0) {
+            seen |= 0x10U;
+        } else if (strcmp(k, "part_size") == 0 && !(seen & 0x20U) && parse_strict_u64(v, &part_size) == 0) {
+            seen |= 0x20U;
+        } else if (strcmp(k, "cs") == 0 && !(seen & 0x40U) && (strcmp(v, "0") == 0 || strcmp(v, "1") == 0)) {
+            cs = (v[0] == '1') ? 1 : 0;
+            seen |= 0x40U;
+        } else {
+            seen = 0;
+            break;
+        }
+
+        if (!semi) break;
+        p = semi + 1;
+        if (*p == '\0') {
+            seen = 0;
+            break;
+        }
+    }
+
+    if (seen != 0x7FU) {
+        out->status = OV_UPPER_CORRUPT_MARKER;
+        out->marker_version = -1;
+        out->can_mount = 0;
+        strcpy_s(out->reason, sizeof(out->reason),
+                 "Corrupted .wh.__ext4_lower_id v2 marker (malformed or missing fields); overlay RW refused.");
+        return;
+    }
+
+    out->marker_version = 2;
+    if (!expected) {
+        out->status = OV_UPPER_OK_MATCH_V2;
+        out->can_mount = 1;
+        strcpy_s(out->reason, sizeof(out->reason), "Valid v2 lower ID marker.");
+        return;
     }
 
     {
-        HANDLE hw = CreateFileW(id_w, GENERIC_WRITE, FILE_SHARE_READ,
-                                NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, NULL);
-        if (hw != INVALID_HANDLE_VALUE) {
-            DWORD put = 0;
-            WriteFile(hw, expected, (DWORD)strlen(expected), &put, NULL);
-            CloseHandle(hw);
+        int id_match = (_stricmp(uuid, expected->fs_uuid) == 0 &&
+                        blocks == expected->blocks_count &&
+                        bsize == expected->block_size &&
+                        _stricmp(part_uuid, expected->partition_uuid) == 0 &&
+                        part_off == expected->partition_offset &&
+                        part_size == expected->partition_size);
+        int cs_match = (cs == (expected->case_sensitive ? 1 : 0));
+        if (id_match && cs_match) {
+            out->status = OV_UPPER_OK_MATCH_V2;
+            out->can_mount = 1;
+            strcpy_s(out->reason, sizeof(out->reason), "Overlay upperdir matches lower filesystem (v2).");
+        } else if (id_match && !cs_match) {
+            out->status = OV_UPPER_MISMATCH_CASE_MODE;
+            out->can_mount = 0;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Overlay upperdir .wh.__ext4_lower_id has a different --case-sensitive mode.");
+        } else {
+            out->status = OV_UPPER_MISMATCH_LOWER;
+            out->can_mount = 0;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Overlay upperdir belongs to a different lower ext4 filesystem (.wh.__ext4_lower_id mismatch).");
         }
+    }
+}
+
+static void parse_v1_marker(const char *stored, const overlay_lower_identity_t *expected,
+                            overlay_upper_check_t *out) {
+    char copy[256];
+    const char *parts[4] = {0};
+    int part_cnt = 0;
+    uint64_t blocks = 0;
+    uint32_t bsize = 0;
+    int cs = 0;
+    char *p;
+
+    if (strlen(stored) >= sizeof(copy)) {
+        out->status = OV_UPPER_CORRUPT_MARKER;
+        out->marker_version = -1;
+        out->can_mount = 0;
+        strcpy_s(out->reason, sizeof(out->reason),
+                 "Corrupted .wh.__ext4_lower_id v1 marker; overlay RW refused.");
+        return;
+    }
+    strcpy_s(copy, sizeof(copy), stored);
+    p = copy;
+    while (part_cnt < 4) {
+        char *colon = strchr(p, ':');
+        parts[part_cnt++] = p;
+        if (!colon) break;
+        *colon = '\0';
+        p = colon + 1;
+        if (part_cnt == 4) {
+            part_cnt = -1;
+            break;
+        }
+    }
+
+    if ((part_cnt != 3 && part_cnt != 4) ||
+        !is_valid_uuid_str(parts[0]) ||
+        parse_strict_u64(parts[1], &blocks) != 0 ||
+        parse_strict_u32(parts[2], &bsize) != 0 ||
+        bsize < 1024U ||
+        (part_cnt == 4 && strcmp(parts[3], "cs") != 0)) {
+        out->status = OV_UPPER_CORRUPT_MARKER;
+        out->marker_version = -1;
+        out->can_mount = 0;
+        strcpy_s(out->reason, sizeof(out->reason),
+                 "Corrupted .wh.__ext4_lower_id marker syntax; overlay RW refused.");
+        return;
+    }
+
+    cs = (part_cnt == 4) ? 1 : 0;
+    out->marker_version = 1;
+    if (!expected) {
+        out->status = OV_UPPER_OK_MATCH_V1;
+        out->can_mount = 1;
+        strcpy_s(out->reason, sizeof(out->reason), "Valid legacy v1 lower ID marker.");
+        return;
+    }
+
+    {
+        int id_match = (_stricmp(parts[0], expected->fs_uuid) == 0 &&
+                        blocks == expected->blocks_count &&
+                        bsize == expected->block_size);
+        int cs_match = (cs == (expected->case_sensitive ? 1 : 0));
+        if (id_match && cs_match) {
+            out->status = OV_UPPER_OK_MATCH_V1;
+            out->can_mount = 1;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Overlay upperdir matches lower filesystem (legacy v1 marker).");
+        } else if (id_match && !cs_match) {
+            out->status = OV_UPPER_MISMATCH_CASE_MODE;
+            out->can_mount = 0;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Overlay upperdir .wh.__ext4_lower_id has a different --case-sensitive mode.");
+        } else {
+            out->status = OV_UPPER_MISMATCH_LOWER;
+            out->can_mount = 0;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Overlay upperdir belongs to a different lower ext4 filesystem (.wh.__ext4_lower_id mismatch).");
+        }
+    }
+}
+
+void overlay_check_upper_dir(const char *upper_dir_utf8,
+                             const overlay_lower_identity_t *expected,
+                             overlay_upper_check_t *out) {
+    wchar_t full_w[1024];
+    wchar_t id_w[1040];
+    DWORD attrs;
+    int is_file = 0;
+    HANDLE hr;
+
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (expected) {
+        overlay_format_lower_id_v2(expected, out->expected_id, sizeof(out->expected_id));
+    }
+
+    if (normalize_upper_dir_w(upper_dir_utf8, full_w, _countof(full_w), &is_file) != 0) {
+        out->status = OV_UPPER_INVALID_PATH;
+        out->can_mount = 0;
+        strcpy_s(out->reason, sizeof(out->reason),
+                 is_file ? "Specified upperdir path is a regular file, not a directory."
+                         : "Invalid upperdir path (drive root or malformed path is not allowed).");
+        return;
+    }
+
+    attrs = GetFileAttributesW(full_w);
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        /* Verify root drive exists when full_w has drive prefix */
+        if (wcslen(full_w) >= 3 && full_w[1] == L':' && full_w[2] == L'\\') {
+            WCHAR root_w[4] = { full_w[0], L':', L'\\', L'\0' };
+            if (GetFileAttributesW(root_w) == INVALID_FILE_ATTRIBUTES) {
+                out->status = OV_UPPER_INVALID_PATH;
+                out->can_mount = 0;
+                strcpy_s(out->reason, sizeof(out->reason),
+                         "Target drive for overlay upperdir does not exist.");
+                return;
+            }
+        }
+        out->status = OV_UPPER_OK_WILL_CREATE;
+        out->can_mount = 1;
+        strcpy_s(out->reason, sizeof(out->reason),
+                 "Upperdir does not exist yet and will be created with a v2 lower ID marker.");
+        return;
+    }
+
+    _snwprintf_s(id_w, _countof(id_w), _TRUNCATE, L"%ls\\%ls", full_w, OV_LOWER_ID_NAME_W);
+    hr = CreateFileW(id_w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hr != INVALID_HANDLE_VALUE) {
+        char stored[512] = {0};
+        LARGE_INTEGER fsz;
+        DWORD got = 0;
+        BOOL ok_sz = GetFileSizeEx(hr, &fsz);
+        BOOL ok = ReadFile(hr, stored, sizeof(stored) - 1, &got, NULL);
+        CloseHandle(hr);
+
+        if (!ok || !ok_sz || fsz.QuadPart <= 0 || fsz.QuadPart > 510 || got == 0 || got > 510) {
+            out->status = OV_UPPER_CORRUPT_MARKER;
+            out->marker_version = -1;
+            out->can_mount = 0;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Corrupted or oversized .wh.__ext4_lower_id marker file; overlay RW refused.");
+            return;
+        }
+        stored[got] = '\0';
+        size_t len = got;
+        while (len > 0 && (stored[len - 1] == '\r' || stored[len - 1] == '\n')) {
+            stored[--len] = '\0';
+        }
+        {
+            int bad_char = (len == 0) ? 1 : 0;
+            for (size_t i = 0; i < len && !bad_char; i++) {
+                unsigned char c = (unsigned char)stored[i];
+                if (c < 0x20U || c == 0x7FU) {
+                    bad_char = 1;
+                }
+            }
+            if (bad_char) {
+                out->status = OV_UPPER_CORRUPT_MARKER;
+                out->marker_version = -1;
+                out->can_mount = 0;
+                strcpy_s(out->reason, sizeof(out->reason),
+                         "Corrupted .wh.__ext4_lower_id marker (invalid characters or empty); overlay RW refused.");
+                return;
+            }
+        }
+
+        strncpy_s(out->found_id, sizeof(out->found_id), stored, _TRUNCATE);
+        if (len >= 3 && strncmp(stored, "v2;", 3) == 0) {
+            parse_v2_marker(stored, expected, out);
+            return;
+        }
+        if (len >= 3 && stored[0] == 'v' && stored[1] >= '0' && stored[1] <= '9') {
+            const char *semi = strchr(stored + 1, ';');
+            if (semi) {
+                char ver_str[16];
+                size_t vlen = (size_t)(semi - (stored + 1));
+                uint64_t ver_num = 0;
+                if (vlen > 0 && vlen < sizeof(ver_str)) {
+                    memcpy(ver_str, stored + 1, vlen);
+                    ver_str[vlen] = '\0';
+                    if (parse_strict_u64(ver_str, &ver_num) == 0) {
+                        if (ver_num > 2) {
+                            out->status = OV_UPPER_UNSUPPORTED_VERSION;
+                            out->marker_version = (ver_num <= INT_MAX) ? (int)ver_num : INT_MAX;
+                            out->can_mount = 0;
+                            strcpy_s(out->reason, sizeof(out->reason),
+                                     "Unsupported .wh.__ext4_lower_id marker format version; upgrade ZeroExt4 or use a fresh upperdir.");
+                            return;
+                        }
+                        out->status = OV_UPPER_CORRUPT_MARKER;
+                        out->marker_version = -1;
+                        out->can_mount = 0;
+                        strcpy_s(out->reason, sizeof(out->reason),
+                                 "Invalid .wh.__ext4_lower_id version tag; overlay RW refused.");
+                        return;
+                    }
+                }
+            }
+        }
+
+        parse_v1_marker(stored, expected, out);
+        return;
+    }
+
+    {
+        DWORD err = GetLastError();
+        if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND) {
+            out->status = OV_UPPER_CORRUPT_MARKER;
+            out->marker_version = -1;
+            out->can_mount = 0;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Failed to read .wh.__ext4_lower_id marker file; overlay RW refused.");
+            return;
+        }
+    }
+
+    if (upper_dir_has_entries_w(full_w)) {
+        if (expected && expected->case_sensitive && !is_dir_case_sensitive_readonly_w(full_w)) {
+            out->status = OV_UPPER_CS_NOT_SUPPORTED;
+            out->can_mount = 0;
+            strcpy_s(out->reason, sizeof(out->reason),
+                     "Non-empty upperdir without NTFS case-sensitivity flag cannot be used in --case-sensitive mode.");
+            return;
+        }
+        out->status = OV_UPPER_NON_EMPTY_UNMARKED;
+        out->can_mount = 0;
+        strcpy_s(out->reason, sizeof(out->reason),
+                 "Refusing non-empty upperdir without .wh.__ext4_lower_id marker; choose an empty or new directory.");
+        return;
+    }
+
+    out->status = OV_UPPER_OK_EMPTY;
+    out->can_mount = 1;
+    strcpy_s(out->reason, sizeof(out->reason),
+             "Empty upperdir verified; v2 lower ID marker will be written on mount.");
+}
+
+static int write_lower_id_marker_w(const wchar_t *dir_w, const char *marker_str) {
+    wchar_t id_w[1040];
+    HANDLE hw;
+    DWORD put = 0;
+    DWORD len = (DWORD)strlen(marker_str);
+    BOOL ok;
+
+    _snwprintf_s(id_w, _countof(id_w), _TRUNCATE, L"%ls\\%ls", dir_w, OV_LOWER_ID_NAME_W);
+    hw = CreateFileW(id_w, GENERIC_WRITE, FILE_SHARE_READ,
+                     NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, NULL);
+    if (hw == INVALID_HANDLE_VALUE) {
+        return win32_err_to_errno(GetLastError());
+    }
+    ok = WriteFile(hw, marker_str, len, &put, NULL);
+    DWORD err = ok ? 0 : GetLastError();
+    CloseHandle(hw);
+    if (!ok || put != len) {
+        return err ? win32_err_to_errno(err) : -EIO;
     }
     return 0;
 }
@@ -848,37 +1285,53 @@ static int overlay_validate_lower_id(const ext4_overlay_ctx_t *ov, ext4_vfs_ctx_
 int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
                        ext4_overlay_ctx_t **out_ov) {
     ext4_overlay_ctx_t *ov;
-    wchar_t wdir[1024];
+    overlay_lower_identity_t lower_id;
+    overlay_upper_check_t chk;
     wchar_t full_w[1024];
-    DWORD full_len;
-    size_t len;
+    int is_file = 0;
+    int case_sensitive;
     int rc;
 
     if (!upper_dir_utf8 || !upper_dir_utf8[0] || !out_ov) return -EINVAL;
     *out_ov = NULL;
 
-    if (ext4_utf8_to_wide(upper_dir_utf8, wdir, _countof(wdir)) != 0) {
-        return -EINVAL;
-    }
+    rc = normalize_upper_dir_w(upper_dir_utf8, full_w, _countof(full_w), &is_file);
+    if (rc != 0) return rc;
 
-    full_len = GetFullPathNameW(wdir, _countof(full_w), full_w, NULL);
-    if (full_len == 0 || full_len >= _countof(full_w)) {
-        return -EINVAL;
+    case_sensitive = (lower_ctx && !lower_ctx->case_insensitive) ? 1 : 0;
+    build_lower_identity_from_ctx(lower_ctx, &lower_id);
+    if (lower_ctx && lower_ctx->fs && lower_ctx->fs->super) {
+        overlay_check_upper_dir(upper_dir_utf8, &lower_id, &chk);
+        if (!chk.can_mount) {
+            ext4_log(EXT4_LOG_ERROR, "%s (upper='%ls', expected='%s', found='%s')",
+                     chk.reason, full_w, chk.expected_id, chk.found_id);
+            switch (chk.status) {
+            case OV_UPPER_UNSUPPORTED_VERSION: return -ENOTSUP;
+            case OV_UPPER_NON_EMPTY_UNMARKED:  return -ENOTEMPTY;
+            case OV_UPPER_CS_NOT_SUPPORTED:    return -ENOTEMPTY;
+            case OV_UPPER_INVALID_PATH:        return is_file ? -ENOTDIR : -EINVAL;
+            default:                           return -EINVAL;
+            }
+        }
+    } else {
+        memset(&chk, 0, sizeof(chk));
+        chk.status = OV_UPPER_OK_EMPTY;
+        chk.can_mount = 1;
     }
-
-    len = wcslen(full_w);
-    while (len > 3 && (full_w[len - 1] == L'\\' || full_w[len - 1] == L'/')) {
-        full_w[--len] = 0;
-    }
-    if (len == 3 && full_w[1] == L':' && full_w[2] == L'\\') {
-        /* Root of drive (rare); normalize without trailing slash would break C:, disallow drive root */
-        return -EINVAL;
-    }
-
-    int case_sensitive = (lower_ctx && !lower_ctx->case_insensitive) ? 1 : 0;
 
     rc = create_dir_recursive_w(full_w, case_sensitive ? full_w : NULL);
     if (rc != 0) return rc;
+
+    if (chk.status == OV_UPPER_OK_MATCH_V1) {
+        ext4_log(EXT4_LOG_INFO,
+                 "Overlay upperdir '%ls' uses legacy v1 %s marker (preserving existing marker).",
+                 full_w, OV_LOWER_ID_NAME);
+    } else if (chk.status == OV_UPPER_OK_WILL_CREATE || chk.status == OV_UPPER_OK_EMPTY) {
+        if (chk.expected_id[0] != '\0') {
+            rc = write_lower_id_marker_w(full_w, chk.expected_id);
+            if (rc != 0) return rc;
+        }
+    }
 
     ov = (ext4_overlay_ctx_t *)calloc(1, sizeof(*ov));
     if (!ov) return -ENOMEM;
@@ -888,12 +1341,6 @@ int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
     InitializeSRWLock(&ov->map_lock);
     InitializeCriticalSection(&ov->mut_cs);
     ov->next_synth_ino = OV_SYNTHETIC_INO_BASE;
-
-    rc = overlay_validate_lower_id(ov, lower_ctx);
-    if (rc != 0) {
-        overlay_vfs_destroy(ov);
-        return rc;
-    }
 
     *out_ov = ov;
     return 0;

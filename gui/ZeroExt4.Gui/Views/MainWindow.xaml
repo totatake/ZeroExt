@@ -514,6 +514,7 @@
 
                                                 <RadioButton Style="{StaticResource ModeCardRadioStyle}"
                                                              GroupName="MountModeGroup"
+                                                             IsEnabled="{Binding CanSelectReadWrite}"
                                                              IsChecked="{Binding SelectedMode, Converter={StaticResource ModeEq}, ConverterParameter=ReadWrite}"
                                                              Margin="8,0,0,0">
                                                     <StackPanel>
@@ -531,6 +532,19 @@
                                                     </StackPanel>
                                                 </RadioButton>
                                             </UniformGrid>
+                                            <Border Background="{DynamicResource WarningBgBrush}"
+                                                    BorderBrush="{DynamicResource WarningBrush}"
+                                                    BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="0,10,0,0"
+                                                    Visibility="{Binding IsReadWriteBlockedByHealth, Converter={StaticResource BoolToVis}}">
+                                                <StackPanel>
+                                                    <TextBlock Text="{DynamicResource Str_RwHealthBlockedBanner}"
+                                                               Foreground="{DynamicResource WarningBrush}"
+                                                               FontWeight="SemiBold" TextWrapping="Wrap" FontSize="12" />
+                                                    <TextBlock Text="{Binding ReadWriteHealthNotice}"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                                               TextWrapping="Wrap" FontSize="11.5" Margin="0,2,0,0" />
+                                                </StackPanel>
+                                            </Border>
                                         </StackPanel>
                                     </Border>
 
@@ -578,14 +592,22 @@
                                                                 <Setter Property="BorderBrush" Value="{DynamicResource SuccessBrush}" />
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding UpperDirCheck.Status}" Value="NonEmptyUnmarked">
-                                                                <Setter Property="Background" Value="{DynamicResource WarningBgBrush}" />
-                                                                <Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}" />
+                                                                <Setter Property="Background" Value="{DynamicResource DangerBgBrush}" />
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding UpperDirCheck.Status}" Value="MismatchedLower">
                                                                 <Setter Property="Background" Value="{DynamicResource DangerBgBrush}" />
                                                                 <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding UpperDirCheck.Status}" Value="InvalidPath">
+                                                                <Setter Property="Background" Value="{DynamicResource DangerBgBrush}" />
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding UpperDirCheck.Status}" Value="CorruptMarker">
+                                                                <Setter Property="Background" Value="{DynamicResource DangerBgBrush}" />
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding UpperDirCheck.Status}" Value="UnsupportedMarkerVersion">
                                                                 <Setter Property="Background" Value="{DynamicResource DangerBgBrush}" />
                                                                 <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
                                                             </DataTrigger>
@@ -972,21 +994,41 @@
                                         <TextBlock Margin="0,2" FontSize="12"><Run Text="BlockSize / Inode: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.BlockSize, Mode=OneWay}" /><Run Text=" / " /><Run Text="{Binding SelectedPartition.Info.InodeSize, Mode=OneWay}" /></TextBlock>
                                         <TextBlock Margin="0,2" FontSize="12"><Run Text="Blocks: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.BlocksCount, Mode=OneWay}" /></TextBlock>
                                         <TextBlock Margin="0,2" FontSize="12"><Run Text="Journal Inum / Start: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.JournalInum, Mode=OneWay}" /><Run Text=" / " /><Run Text="{Binding SelectedPartition.Info.JournalStart, Mode=OneWay}" /></TextBlock>
-                                        <TextBlock Margin="0,2" FontSize="12"><Run Text="Overlay ID: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding ExpectedLowerIdDisplay, Mode=OneWay}" /></TextBlock>
+                                        <TextBlock Margin="0,2" FontSize="12"><Run Text="Checksum: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.ChecksumSummary, Mode=OneWay}" /></TextBlock>
                                     </UniformGrid>
+                                    <TextBlock Margin="0,4,0,0" FontSize="11.5" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedPartition.Info.PartitionUuid}">
+                                        <Run Text="PartUUID: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.PartitionUuid, Mode=OneWay}" />
+                                        <Run Text="  |  Advice: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.MountAdvice.RecommendedMode, Mode=OneWay, FallbackValue=-}" />
+                                    </TextBlock>
+                                    <TextBlock Margin="0,2,0,0" FontSize="11.5" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedPartition.Info.FeaturesSummary}">
+                                        <Run Text="Features: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding SelectedPartition.Info.FeaturesSummary, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock Margin="0,2,0,0" FontSize="11.5" TextTrimming="CharacterEllipsis" ToolTip="{Binding ExpectedLowerIdDisplay}">
+                                        <Run Text="Overlay ID: " Foreground="{DynamicResource TextMutedBrush}" /><Run Text="{Binding ExpectedLowerIdDisplay, Mode=OneWay}" />
+                                    </TextBlock>
                                 </StackPanel>
                             </Border>
 
-                            <!-- Core Engine Path -->
+                            <!-- Core Engine Path & Diagnostics (Doctor) -->
                             <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,0,0,10">
-                                <DockPanel>
-                                    <Button DockPanel.Dock="Right" Content="{DynamicResource Str_ChangePathBtn}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Click="OnBrowseCoreExeClick" Margin="8,0,0,0" />
-                                    <TextBlock DockPanel.Dock="Left" Text="{DynamicResource Str_BackendExeLabel}" VerticalAlignment="Center"
-                                               FontWeight="SemiBold" Margin="0,0,10,0" />
-                                    <TextBox IsReadOnly="True" Text="{Binding CoreExeDisplay, Mode=OneWay}" FontFamily="Consolas" FontSize="12" />
-                                </DockPanel>
+                                <StackPanel>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="{DynamicResource Str_DoctorBtn}"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Command="{Binding RunDoctorCommand}" Margin="8,0,0,0" />
+                                        <Button DockPanel.Dock="Right" Content="{DynamicResource Str_ChangePathBtn}"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Click="OnBrowseCoreExeClick" Margin="8,0,0,0" />
+                                        <TextBlock DockPanel.Dock="Left" Text="{DynamicResource Str_BackendExeLabel}" VerticalAlignment="Center"
+                                                   FontWeight="SemiBold" Margin="0,0,10,0" />
+                                        <TextBox IsReadOnly="True" Text="{Binding CoreExeDisplay, Mode=OneWay}" FontFamily="Consolas" FontSize="12" />
+                                    </DockPanel>
+                                    <TextBox IsReadOnly="True" TextWrapping="Wrap" Margin="0,8,0,0"
+                                             FontFamily="Consolas" FontSize="11.5"
+                                             MaxHeight="90" VerticalScrollBarVisibility="Auto"
+                                             Text="{Binding DoctorSummary, Mode=OneWay}"
+                                             Visibility="{Binding DoctorSummary, Converter={StaticResource NotEmptyToVis}}" />
+                                </StackPanel>
                             </Border>
 
                             <!-- Log Viewer -->

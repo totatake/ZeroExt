@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **40 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **42 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -47,9 +47,10 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 | テスト関数 | 主な検証内容 |
 | :--- | :--- |
-| `test_gpt_disk_and_embedded_ext4` | 保護 MBR + GPT ヘッダ解析、UTF-16LE パーティション名、内蔵 ext4 解析 |
+| `test_gpt_disk_and_embedded_ext4` | 保護 MBR + GPT ヘッダ・Unique Partition GUID (`partition_uuid`) 解析、UTF-16LE パーティション名、内蔵 ext4 解析 ＆ `metadata_csum` 検証 |
 | `test_mbr_and_ebr_logical_partitions` | MBR + 拡張 EBR チェーン解析（論理パーティション 5 の ext4 検出） |
 | `test_dirty_journal_and_jbd2_probe` | JBD2 inode 8 スーパーブロック（Big-Endian `s_start != 0`）および `EXT2_ERROR_FS` 検出 |
+| `test_probe_extended_diagnostics_and_mount_advice` | 可読機能フラグ名配列、`last_mount_time`/`last_fsck_time`/`fsck_error_count`、クリーン/Dirty/`encrypt`/スーパーブロック CRC32C 破損時の `ext4_evaluate_mount_advice` 検証 |
 
 ### 2.3 `vfs_operations` ([tests/test_vfs_operations.c](../tests/test_vfs_operations.c))
 
@@ -93,6 +94,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_overlay_vfs_and_persistence` | Dirty ext4 の RO 下位マウント＋既定 Direct I/O 併用、Copy-up 書込・追記・再マウント永続性、ホワイトアウト (`.wh.*`)・不透過ディレクトリ、別 UUID イメージに対する `.wh.__ext4_lower_id` 拒否 (`-EINVAL`)、下位非破壊検証 |
 | `test_read_handle_cached_extents` | オープンハンドル (`ext4_file_handle_t.cached_extents`) 保持時のロックレス直読およびクローズ解放検証 |
 | `test_overlay_case_sensitive_upperdir` | `case_insensitive = 0` + NTFS Upperdir での `FileCaseSensitiveInfo` 設定／拒否保護、`.wh.__ext4_lower_id` の `:cs` 混用ブロック検証 |
+| `test_overlay_upperdir_guards_v2` | 非空未識別 Upperdir の拒否 (`-ENOTEMPTY`) ＆無変更検証、新規 Upperdir v2 マーカー生成、`.wh.__ext4_lower_id` 破損 (`-EINVAL`)・未知バージョン (`-ENOTSUP`)・後方互換 v1・同一 UUID GPT クローン識別検証 |
 
 ### 2.6 `perfetto_trace` ([tests/test_perfetto_trace.c](../tests/test_perfetto_trace.c))
 
@@ -111,17 +113,17 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 | テスト名 | 主な検証内容 |
 | :--- | :--- |
-| `JsonParsing_ScanResponse` | `zeroext4 list --json` 出力（物理ディスク・GPT/MBR・JBD2 状態）のデシリアライズ検証 |
+| `JsonParsing_ScanResponse` | `zeroext4 list/inspect --json`（`partition_uuid`・機能フラグ名・`mount_advice` 含む）および `doctor --json` 出力のデシリアライズ検証 |
 | `JsonParsing_LsAndMountEvents` | `ls --json` および `--json-events` リアルタイム統計イベントパース検証 |
-| `ArgBuilder_MountVariantsAndPreview` | Read-Only / `--overlay` / `--rw` / `--trace` 等に応じた `zeroext4.exe` 引数組み立て検証 |
-| `DriveLetterAndOverlayValidation` | ドライブレター空き判定・Upperdir 指定バリデーション検証 |
+| `ArgBuilder_MountVariantsAndPreview` | Read-Only / `--overlay` / `--rw` / `doctor` 等に応じた `zeroext4.exe` 引数組み立て検証 |
+| `DriveLetterAndOverlayValidation` | ドライブレター空き判定・Upperdir v2/v1 マーカー・破損／未知バージョン検出・非空未識別拒否検証 |
 | `DriveLetter_SafeUnmountTarget` | GUI 側「残留ドライブ解除」における対象ボリューム判定（システムドライブ保護）検証 |
 | `Localization_CompletenessAndSwitching` | `Strings.en.xaml` / `Strings.ja.xaml` 間のリソースキー網羅性および即時言語切替検証 |
-| `MountErrorTranslator` | コアエラーコードのローカライズ翻訳メッセージ解決検証 |
+| `MountErrorTranslator` | コアエラーコードのローカライズ翻訳メッセージ解決（Upperdir 拒否・破損・未対応バージョン含む）検証 |
 | `SettingsService_RoundTrip` | `gui_settings.json` の設定・プリセット保存／復元往復検証 |
-| `MainViewModel_ValidationAndPreview` | マウント前入力検証・状態遷移・CLI プレビュー更新検証 |
+| `MainViewModel_ValidationAndPreview` | マウント前入力検証・Dirty ボリューム時の RW 自動抑止／プリセット強制変換・CLI プレビュー更新検証 |
 | `TrayIconService_MountUnmountMenuRebuild` | マウント／アンマウントに伴うシステムトレイメニュー再構築検証 |
-| `LiveCoreCli_InspectAndBrowseIntegration` | 実 `zeroext4.exe` サブプロセス起動による `inspect` / `ls --json` 疎結合統合検証 |
+| `LiveCoreCli_InspectAndBrowseIntegration` | 実 `zeroext4.exe` サブプロセス起動による `inspect`（拡張診断）／`doctor`／`ls --json` 疎結合統合検証 |
 
 ---
 

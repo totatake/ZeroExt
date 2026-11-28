@@ -145,7 +145,9 @@
     <sys:String x:Key="Str_UpperValWillCreate">フォルダが存在しないため、マウント時に新規作成され Lower ID が記録されます。</sys:String>
     <sys:String x:Key="Str_UpperValMismatch">このフォルダは別の ext4 ボリューム用の Upperdir です（.wh.__ext4_lower_id 不一致）。別の空フォルダを指定してください。</sys:String>
     <sys:String x:Key="Str_UpperValMatch">同一 ext4 ボリュームに紐付いた既存の Upperdir です（前回の変更を継続できます）。</sys:String>
-    <sys:String x:Key="Str_UpperValNonEmptyUnmarked">警告: フォルダが空ではなく Lower ID マーカーがありません。既存ファイルが Lower 側を上書き表示します。</sys:String>
+    <sys:String x:Key="Str_UpperValNonEmptyUnmarked">エラー: フォルダが空ではなく Lower ID マーカー (.wh.__ext4_lower_id) がありません。誤シャドウイング防止のため使用できないため、新しいフォルダまたは空フォルダを指定してください。</sys:String>
+    <sys:String x:Key="Str_UpperValCorrupt">エラー: .wh.__ext4_lower_id マーカーファイルが破損または不正形式です。新しい空フォルダを指定してください。</sys:String>
+    <sys:String x:Key="Str_UpperValUnsupportedVerFmt">エラー: .wh.__ext4_lower_id は未対応の将来バージョン (v{0}) です。ZeroExt4 を更新するか新しい空フォルダを指定してください。</sys:String>
     <sys:String x:Key="Str_UpperValEmptyReady">空のフォルダを確認しました。Lower ext4 は完全に保護されたまま利用できます。</sys:String>
     <sys:String x:Key="Str_UpperValCsNonEmpty">既存フォルダが空ではなく（隠しファイルが残っている場合があります）、NTFS 大文字・小文字区別属性が未設定のため使用できません。フォルダごと削除するか新しいフォルダ名を指定してください。</sys:String>
     <sys:String x:Key="Str_UpperValCsModeMismatch">この Upperdir は異なる大文字・小文字モードで作成されています（隠しファイル .wh.__ext4_lower_id を含む）。フォルダごと削除して作り直すか、別のフォルダ名（例: ..._cs）を指定してください。</sys:String>
@@ -343,5 +345,24 @@
     <sys:String x:Key="Str_CoreInspectFailFmt">ソースの検査に失敗しました '{0}' (exit={1}): {2}</sys:String>
     <sys:String x:Key="Str_CoreLsFailFmt">ディレクトリ一覧の取得に失敗しました '{0}' (exit={1}): {2}</sys:String>
     <sys:String x:Key="Str_CoreMkfsFailFmt">ext4 イメージの作成に失敗しました (exit={0}): {1}</sys:String>
+    <sys:String x:Key="Str_CoreDoctorFailFmt">診断の実行に失敗しました (exit={0}): {1}</sys:String>
     <sys:String x:Key="Str_CoreStartFailFmt">プロセス起動に失敗しました: {0}</sys:String>
+
+    <!-- Phase 1 Safety & Diagnostics -->
+    <sys:String x:Key="Str_RwHealthBlockedBanner">ボリュームの安全性保護のため、直接 Read-Write は自動抑止されています。Read-Only または非破壊 Overlay をご利用ください。</sys:String>
+    <sys:String x:Key="Str_ValRwHealthBlocked">対象ボリュームが Dirty 状態・エラー検出済み・または暗号化/RO専用機能有効のため、Read-Write は抑止されています。Read-Only または Overlay を選択してください（緊急時のみ --force-dirty を有効化）。</sys:String>
+    <sys:String x:Key="Str_ErrOverlayUnsupportedVerTitle">未対応バージョンの Overlay マーカーです</sys:String>
+    <sys:String x:Key="Str_ErrOverlayUnsupportedVerMsg">指定された Upperdir の .wh.__ext4_lower_id は未知の新しい形式バージョンで作成されています。</sys:String>
+    <sys:String x:Key="Str_ErrOverlayUnsupportedVerSug">ZeroExt4 を最新版に更新するか、新しい空フォルダを Upperdir に指定してください。</sys:String>
+    <sys:String x:Key="Str_ErrOverlayCorruptTitle">Overlay Lower ID マーカーが破損しています</sys:String>
+    <sys:String x:Key="Str_ErrOverlayCorruptMsg">Upperdir 内の .wh.__ext4_lower_id ファイルが破損または不正形式のため、安全のため Overlay マウントを拒否しました。</sys:String>
+    <sys:String x:Key="Str_ErrOverlayCorruptSug">別ボリュームとの混在を防ぐため、新しい空フォルダを指定してください。</sys:String>
+    <sys:String x:Key="Str_ErrOverlayLegacyRefusedTitle">未識別の非空 Upperdir が拒否されました</sys:String>
+    <sys:String x:Key="Str_ErrOverlayLegacyRefusedMsg">.wh.__ext4_lower_id マーカーがない非空フォルダは安全のため使用できません。</sys:String>
+    <sys:String x:Key="Str_ErrOverlayLegacyRefusedSug">既存のファイルが Lower 側を上書きしないよう、空フォルダまたは新しいフォルダを指定してください。</sys:String>
+    <sys:String x:Key="Str_DoctorBtn">診断を実行 (doctor)</sys:String>
+    <sys:String x:Key="Str_DoctorRunning">診断を実行中...</sys:String>
+    <sys:String x:Key="Str_DoctorHint">「診断を実行 (doctor)」を押すと WinFsp ランタイム・管理者権限・選択ボリュームの健全性・Overlay Upperdir 整合性を一括診断します。</sys:String>
+    <sys:String x:Key="Str_StatusDoctorDoneFmt">診断完了 ({0})</sys:String>
+    <sys:String x:Key="Str_StatusDoctorErrFmt">診断エラー: {0}</sys:String>
 </ResourceDictionary>

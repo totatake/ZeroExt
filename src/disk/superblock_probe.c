@@ -1,6 +1,7 @@
 #include "superblock_probe.h"
 #include "../io/win32_io.h"
 #include <ext2fs/ext2fs.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -51,8 +52,27 @@ int ext4_probe_superblock_buffer(const uint8_t *sb_1024, ext4_probe_result_t *ou
     out->feature_ro_compat = sb->s_feature_ro_compat;
     out->journal_inum = sb->s_journal_inum;
     out->state_flags = sb->s_state;
+    out->last_mount_time = (uint64_t)sb->s_mtime | ((uint64_t)sb->s_mtime_hi << 32);
+    out->last_fsck_time = (uint64_t)sb->s_lastcheck | ((uint64_t)sb->s_lastcheck_hi << 32);
+    out->fsck_error_count = sb->s_error_count;
+    out->metadata_csum_enabled = (sb->s_feature_ro_compat & EXT4_FEATURE_RO_COMPAT_METADATA_CSUM) ? 1 : 0;
+    out->sb_checksum_stored = sb->s_checksum;
+    if (out->metadata_csum_enabled) {
+        out->sb_checksum_computed = (uint32_t)ext2fs_crc32c_le(
+            ~0U, sb_1024, offsetof(struct ext2_super_block, s_checksum));
+        out->sb_checksum_valid =
+            (sb->s_checksum_type == EXT2_CRC32C_CHKSUM &&
+             out->sb_checksum_stored == out->sb_checksum_computed) ? 1 : 0;
+    } else {
+        out->sb_checksum_computed = 0;
+        out->sb_checksum_valid = 1;
+    }
 
-    if ((sb->s_feature_incompat & (EXT3_FEATURE_INCOMPAT_EXTENTS | EXT4_FEATURE_INCOMPAT_64BIT | EXT4_FEATURE_INCOMPAT_FLEX_BG)) != 0 ||
+    if ((sb->s_feature_incompat & (EXT3_FEATURE_INCOMPAT_EXTENTS | EXT4_FEATURE_INCOMPAT_64BIT |
+                                   EXT4_FEATURE_INCOMPAT_FLEX_BG | EXT4_FEATURE_INCOMPAT_EA_INODE |
+                                   EXT4_FEATURE_INCOMPAT_CSUM_SEED | EXT4_FEATURE_INCOMPAT_LARGEDIR |
+                                   EXT4_FEATURE_INCOMPAT_INLINE_DATA | EXT4_FEATURE_INCOMPAT_ENCRYPT |
+                                   EXT4_FEATURE_INCOMPAT_CASEFOLD | EXT4_FEATURE_INCOMPAT_MMP)) != 0 ||
         (sb->s_feature_ro_compat & ~(EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER | EXT2_FEATURE_RO_COMPAT_LARGE_FILE | 0x0004U /* legacy BTREE_DIR */)) != 0) {
         out->fs_kind = EXT4_FS_EXT4;
     } else if (sb->s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL) {
@@ -162,5 +182,150 @@ const char *ext4_journal_state_name(ext4_journal_state_t state) {
     case EXT4_JOURNAL_NEEDS_RECOVERY: return "NEEDS_RECOVERY";
     case EXT4_JOURNAL_HAS_ERRORS:     return "HAS_ERRORS";
     default:                          return "UNKNOWN";
+    }
+}
+
+typedef struct ext4_feature_bit_desc {
+    uint32_t    bit;
+    const char *name;
+} ext4_feature_bit_desc_t;
+
+static size_t collect_feature_names(uint32_t mask, const ext4_feature_bit_desc_t *table,
+                                    size_t table_len, const char **out_names, size_t max_names) {
+    size_t n = 0;
+    if (!out_names || max_names == 0) return 0;
+    for (size_t i = 0; i < table_len && n < max_names; i++) {
+        if (mask & table[i].bit) {
+            out_names[n++] = table[i].name;
+        }
+    }
+    return n;
+}
+
+size_t ext4_feature_compat_names(uint32_t mask, const char **out_names, size_t max_names) {
+    static const ext4_feature_bit_desc_t kCompat[] = {
+        { EXT2_FEATURE_COMPAT_DIR_PREALLOC,   "dir_prealloc" },
+        { EXT2_FEATURE_COMPAT_IMAGIC_INODES,  "imagic_inodes" },
+        { EXT3_FEATURE_COMPAT_HAS_JOURNAL,    "has_journal" },
+        { EXT2_FEATURE_COMPAT_EXT_ATTR,       "ext_attr" },
+        { EXT2_FEATURE_COMPAT_RESIZE_INODE,   "resize_inode" },
+        { EXT2_FEATURE_COMPAT_DIR_INDEX,      "dir_index" },
+        { EXT2_FEATURE_COMPAT_LAZY_BG,        "lazy_bg" },
+        { EXT2_FEATURE_COMPAT_EXCLUDE_BITMAP, "exclude_bitmap" },
+        { EXT4_FEATURE_COMPAT_SPARSE_SUPER2,  "sparse_super2" },
+        { EXT4_FEATURE_COMPAT_FAST_COMMIT,    "fast_commit" },
+        { EXT4_FEATURE_COMPAT_STABLE_INODES,  "stable_inodes" },
+        { EXT4_FEATURE_COMPAT_ORPHAN_FILE,    "orphan_file" },
+    };
+    return collect_feature_names(mask, kCompat, sizeof(kCompat) / sizeof(kCompat[0]), out_names, max_names);
+}
+
+size_t ext4_feature_incompat_names(uint32_t mask, const char **out_names, size_t max_names) {
+    static const ext4_feature_bit_desc_t kIncompat[] = {
+        { EXT2_FEATURE_INCOMPAT_COMPRESSION, "compression" },
+        { EXT2_FEATURE_INCOMPAT_FILETYPE,    "filetype" },
+        { EXT3_FEATURE_INCOMPAT_RECOVER,     "recover" },
+        { EXT3_FEATURE_INCOMPAT_JOURNAL_DEV, "journal_dev" },
+        { EXT2_FEATURE_INCOMPAT_META_BG,     "meta_bg" },
+        { EXT3_FEATURE_INCOMPAT_EXTENTS,     "extents" },
+        { EXT4_FEATURE_INCOMPAT_64BIT,       "64bit" },
+        { EXT4_FEATURE_INCOMPAT_MMP,         "mmp" },
+        { EXT4_FEATURE_INCOMPAT_FLEX_BG,     "flex_bg" },
+        { EXT4_FEATURE_INCOMPAT_EA_INODE,    "ea_inode" },
+        { EXT4_FEATURE_INCOMPAT_DIRDATA,     "dirdata" },
+        { EXT4_FEATURE_INCOMPAT_CSUM_SEED,   "csum_seed" },
+        { EXT4_FEATURE_INCOMPAT_LARGEDIR,    "largedir" },
+        { EXT4_FEATURE_INCOMPAT_INLINE_DATA, "inline_data" },
+        { EXT4_FEATURE_INCOMPAT_ENCRYPT,     "encrypt" },
+        { EXT4_FEATURE_INCOMPAT_CASEFOLD,    "casefold" },
+    };
+    return collect_feature_names(mask, kIncompat, sizeof(kIncompat) / sizeof(kIncompat[0]), out_names, max_names);
+}
+
+size_t ext4_feature_ro_compat_names(uint32_t mask, const char **out_names, size_t max_names) {
+    static const ext4_feature_bit_desc_t kRoCompat[] = {
+        { EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER,   "sparse_super" },
+        { EXT2_FEATURE_RO_COMPAT_LARGE_FILE,     "large_file" },
+        { 0x0004U,                               "btree_dir" },
+        { EXT4_FEATURE_RO_COMPAT_HUGE_FILE,      "huge_file" },
+        { EXT4_FEATURE_RO_COMPAT_GDT_CSUM,       "gdt_csum" },
+        { EXT4_FEATURE_RO_COMPAT_DIR_NLINK,      "dir_nlink" },
+        { EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE,    "extra_isize" },
+        { EXT4_FEATURE_RO_COMPAT_HAS_SNAPSHOT,   "has_snapshot" },
+        { EXT4_FEATURE_RO_COMPAT_QUOTA,          "quota" },
+        { EXT4_FEATURE_RO_COMPAT_BIGALLOC,       "bigalloc" },
+        { EXT4_FEATURE_RO_COMPAT_METADATA_CSUM,  "metadata_csum" },
+        { EXT4_FEATURE_RO_COMPAT_REPLICA,        "replica" },
+        { EXT4_FEATURE_RO_COMPAT_READONLY,       "readonly" },
+        { EXT4_FEATURE_RO_COMPAT_PROJECT,        "project" },
+        { EXT4_FEATURE_RO_COMPAT_SHARED_BLOCKS,  "shared_blocks" },
+        { EXT4_FEATURE_RO_COMPAT_VERITY,         "verity" },
+        { EXT4_FEATURE_RO_COMPAT_ORPHAN_PRESENT, "orphan_present" },
+    };
+    return collect_feature_names(mask, kRoCompat, sizeof(kRoCompat) / sizeof(kRoCompat[0]), out_names, max_names);
+}
+
+void ext4_evaluate_mount_advice(const ext4_probe_result_t *probe, ext4_mount_advice_t *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!probe || probe->fs_kind == EXT4_FS_UNKNOWN) {
+        strcpy_s(out->recommended_mode, sizeof(out->recommended_mode), "none");
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason), "No ext2/ext3/ext4 filesystem detected.");
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason), "No ext2/ext3/ext4 filesystem detected.");
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason), "No ext2/ext3/ext4 filesystem detected.");
+        return;
+    }
+
+    if (probe->feature_incompat & EXT3_FEATURE_INCOMPAT_JOURNAL_DEV) {
+        strcpy_s(out->recommended_mode, sizeof(out->recommended_mode), "none");
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason), "External JBD2 journal device cannot be mounted as a filesystem.");
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason), "External JBD2 journal device cannot be mounted as a filesystem.");
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason), "External JBD2 journal device cannot be mounted as a filesystem.");
+        return;
+    }
+
+    if (probe->metadata_csum_enabled && !probe->sb_checksum_valid) {
+        strcpy_s(out->recommended_mode, sizeof(out->recommended_mode), "none");
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason),
+                 "Superblock CRC32C checksum mismatch detected; inspect or repair with Linux e2fsck before mounting.");
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
+                 "Superblock CRC32C checksum mismatch detected; inspect or repair with Linux e2fsck before mounting.");
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "Superblock CRC32C checksum mismatch detected; mounting RW is unsafe.");
+        return;
+    }
+
+    out->read_only_allowed = 1;
+    out->overlay_allowed = 1;
+    strcpy_s(out->recommended_mode, sizeof(out->recommended_mode), "read_only");
+    strcpy_s(out->ro_reason, sizeof(out->ro_reason),
+             "Safe non-destructive Read-Only access with Direct Extent I/O.");
+    strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
+             "Keeps lower ext4 strictly Read-Only and writes changes to an NTFS upperdir.");
+
+    if (probe->journal_state == EXT4_JOURNAL_HAS_ERRORS) {
+        out->read_write_allowed = 0;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "Filesystem error flag (EXT2_ERROR_FS) or journal errno is set; run Linux e2fsck before Read-Write.");
+    } else if (probe->journal_state == EXT4_JOURNAL_NEEDS_RECOVERY) {
+        out->read_write_allowed = 0;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "Unreplayed JBD2 journal (NEEDS_RECOVERY); replay journal in Linux or use Read-Only / Overlay.");
+    } else if (probe->feature_incompat & EXT4_FEATURE_INCOMPAT_ENCRYPT) {
+        out->read_write_allowed = 0;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "fscrypt encryption (encrypt) is enabled; direct Read-Write is blocked for safety.");
+    } else if (probe->feature_ro_compat & EXT4_FEATURE_RO_COMPAT_READONLY) {
+        out->read_write_allowed = 0;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "Volume has the RO_COMPAT_READONLY flag set; use Read-Only or Overlay.");
+    } else if (probe->feature_ro_compat & EXT4_FEATURE_RO_COMPAT_SHARED_BLOCKS) {
+        out->read_write_allowed = 0;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "Shared blocks feature is enabled; direct Read-Write is blocked.");
+    } else {
+        out->read_write_allowed = 1;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "Journal is clean; direct Read-Write (--rw) is available (non-journaled updates).");
     }
 }

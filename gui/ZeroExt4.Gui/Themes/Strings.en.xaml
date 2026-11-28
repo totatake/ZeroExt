@@ -145,7 +145,9 @@
     <sys:String x:Key="Str_UpperValWillCreate">Folder does not exist yet; it will be created on mount with Lower ID recorded.</sys:String>
     <sys:String x:Key="Str_UpperValMismatch">This folder belongs to a different ext4 volume (.wh.__ext4_lower_id mismatch). Choose another empty folder.</sys:String>
     <sys:String x:Key="Str_UpperValMatch">Existing Upperdir matching this ext4 volume (previous changes will be preserved).</sys:String>
-    <sys:String x:Key="Str_UpperValNonEmptyUnmarked">Warning: Folder is not empty and has no Lower ID marker. Existing files will shadow lower ext4 entries.</sys:String>
+    <sys:String x:Key="Str_UpperValNonEmptyUnmarked">Error: Folder is not empty and has no Lower ID marker (.wh.__ext4_lower_id). To prevent accidental shadowing, choose a new or empty folder.</sys:String>
+    <sys:String x:Key="Str_UpperValCorrupt">Error: .wh.__ext4_lower_id marker file is corrupted or malformed. Choose a new empty folder.</sys:String>
+    <sys:String x:Key="Str_UpperValUnsupportedVerFmt">Error: .wh.__ext4_lower_id uses unsupported future format version v{0}. Upgrade ZeroExt4 or choose a new empty folder.</sys:String>
     <sys:String x:Key="Str_UpperValEmptyReady">Empty folder verified. Lower ext4 remains completely protected.</sys:String>
     <sys:String x:Key="Str_UpperValCsNonEmpty">This existing folder is not empty (hidden files may remain) and lacks the NTFS case-sensitivity flag. Delete the folder itself or specify a new folder name.</sys:String>
     <sys:String x:Key="Str_UpperValCsModeMismatch">This Upperdir was created with a different case-sensitivity mode (.wh.__ext4_lower_id mismatch). Delete the folder or choose a separate Upperdir (e.g. ..._cs).</sys:String>
@@ -343,5 +345,24 @@
     <sys:String x:Key="Str_CoreInspectFailFmt">Failed to inspect source '{0}' (exit={1}): {2}</sys:String>
     <sys:String x:Key="Str_CoreLsFailFmt">Failed to list directory '{0}' (exit={1}): {2}</sys:String>
     <sys:String x:Key="Str_CoreMkfsFailFmt">Failed to create ext4 image (exit={0}): {1}</sys:String>
+    <sys:String x:Key="Str_CoreDoctorFailFmt">Diagnostics failed (exit={0}): {1}</sys:String>
     <sys:String x:Key="Str_CoreStartFailFmt">Failed to start process: {0}</sys:String>
+
+    <!-- Phase 1 Safety & Diagnostics -->
+    <sys:String x:Key="Str_RwHealthBlockedBanner">Direct Read-Write is automatically blocked for this volume's safety. Use Read-Only or non-destructive Overlay mode.</sys:String>
+    <sys:String x:Key="Str_ValRwHealthBlocked">Read-Write mode is suppressed because the volume is Dirty, has errors, or uses a read-only/encrypted feature. Select Read-Only or Overlay (or enable --force-dirty for emergency RW).</sys:String>
+    <sys:String x:Key="Str_ErrOverlayUnsupportedVerTitle">Unsupported Overlay Marker Version</sys:String>
+    <sys:String x:Key="Str_ErrOverlayUnsupportedVerMsg">The specified Upperdir contains a .wh.__ext4_lower_id marker created by a newer format version.</sys:String>
+    <sys:String x:Key="Str_ErrOverlayUnsupportedVerSug">Upgrade ZeroExt4 or specify a new empty Upperdir folder.</sys:String>
+    <sys:String x:Key="Str_ErrOverlayCorruptTitle">Corrupted Overlay Lower ID Marker</sys:String>
+    <sys:String x:Key="Str_ErrOverlayCorruptMsg">The .wh.__ext4_lower_id marker file in the Upperdir is corrupted or unreadable, so Overlay mounting was blocked for safety.</sys:String>
+    <sys:String x:Key="Str_ErrOverlayCorruptSug">Specify a new empty Upperdir folder to avoid mixing files across different ext4 volumes.</sys:String>
+    <sys:String x:Key="Str_ErrOverlayLegacyRefusedTitle">Non-Empty Unmarked Upperdir Refused</sys:String>
+    <sys:String x:Key="Str_ErrOverlayLegacyRefusedMsg">ZeroExt4 refused to use a non-empty folder without a .wh.__ext4_lower_id marker.</sys:String>
+    <sys:String x:Key="Str_ErrOverlayLegacyRefusedSug">Specify an empty or new folder so existing Windows files do not shadow the lower ext4 volume.</sys:String>
+    <sys:String x:Key="Str_DoctorBtn">Run Diagnostics (doctor)</sys:String>
+    <sys:String x:Key="Str_DoctorRunning">Running diagnostics...</sys:String>
+    <sys:String x:Key="Str_DoctorHint">Click "Run Diagnostics (doctor)" to check WinFsp runtime, elevation, selected volume health, and Overlay upperdir status.</sys:String>
+    <sys:String x:Key="Str_StatusDoctorDoneFmt">Diagnostics complete ({0})</sys:String>
+    <sys:String x:Key="Str_StatusDoctorErrFmt">Diagnostics error: {0}</sys:String>
 </ResourceDictionary>

@@ -46,35 +46,33 @@
 
 | Phase | テーマ | 主な対象・成果物 | 状況 / 優先度 |
 | :--- | :--- | :--- | :---: |
-| **Phase 1**<br>（短期） | **安全性・診断の強化** | 非空レガシー Upperdir の既定拒否＆Lower ID 強化、`inspect` 診断拡充・`zeroext4 doctor`（GUI i18n は `v0.5.0`、安全 `unmount` 検証は `v0.6.0`、`--case-sensitive` は `v0.8.0` で完了） | **進行中（高）** |
+| **Phase 1**<br>（短期） | **安全性・診断の強化** | 非空未識別 Upperdir の拒否＆v2 `.wh.__ext4_lower_id` 強化、GUI Dirty/エラー時 RW 抑止、`inspect` 診断拡充・`zeroext4 doctor`（GUI i18n は `v0.5.0`、安全 `unmount` 検証は `v0.6.0`、`--case-sensitive` は `v0.8.0` で完了） | **完了** |
 | **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export`、ハッシュ化による inode/path マップ高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **中〜高** |
 | **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出、非破壊診断 `zeroext4 fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、`--rw` 標準 `libext2fs` 経路の追加最適化（バッチ連続エクステント書込・並列読込は `v0.10.0` で完了） | **中** |
 | **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／ポータブル配布評価、停止済み WSL2 `ext4.vhdx` 連携ワークフロー強化 | **低〜中** |
 
 ---
 
-## 4. Phase 1：安全性・診断の強化
+## 4. Phase 1：安全性・診断の強化（完了）
 
-### 4.1 Overlay Upperdir 安全性・Lower 識別子ガードの強化
+### 4.1 Overlay Upperdir 安全性・Lower 識別子ガードの強化（完了）
 
-現在 `src/overlay/overlay_vfs.c`（`overlay_validate_lower_id`）は Upperdir 直下の `.wh.__ext4_lower_id` に `<lower_uuid>:<blocks_count>:<block_size>`（`--case-sensitive` 時は末尾 `:cs` 付き）を保存し、別ボリュームやモード不一致時はエラーを返している。残る安全ギャップを以下の通り解消する。
+`src/overlay/overlay_vfs.c` および WPF GUI（`DriveLetterService` / `MainViewModel`）で以下を実装済み：
 
-- **非空かつマーカー無し Upperdir の既定拒否**:
-  - 現状は Upperdir に既存ファイルがあるにも関わらず `.wh.__ext4_lower_id` が存在しない場合、警告ログ（`EXT4_LOG_WARN`）を出してそのままマウント＋新規マーカー書き込みへ進むため、関係のない既存フォルダ誤指定時に Lower ファイルを意図せず上書きシャドウイングするリスクがある。
-  - 今後は **「非空かつ `.wh.__ext4_lower_id` が無い Upperdir」を既定で拒否** し、CLI では明示フラグ（例：`--allow-legacy-upper`）、GUI では確認ダイアログ経由でのみ許可する安全側に倒す。
-- **Lower 識別子の拡張（複製 `.img` / VHDX・破損対策）**:
-  - 同一 ext4 UUID を持つクローン `.img` やコピー済み VHDX を誤って同一とみなさないよう、後方互換なバージョン付き形式へ拡張し、GPT Partition UUID・パーティション開始セクタ／サイズ・Overlay 形式バージョン等を補助識別情報として保持・照合できるようにする。
-  - `.wh.__ext4_lower_id` ファイルの破損や未知の将来フォーマットを検知した場合は安全のため Overlay RW を拒否し、明確な理由を通知する。
+- **非空かつマーカー無し Upperdir の拒否**:
+  - `.wh.__ext4_lower_id` が存在しない非空 Upperdir は CLI・GUI とも安全のため拒否（`-ENOTEMPTY` / 事前バリデーションエラー）し、新しいフォルダまたは空フォルダの指定を促す。
+- **Lower 識別子の v2 拡張（複製 `.img` / VHDX・破損対策）**:
+  - `v2;uuid=<lower_uuid>;blocks=<blocks>;bsize=<bsize>;part_uuid=<part_uuid>;part_off=<part_off>;part_size=<part_size>;cs=<0|1>` 形式へ拡張し、GPT Partition UUID やパーティション配置を含めて照合する（既存の v1 形式も後方互換維持）。
+  - 破損した `.wh.__ext4_lower_id` (`-EINVAL`) および未知の将来バージョン (`-ENOTSUP`) は安全のため Overlay RW を拒否する。
 - **GUI 事前診断との連携**:
-  - 選択されたボリュームが `NEEDS_RECOVERY` / `HAS_ERRORS` の場合、GUI 上で Read-Write 選択を自動抑止して Read-Only または Overlay（Lower RO 保持）を推奨表示する。
-  - マウント開始前に選択済み Upperdir と対象 Lower の整合性を事前チェックし、不一致時は即座に警告・別 Upperdir 指定を促す。
+  - `NEEDS_RECOVERY` / `HAS_ERRORS` 等で `MountAdvice.ReadWriteAllowed == false` のボリュームでは、GUI 上で Read-Write カードを自動抑止し、保存済み RW プリセットも自動で Read-Only へフォールバックする。
 
-### 4.2 `inspect` 診断出力の拡充と `zeroext4 doctor` コマンド
+### 4.2 `inspect` 診断出力の拡充と `zeroext4 doctor` コマンド（完了）
 
-- **`zeroext4 inspect --json` の拡張**:
-  - 現在の数値ビットフラグ（`feature_compat` / `feature_incompat` / `feature_ro_compat` / `journal_state` / `journal_start` 等）に加え、可読な機能フラグ名配列、Partition UUID・開始セクタ・セクタ数、`last_mount_time` / `last_fsck_time` / `fsck_error_count`、チェックサム状態、および推奨マウント可否サマリー（`mount_advice`: Read-Only / Overlay / Read-Write 可否と理由）を出力する。
+- **`zeroext4 inspect --json` / `list --json` の拡張**:
+  - `partition_uuid`、可読な機能フラグ配列（`feature_compat_names` / `feature_incompat_names` / `feature_ro_compat_names`）、`last_mount_time` / `last_fsck_time` / `fsck_error_count`、`metadata_csum_enabled` / `sb_checksum_valid`、および `mount_advice`（`read_only_allowed` / `overlay_allowed` / `read_write_allowed` / `recommended_mode` / 理由）を出力する。
 - **`zeroext4 doctor` サブコマンドの追加**:
-  - WinFsp ランタイム導入状態、プロセス管理者権限状態、および指定ソース（`--source` / `--partition`）のマウント可否を 1 コマンドで診断・JSON 出力できる自己診断コマンドを追加する。
+  - WinFsp ランタイム導入状態（DLL パス・バージョン）、プロセス管理者権限状態、指定ソースの健全性、および指定 `--overlay` Upperdir 整合性を 1 コマンドで診断・JSON 出力できる自己診断コマンドを追加し、GUI「詳細 & ログ」タブからも呼び出し可能とした。
 
 ---
 

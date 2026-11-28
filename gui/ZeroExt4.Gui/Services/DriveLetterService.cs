@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -191,7 +192,21 @@ namespace ZeroExt4.Gui.Services
             }
         }
 
+        public static UpperDirCheckResult CheckOverlayUpperDir(string? upperDir, PartitionInfo? partition, bool caseSensitive = false)
+        {
+            return CheckOverlayUpperDirCore(upperDir, partition?.ExpectedOverlayLowerId, partition, caseSensitive);
+        }
+
         public static UpperDirCheckResult CheckOverlayUpperDir(string? upperDir, string? expectedLowerId, bool caseSensitive = false)
+        {
+            return CheckOverlayUpperDirCore(upperDir, expectedLowerId, null, caseSensitive);
+        }
+
+        private static UpperDirCheckResult CheckOverlayUpperDirCore(
+            string? upperDir,
+            string? expectedLowerId,
+            PartitionInfo? partition,
+            bool caseSensitive)
         {
             if (string.IsNullOrWhiteSpace(upperDir))
             {
@@ -261,42 +276,42 @@ namespace ZeroExt4.Gui.Services
             string markerPath = Path.Combine(full, LowerIdFileName);
             if (File.Exists(markerPath))
             {
-                string stored = string.Empty;
+                string stored;
                 try
                 {
-                    stored = File.ReadAllText(markerPath).Trim();
+                    var fi = new FileInfo(markerPath);
+                    if (fi.Length <= 0 || fi.Length > 510)
+                    {
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.CorruptMarker,
+                            Message = LocalizationService.Get("Str_UpperValCorrupt"),
+                            CanMount = false,
+                        };
+                    }
+                    stored = File.ReadAllText(markerPath).TrimEnd('\r', '\n');
                 }
                 catch
                 {
-                    // Ignore read error and let engine check
-                }
-
-                string effectiveExpected = (!string.IsNullOrWhiteSpace(expectedLowerId) && caseSensitive)
-                    ? expectedLowerId + ":cs"
-                    : (expectedLowerId ?? string.Empty);
-
-                if (!string.IsNullOrWhiteSpace(effectiveExpected) &&
-                    !string.Equals(stored, effectiveExpected, StringComparison.Ordinal))
-                {
-                    bool modeMismatchOnly = !string.IsNullOrWhiteSpace(expectedLowerId) &&
-                        (string.Equals(stored, expectedLowerId, StringComparison.Ordinal) ||
-                         string.Equals(stored, expectedLowerId + ":cs", StringComparison.Ordinal));
                     return new UpperDirCheckResult
                     {
-                        Status = UpperDirCheckStatus.MismatchedLower,
-                        Message = LocalizationService.Get(modeMismatchOnly
-                            ? "Str_UpperValCsModeMismatch"
-                            : "Str_UpperValMismatch"),
+                        Status = UpperDirCheckStatus.CorruptMarker,
+                        Message = LocalizationService.Get("Str_UpperValCorrupt"),
                         CanMount = false,
                     };
                 }
 
-                return new UpperDirCheckResult
+                if (string.IsNullOrEmpty(stored) || stored.Any(c => c < 0x20 || c == 0x7F))
                 {
-                    Status = UpperDirCheckStatus.MatchingExisting,
-                    Message = LocalizationService.Get("Str_UpperValMatch"),
-                    CanMount = true,
-                };
+                    return new UpperDirCheckResult
+                    {
+                        Status = UpperDirCheckStatus.CorruptMarker,
+                        Message = LocalizationService.Get("Str_UpperValCorrupt"),
+                        CanMount = false,
+                    };
+                }
+
+                return ValidateMarkerContent(stored, expectedLowerId, partition, caseSensitive);
             }
 
             try
@@ -316,7 +331,7 @@ namespace ZeroExt4.Gui.Services
                     {
                         Status = UpperDirCheckStatus.NonEmptyUnmarked,
                         Message = LocalizationService.Get("Str_UpperValNonEmptyUnmarked"),
-                        CanMount = true,
+                        CanMount = false,
                     };
                 }
             }
@@ -329,6 +344,184 @@ namespace ZeroExt4.Gui.Services
             {
                 Status = UpperDirCheckStatus.EmptyReady,
                 Message = LocalizationService.Get("Str_UpperValEmptyReady"),
+                CanMount = true,
+            };
+        }
+
+        private static UpperDirCheckResult ValidateMarkerContent(
+            string stored,
+            string? expectedLowerId,
+            PartitionInfo? partition,
+            bool caseSensitive)
+        {
+            if (stored.StartsWith("v2;", StringComparison.Ordinal))
+            {
+                var map = new Dictionary<string, string>(StringComparer.Ordinal);
+                string[] tokens = stored.Substring(3).Split(';');
+                foreach (string tok in tokens)
+                {
+                    if (string.IsNullOrEmpty(tok))
+                    {
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.CorruptMarker,
+                            Message = LocalizationService.Get("Str_UpperValCorrupt"),
+                            CanMount = false,
+                        };
+                    }
+                    int eq = tok.IndexOf('=');
+                    if (eq <= 0 || !map.TryAdd(tok.Substring(0, eq), tok.Substring(eq + 1)))
+                    {
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.CorruptMarker,
+                            Message = LocalizationService.Get("Str_UpperValCorrupt"),
+                            CanMount = false,
+                        };
+                    }
+                }
+
+                if (map.Count != 7 ||
+                    !map.TryGetValue("uuid", out string? mUuid) || string.IsNullOrWhiteSpace(mUuid) ||
+                    !map.TryGetValue("blocks", out string? mBlocksStr) || !ulong.TryParse(mBlocksStr, NumberStyles.None, CultureInfo.InvariantCulture, out ulong mBlocks) ||
+                    !map.TryGetValue("bsize", out string? mBsizeStr) || !uint.TryParse(mBsizeStr, NumberStyles.None, CultureInfo.InvariantCulture, out uint mBsize) || mBsize < 1024 ||
+                    !map.TryGetValue("part_uuid", out string? mPartUuid) ||
+                    !map.TryGetValue("part_off", out string? mOffStr) || !ulong.TryParse(mOffStr, NumberStyles.None, CultureInfo.InvariantCulture, out ulong mPartOff) ||
+                    !map.TryGetValue("part_size", out string? mSizeStr) || !ulong.TryParse(mSizeStr, NumberStyles.None, CultureInfo.InvariantCulture, out ulong mPartSize) ||
+                    !map.TryGetValue("cs", out string? mCsStr) || (mCsStr != "0" && mCsStr != "1"))
+                {
+                    return new UpperDirCheckResult
+                    {
+                        Status = UpperDirCheckStatus.CorruptMarker,
+                        Message = LocalizationService.Get("Str_UpperValCorrupt"),
+                        CanMount = false,
+                    };
+                }
+
+                bool mCs = mCsStr == "1";
+                if (partition != null && !string.IsNullOrWhiteSpace(partition.Uuid))
+                {
+                    ulong expSize = partition.SizeBytes > 0 ? partition.SizeBytes : partition.EffectiveTotalBytes;
+                    bool idMatch = string.Equals(mUuid, partition.Uuid, StringComparison.OrdinalIgnoreCase) &&
+                                   mBlocks == partition.BlocksCount &&
+                                   mBsize == partition.BlockSize &&
+                                   string.Equals(mPartUuid, partition.PartitionUuid ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+                                   mPartOff == partition.OffsetBytes &&
+                                   mPartSize == expSize;
+                    if (!idMatch)
+                    {
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.MismatchedLower,
+                            Message = LocalizationService.Get("Str_UpperValMismatch"),
+                            CanMount = false,
+                        };
+                    }
+                    if (mCs != caseSensitive)
+                    {
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.MismatchedLower,
+                            Message = LocalizationService.Get("Str_UpperValCsModeMismatch"),
+                            CanMount = false,
+                        };
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(expectedLowerId))
+                {
+                    string v1Equivalent = mCs ? $"{mUuid}:{mBlocks}:{mBsize}:cs" : $"{mUuid}:{mBlocks}:{mBsize}";
+                    string effectiveExpected = caseSensitive ? expectedLowerId + ":cs" : expectedLowerId;
+                    if (!string.Equals(v1Equivalent, effectiveExpected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool modeMismatchOnly =
+                            string.Equals(v1Equivalent, expectedLowerId, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(v1Equivalent, expectedLowerId + ":cs", StringComparison.OrdinalIgnoreCase);
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.MismatchedLower,
+                            Message = LocalizationService.Get(modeMismatchOnly
+                                ? "Str_UpperValCsModeMismatch"
+                                : "Str_UpperValMismatch"),
+                            CanMount = false,
+                        };
+                    }
+                }
+
+                return new UpperDirCheckResult
+                {
+                    Status = UpperDirCheckStatus.MatchingExisting,
+                    Message = LocalizationService.Get("Str_UpperValMatch"),
+                    CanMount = true,
+                };
+            }
+
+            if (stored.Length >= 3 && stored[0] == 'v' && char.IsDigit(stored[1]))
+            {
+                int semiIdx = stored.IndexOf(';');
+                if (semiIdx > 1 &&
+                    ulong.TryParse(stored.AsSpan(1, semiIdx - 1), NumberStyles.None, CultureInfo.InvariantCulture, out ulong ver))
+                {
+                    if (ver > 2)
+                    {
+                        return new UpperDirCheckResult
+                        {
+                            Status = UpperDirCheckStatus.UnsupportedMarkerVersion,
+                            Message = LocalizationService.Format("Str_UpperValUnsupportedVerFmt", ver),
+                            CanMount = false,
+                        };
+                    }
+                    return new UpperDirCheckResult
+                    {
+                        Status = UpperDirCheckStatus.CorruptMarker,
+                        Message = LocalizationService.Get("Str_UpperValCorrupt"),
+                        CanMount = false,
+                    };
+                }
+            }
+
+            // Legacy v1 format: <uuid>:<blocks>:<bsize>[:cs]
+            string[] parts = stored.Split(':');
+            if ((parts.Length != 3 && parts.Length != 4) ||
+                string.IsNullOrWhiteSpace(parts[0]) ||
+                !ulong.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out _) ||
+                !uint.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out uint v1Bsize) ||
+                v1Bsize < 1024 ||
+                (parts.Length == 4 && parts[3] != "cs"))
+            {
+                return new UpperDirCheckResult
+                {
+                    Status = UpperDirCheckStatus.CorruptMarker,
+                    Message = LocalizationService.Get("Str_UpperValCorrupt"),
+                    CanMount = false,
+                };
+            }
+
+            string? expectedV1 = !string.IsNullOrWhiteSpace(expectedLowerId)
+                ? expectedLowerId
+                : partition?.ExpectedOverlayLowerId;
+            if (!string.IsNullOrWhiteSpace(expectedV1))
+            {
+                string effectiveExpected = caseSensitive ? expectedV1 + ":cs" : expectedV1;
+                if (!string.Equals(stored, effectiveExpected, StringComparison.OrdinalIgnoreCase))
+                {
+                    bool modeMismatchOnly =
+                        string.Equals(stored, expectedV1, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(stored, expectedV1 + ":cs", StringComparison.OrdinalIgnoreCase);
+                    return new UpperDirCheckResult
+                    {
+                        Status = UpperDirCheckStatus.MismatchedLower,
+                        Message = LocalizationService.Get(modeMismatchOnly
+                            ? "Str_UpperValCsModeMismatch"
+                            : "Str_UpperValMismatch"),
+                        CanMount = false,
+                    };
+                }
+            }
+
+            return new UpperDirCheckResult
+            {
+                Status = UpperDirCheckStatus.MatchingExisting,
+                Message = LocalizationService.Get("Str_UpperValMatch"),
                 CanMount = true,
             };
         }

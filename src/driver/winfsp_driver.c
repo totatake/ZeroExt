@@ -3,6 +3,7 @@
 #include "../trace/perfetto_trace.h"
 #include <sddl.h>
 #include <shlobj.h>
+#include <winver.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1249,6 +1250,52 @@ int winfsp_driver_is_runtime_available(void) {
     FSP_RUNTIME_API *api = FspGetRuntimeApi();
     return (api && api->Module && api->Create && api->SetMountPoint &&
             api->StartDispatcher && api->StopDispatcher && api->Delete) ? 1 : 0;
+}
+
+int winfsp_driver_get_runtime_info(char *out_dll_path, size_t path_sz,
+                                   char *out_version, size_t ver_sz) {
+    FSP_RUNTIME_API *api;
+    WCHAR wpath[MAX_PATH * 2];
+    DWORD n;
+    DWORD ver_handle = 0;
+    DWORD ver_size;
+
+    if (out_dll_path && path_sz > 0) out_dll_path[0] = '\0';
+    if (out_version && ver_sz > 0) out_version[0] = '\0';
+
+    if (!winfsp_driver_is_runtime_available()) {
+        return 0;
+    }
+
+    api = FspGetRuntimeApi();
+    n = GetModuleFileNameW(api->Module, wpath, _countof(wpath));
+    if (n > 0 && n < _countof(wpath)) {
+        if (out_dll_path && path_sz > 0) {
+            ext4_wide_to_utf8(wpath, out_dll_path, path_sz);
+        }
+        if (out_version && ver_sz > 0) {
+            ver_size = GetFileVersionInfoSizeW(wpath, &ver_handle);
+            if (ver_size > 0) {
+                void *ver_buf = malloc(ver_size);
+                if (ver_buf) {
+                    if (GetFileVersionInfoW(wpath, 0, ver_size, ver_buf)) {
+                        VS_FIXEDFILEINFO *ffi = NULL;
+                        UINT ffi_len = 0;
+                        if (VerQueryValueW(ver_buf, L"\\", (LPVOID *)&ffi, &ffi_len) &&
+                            ffi && ffi_len >= sizeof(*ffi)) {
+                            _snprintf_s(out_version, ver_sz, _TRUNCATE, "%u.%u.%u.%u",
+                                        (unsigned)HIWORD(ffi->dwFileVersionMS),
+                                        (unsigned)LOWORD(ffi->dwFileVersionMS),
+                                        (unsigned)HIWORD(ffi->dwFileVersionLS),
+                                        (unsigned)LOWORD(ffi->dwFileVersionLS));
+                        }
+                    }
+                    free(ver_buf);
+                }
+            }
+        }
+    }
+    return 1;
 }
 
 int winfsp_driver_is_process_elevated(void) {

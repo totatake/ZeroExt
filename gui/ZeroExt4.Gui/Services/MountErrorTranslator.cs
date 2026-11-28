@@ -61,6 +61,45 @@ namespace ZeroExt4.Gui.Services
                 };
             }
 
+            if (allText.Contains("Unsupported .wh.__ext4_lower_id marker format version", StringComparison.OrdinalIgnoreCase) ||
+                (code == -95 /* -ENOTSUP */ && allText.Contains(".wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase)))
+            {
+                return new TranslatedMountError
+                {
+                    Title = LocalizationService.Get("Str_ErrOverlayUnsupportedVerTitle"),
+                    Message = LocalizationService.Get("Str_ErrOverlayUnsupportedVerMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrOverlayUnsupportedVerSug"),
+                    RawDetail = allText,
+                };
+            }
+
+            if ((allText.Contains("Corrupted", StringComparison.OrdinalIgnoreCase) ||
+                 allText.Contains("Invalid .wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase) ||
+                 allText.Contains("oversized .wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase) ||
+                 allText.Contains("Failed to read .wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase)) &&
+                allText.Contains(".wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase))
+            {
+                return new TranslatedMountError
+                {
+                    Title = LocalizationService.Get("Str_ErrOverlayCorruptTitle"),
+                    Message = LocalizationService.Get("Str_ErrOverlayCorruptMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrOverlayCorruptSug"),
+                    RawDetail = allText,
+                };
+            }
+
+            if (allText.Contains("Refusing non-empty upperdir without .wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase) ||
+                (code == -41 /* -ENOTEMPTY */ && allText.Contains("upperdir", StringComparison.OrdinalIgnoreCase)))
+            {
+                return new TranslatedMountError
+                {
+                    Title = LocalizationService.Get("Str_ErrOverlayLegacyRefusedTitle"),
+                    Message = LocalizationService.Get("Str_ErrOverlayLegacyRefusedMsg"),
+                    Suggestion = LocalizationService.Get("Str_ErrOverlayLegacyRefusedSug"),
+                    RawDetail = allText,
+                };
+            }
+
             if (allText.Contains("belongs to a different lower ext4 filesystem", StringComparison.OrdinalIgnoreCase) ||
                 allText.Contains(".wh.__ext4_lower_id", StringComparison.OrdinalIgnoreCase))
             {

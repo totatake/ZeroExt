@@ -75,6 +75,40 @@ namespace ZeroExt4.Gui.Services
             return new List<string> { "unmount", NormalizeMountPointArg(driveLetter) };
         }
 
+        public static List<string> BuildDoctorArgs(
+            string? sourcePath = null,
+            uint? partitionNumber = null,
+            string? overlayDir = null,
+            bool caseSensitive = false,
+            bool json = true)
+        {
+            var args = new List<string> { "doctor" };
+            if (!string.IsNullOrWhiteSpace(sourcePath))
+            {
+                args.Add("--source");
+                args.Add(sourcePath.Trim());
+                if (partitionNumber.HasValue && partitionNumber.Value > 0)
+                {
+                    args.Add("--partition");
+                    args.Add(partitionNumber.Value.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(overlayDir))
+            {
+                args.Add("--overlay");
+                args.Add(overlayDir.Trim());
+            }
+            if (caseSensitive)
+            {
+                args.Add("--case-sensitive");
+            }
+            if (json)
+            {
+                args.Add("--json");
+            }
+            return args;
+        }
+
         public static List<string> BuildMountArgs(
             MountRequest req,
             string? stopEventName = null,

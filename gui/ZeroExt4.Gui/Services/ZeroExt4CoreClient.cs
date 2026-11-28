@@ -97,6 +97,24 @@ namespace ZeroExt4.Gui.Services
             return await RunCommandAsync(args, ct).ConfigureAwait(false);
         }
 
+        public async Task<DoctorResponse> RunDoctorAsync(
+            string? sourcePath = null,
+            uint? partitionNumber = null,
+            string? overlayDir = null,
+            bool caseSensitive = false,
+            CancellationToken ct = default)
+        {
+            List<string> args = ZeroExt4ArgBuilder.BuildDoctorArgs(
+                sourcePath, partitionNumber, overlayDir, caseSensitive, json: true);
+            CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(res.StdOut))
+            {
+                throw new InvalidOperationException(
+                    LocalizationService.Format("Str_CoreDoctorFailFmt", res.ExitCode, res.StdErr).Trim());
+            }
+            return ParseDoctorResponse(res.StdOut);
+        }
+
         public async Task<CoreCommandResult> RunCommandAsync(
             IReadOnlyList<string> args,
             CancellationToken ct = default)
@@ -161,6 +179,12 @@ namespace ZeroExt4.Gui.Services
         {
             LsResponse? parsed = JsonSerializer.Deserialize<LsResponse>(json, JsonOptions);
             return parsed ?? new LsResponse();
+        }
+
+        public static DoctorResponse ParseDoctorResponse(string json)
+        {
+            DoctorResponse? parsed = JsonSerializer.Deserialize<DoctorResponse>(json, JsonOptions);
+            return parsed ?? new DoctorResponse();
         }
 
         public static MountEventMessage? TryParseMountEvent(string line)

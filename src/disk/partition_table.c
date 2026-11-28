@@ -139,6 +139,18 @@ static int parse_gpt(io_channel io, const char *path_utf8, uint32_t sector_size,
         pe->size_bytes = pe->sector_count * sector_size;
         format_gpt_guid(e, pe->type_id);
         strcpy_s(pe->type_description, sizeof(pe->type_description), describe_gpt_guid(pe->type_id));
+        {
+            int has_part_guid = 0;
+            for (k = 0; k < 16; k++) {
+                if (e[0x10 + k] != 0) {
+                    has_part_guid = 1;
+                    break;
+                }
+            }
+            if (has_part_guid) {
+                format_gpt_guid(e + 0x10, pe->partition_uuid);
+            }
+        }
 
         {
             wchar_t wname[37];
@@ -317,11 +329,15 @@ int pt_read_partitions(const char *path_utf8, uint32_t sector_size_hint, pt_tabl
     return 0;
 }
 
-int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
-                         uint64_t *out_offset, uint64_t *out_size, uint32_t *out_sector_size) {
+int pt_resolve_partition_ex(const char *path_utf8, uint32_t partition_number,
+                            uint64_t *out_offset, uint64_t *out_size, uint32_t *out_sector_size,
+                            char *out_part_uuid, size_t out_part_uuid_sz) {
     pt_table_result_t *res = (pt_table_result_t *)calloc(1, sizeof(*res));
     uint32_t i;
     int found = -1;
+    if (out_part_uuid && out_part_uuid_sz > 0) {
+        out_part_uuid[0] = '\0';
+    }
     if (!res) return -1;
 
     if (pt_read_partitions(path_utf8, 0, res) == 0) {
@@ -330,6 +346,9 @@ int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
                 if (out_offset) *out_offset = 0;
                 if (out_size) *out_size = res->partitions[0].size_bytes;
                 if (out_sector_size) *out_sector_size = res->effective_sector_size;
+                if (out_part_uuid && out_part_uuid_sz > 0) {
+                    strcpy_s(out_part_uuid, out_part_uuid_sz, res->partitions[0].partition_uuid);
+                }
                 found = 0;
             } else {
                 for (i = 0; i < res->count; i++) {
@@ -337,6 +356,9 @@ int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
                         if (out_offset) *out_offset = res->partitions[i].offset_bytes;
                         if (out_size) *out_size = res->partitions[i].size_bytes;
                         if (out_sector_size) *out_sector_size = res->effective_sector_size;
+                        if (out_part_uuid && out_part_uuid_sz > 0) {
+                            strcpy_s(out_part_uuid, out_part_uuid_sz, res->partitions[i].partition_uuid);
+                        }
                         found = 0;
                         break;
                     }
@@ -348,6 +370,9 @@ int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
                     if (out_offset) *out_offset = res->partitions[i].offset_bytes;
                     if (out_size) *out_size = res->partitions[i].size_bytes;
                     if (out_sector_size) *out_sector_size = res->effective_sector_size;
+                    if (out_part_uuid && out_part_uuid_sz > 0) {
+                        strcpy_s(out_part_uuid, out_part_uuid_sz, res->partitions[i].partition_uuid);
+                    }
                     found = 0;
                     break;
                 }
@@ -357,4 +382,10 @@ int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
 
     free(res);
     return found;
+}
+
+int pt_resolve_partition(const char *path_utf8, uint32_t partition_number,
+                         uint64_t *out_offset, uint64_t *out_size, uint32_t *out_sector_size) {
+    return pt_resolve_partition_ex(path_utf8, partition_number, out_offset, out_size,
+                                   out_sector_size, NULL, 0);
 }

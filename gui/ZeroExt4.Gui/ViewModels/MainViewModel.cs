@@ -162,6 +162,8 @@ namespace ZeroExt4.Gui.ViewModels
         private bool _isWinFspAvailable = true;
         private bool _isScanning;
         private bool _isMounting;
+        private bool _isRunningDoctor;
+        private string _doctorSummary = string.Empty;
         private bool _showNonExtPartitions;
         private bool _isDarkTheme;
         private string _languageSetting = "auto";
@@ -212,6 +214,7 @@ namespace ZeroExt4.Gui.ViewModels
         public AsyncRelayCommand UnmountAllCommand { get; }
         public AsyncRelayCommand RefreshBrowseCommand { get; }
         public AsyncRelayCommand NavigateUpBrowseCommand { get; }
+        public AsyncRelayCommand RunDoctorCommand { get; }
         public RelayCommand ToggleThemeCommand { get; }
         public RelayCommand SetAutoOverlayPathCommand { get; }
         public RelayCommand ClearLogsCommand { get; }
@@ -280,6 +283,9 @@ namespace ZeroExt4.Gui.ViewModels
             NavigateUpBrowseCommand = new AsyncRelayCommand(
                 () => LoadBrowseDirectoryAsync(GetParentUnixPath(CurrentBrowsePath)),
                 () => CanNavigateUpBrowse && !IsBrowseLoading && HasCoreExe);
+            RunDoctorCommand = new AsyncRelayCommand(
+                RunDoctorAsync,
+                () => !IsRunningDoctor && HasCoreExe);
 
             ToggleThemeCommand = new RelayCommand(() => IsDarkTheme = !IsDarkTheme);
             SetAutoOverlayPathCommand = new RelayCommand(ApplySuggestedOverlayPath, () => SelectedPartition != null);
@@ -365,6 +371,24 @@ namespace ZeroExt4.Gui.ViewModels
                     MountCommand.RaiseCanExecuteChanged();
                 }
             }
+        }
+
+        public bool IsRunningDoctor
+        {
+            get => _isRunningDoctor;
+            private set
+            {
+                if (SetProperty(ref _isRunningDoctor, value))
+                {
+                    RunDoctorCommand.RaiseCanExecuteChanged();
+                }
+            }
+        }
+
+        public string DoctorSummary
+        {
+            get => _doctorSummary;
+            private set => SetProperty(ref _doctorSummary, value);
         }
 
         public bool ShowNonExtPartitions
@@ -455,6 +479,9 @@ namespace ZeroExt4.Gui.ViewModels
                     OnPropertyChanged(nameof(HasNoSelectedPartition));
                     OnPropertyChanged(nameof(SelectedIsExtFs));
                     OnPropertyChanged(nameof(SelectedIsDirty));
+                    OnPropertyChanged(nameof(IsReadWriteBlockedByHealth));
+                    OnPropertyChanged(nameof(CanSelectReadWrite));
+                    OnPropertyChanged(nameof(ReadWriteHealthNotice));
                     OnPropertyChanged(nameof(ShowDirtyRwWarning));
                     OnPropertyChanged(nameof(SelectedVolumeTitle));
                     OnPropertyChanged(nameof(SelectedVolumeSubtitle));
@@ -482,6 +509,24 @@ namespace ZeroExt4.Gui.ViewModels
         public bool HasNoSelectedPartition => SelectedPartition == null;
         public bool SelectedIsExtFs => SelectedPartition?.Info.IsExtFs ?? false;
         public bool SelectedIsDirty => SelectedPartition?.Info.IsDirty ?? false;
+        public bool IsReadWriteBlockedByHealth =>
+            SelectedPartition?.Info.IsExtFs == true &&
+            (SelectedPartition.Info.IsDirty ||
+             (SelectedPartition.Info.MountAdvice != null && !SelectedPartition.Info.MountAdvice.ReadWriteAllowed));
+        public bool CanSelectReadWrite => !IsReadWriteBlockedByHealth;
+        public string ReadWriteHealthNotice
+        {
+            get
+            {
+                if (!IsReadWriteBlockedByHealth) return string.Empty;
+                string? reason = SelectedPartition?.Info.MountAdvice?.RwReason;
+                if (!string.IsNullOrWhiteSpace(reason))
+                {
+                    return reason;
+                }
+                return LocalizationService.Get("Str_ValRwHealthBlocked");
+            }
+        }
 
         public string SelectedVolumeTitle =>
             SelectedPartition == null
@@ -497,7 +542,9 @@ namespace ZeroExt4.Gui.ViewModels
             LocalizationService.Format("Str_JournalStateFmt", SelectedPartition?.Info.JournalDisplayText ?? "-");
 
         public string ExpectedLowerIdDisplay =>
-            SelectedPartition?.Info.ExpectedOverlayLowerId ?? "-";
+            SelectedPartition?.Info.GetExpectedOverlayLowerIdV2(CaseSensitive)
+            ?? SelectedPartition?.Info.ExpectedOverlayLowerId
+            ?? "-";
 
         public MountMode SelectedMode
         {
@@ -617,6 +664,7 @@ namespace ZeroExt4.Gui.ViewModels
             {
                 if (SetProperty(ref _caseSensitive, value))
                 {
+                    OnPropertyChanged(nameof(ExpectedLowerIdDisplay));
                     RefreshUpperDirValidation();
                     NotifyMountStateChanged();
                 }
@@ -772,6 +820,11 @@ namespace ZeroExt4.Gui.ViewModels
                     return UpperDirCheck.Message;
                 }
 
+                if (SelectedMode == MountMode.ReadWrite && IsReadWriteBlockedByHealth && !ForceDirty)
+                {
+                    return LocalizationService.Get("Str_ValRwHealthBlocked");
+                }
+
                 if (!uint.TryParse(CacheBlocksText, out uint cb) || cb == 0)
                 {
                     return LocalizationService.Get("Str_ValInvalidCacheBlocks");
@@ -841,6 +894,7 @@ namespace ZeroExt4.Gui.ViewModels
             OnPropertyChanged(nameof(WinFspBannerVisible));
             NotifyMountStateChanged();
             RefreshDisksCommand.RaiseCanExecuteChanged();
+            RunDoctorCommand.RaiseCanExecuteChanged();
         }
 
         public async Task RefreshAllAsync()
@@ -1030,7 +1084,10 @@ namespace ZeroExt4.Gui.ViewModels
 
         public async Task ExecuteMountAsync()
         {
-            if (SelectedPartition == null || !CanMount) return;
+            if (SelectedPartition == null) return;
+            RefreshUpperDirValidation();
+            NotifyMountStateChanged();
+            if (!CanMount) return;
 
             MountRequest req = BuildCurrentMountRequest();
             SavePresetForSelectedPartition();
@@ -1067,6 +1124,61 @@ namespace ZeroExt4.Gui.ViewModels
             {
                 IsMounting = false;
                 NotifyMountStateChanged();
+            }
+        }
+
+        public async Task RunDoctorAsync()
+        {
+            if (!HasCoreExe || IsRunningDoctor) return;
+            IsRunningDoctor = true;
+            StatusMessage = LocalizationService.Get("Str_DoctorRunning");
+            try
+            {
+                string? src = SelectedPartition?.ParentDisk.DevicePath;
+                uint? part = SelectedPartition?.Info.PartitionNumber;
+                string? ovDir = SelectedMode == MountMode.Overlay && !string.IsNullOrWhiteSpace(OverlayUpperDir)
+                    ? OverlayUpperDir.Trim()
+                    : null;
+
+                DoctorResponse doc = await _coreClient.RunDoctorAsync(src, part, ovDir, CaseSensitive);
+                IsElevated = doc.IsElevated;
+                IsWinFspAvailable = doc.WinFsp.Available;
+                OnPropertyChanged(nameof(NonElevatedNoticeVisible));
+
+                var lines = new List<string>
+                {
+                    $"status={doc.OverallStatus} | elevated={doc.IsElevated} | can_mount_drive={doc.CanMountDrive}",
+                    $"winfsp={(doc.WinFsp.Available ? $"OK ({doc.WinFsp.Version})" : "NOT FOUND")}",
+                };
+                if (doc.Source != null)
+                {
+                    if (!doc.Source.Readable || !doc.Source.PartitionFound)
+                    {
+                        lines.Add($"source=ERROR ({doc.Source.Error})");
+                    }
+                    else if (doc.Source.Partition != null)
+                    {
+                        PartitionInfo p = doc.Source.Partition;
+                        lines.Add($"source={p.FsKind} | journal={p.JournalState} | csum={p.ChecksumSummary} | rec={p.MountAdvice?.RecommendedMode ?? "-"}");
+                    }
+                }
+                if (doc.Overlay != null)
+                {
+                    lines.Add($"overlay={doc.Overlay.Status} (can_mount={doc.Overlay.CanMount}, marker_ver={doc.Overlay.MarkerVersion})");
+                }
+                DoctorSummary = string.Join(Environment.NewLine, lines);
+                AppendLog("[doctor] " + string.Join(" ; ", lines));
+                StatusMessage = LocalizationService.Format("Str_StatusDoctorDoneFmt", doc.OverallStatus);
+            }
+            catch (Exception ex)
+            {
+                DoctorSummary = ex.Message;
+                AppendLog($"[doctor] {ex.Message}");
+                StatusMessage = LocalizationService.Format("Str_StatusDoctorErrFmt", ex.Message);
+            }
+            finally
+            {
+                IsRunningDoctor = false;
             }
         }
 
@@ -1258,6 +1370,8 @@ namespace ZeroExt4.Gui.ViewModels
                 OnPropertyChanged(nameof(SelectedVolumeTitle));
                 OnPropertyChanged(nameof(SelectedVolumeSubtitle));
                 OnPropertyChanged(nameof(SelectedJournalHeaderText));
+                OnPropertyChanged(nameof(ExpectedLowerIdDisplay));
+                OnPropertyChanged(nameof(ReadWriteHealthNotice));
                 OnPropertyChanged(nameof(ActiveMountCountText));
                 OnPropertyChanged(nameof(ActiveMountsTabHeader));
                 foreach (DiskGroupItem g in DiskGroups)
@@ -1327,6 +1441,11 @@ namespace ZeroExt4.Gui.ViewModels
                 _caseSensitive = preset.CaseSensitive;
                 _cacheBlocksText = (preset.CacheBlocks > 0 ? preset.CacheBlocks : 2048).ToString();
                 _roFallbackOnDirty = preset.RoFallbackOnDirty;
+                if (IsReadWriteBlockedByHealth && _selectedMode == MountMode.ReadWrite)
+                {
+                    _selectedMode = MountMode.ReadOnly;
+                    _forceDirty = false;
+                }
 
                 OnPropertyChanged(nameof(SelectedMode));
                 OnPropertyChanged(nameof(IsReadOnlyMode));
@@ -1404,7 +1523,7 @@ namespace ZeroExt4.Gui.ViewModels
 
             UpperDirCheck = DriveLetterService.CheckOverlayUpperDir(
                 OverlayUpperDir,
-                SelectedPartition?.Info.ExpectedOverlayLowerId,
+                SelectedPartition?.Info,
                 CaseSensitive);
         }
 

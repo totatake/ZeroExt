@@ -114,7 +114,10 @@ static int test_gpt_disk_and_embedded_ext4(void) {
         uint8_t *e2 = disk_hdr + 1024 + 128;
         /* 0FC63DAF-8483-4772-8E79-3D69D8477DE4 */
         uint8_t linux_guid[16] = { 0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4 };
+        /* Unique Partition GUID -> 44332211-6655-4877-99AA-BBCCDDEEFF01 */
+        uint8_t part_guid[16] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x48, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01 };
         memcpy(e2, linux_guid, 16);
+        memcpy(e2 + 0x10, part_guid, 16);
         write_le64(e2 + 0x20, part2_lba);
         write_le64(e2 + 0x28, part2_lba + part2_sectors - 1);
         e2[0x38] = 'r'; e2[0x3A] = 'o'; e2[0x3C] = 'o'; e2[0x3E] = 't';
@@ -133,9 +136,21 @@ static int test_gpt_disk_and_embedded_ext4(void) {
     TEST_ASSERT_EQ_INT(1, res.partitions[0].partition_number);
     TEST_ASSERT_EQ_INT(2, res.partitions[1].partition_number);
     TEST_ASSERT(strcmp(res.partitions[1].partition_name, "root") == 0);
+    TEST_ASSERT(strcmp(res.partitions[1].partition_uuid, "44332211-6655-4877-99AA-BBCCDDEEFF01") == 0);
     TEST_ASSERT_EQ_INT(EXT4_FS_EXT4, res.partitions[1].probe.fs_kind);
     TEST_ASSERT(strcmp(res.partitions[1].probe.volume_label, "GPT_DATA") == 0);
     TEST_ASSERT_EQ_INT(EXT4_JOURNAL_NONE, res.partitions[1].probe.journal_state);
+    TEST_ASSERT_EQ_INT(1, res.partitions[1].probe.metadata_csum_enabled);
+    TEST_ASSERT_EQ_INT(1, res.partitions[1].probe.sb_checksum_valid);
+    {
+        char resolved_uuid[48] = {0};
+        uint64_t roff = 0, rsz = 0;
+        uint32_t rsec = 0;
+        TEST_ASSERT_EQ_INT(0, pt_resolve_partition_ex(disk_path, 2, &roff, &rsz, &rsec,
+                                                      resolved_uuid, sizeof(resolved_uuid)));
+        TEST_ASSERT(strcmp(resolved_uuid, "44332211-6655-4877-99AA-BBCCDDEEFF01") == 0);
+        TEST_ASSERT_EQ_INT((long long)(part2_lba * 512ULL), (long long)roff);
+    }
 
     DeleteFileA(disk_path);
     DeleteFileA(part_img);
@@ -292,10 +307,97 @@ static int test_dirty_journal_and_jbd2_probe(void) {
     return 0;
 }
 
+static int has_str_in_list(const char **arr, size_t n, const char *target) {
+    for (size_t i = 0; i < n; i++) {
+        if (strcmp(arr[i], target) == 0) return 1;
+    }
+    return 0;
+}
+
+static int test_probe_extended_diagnostics_and_mount_advice(void) {
+    char img_path[MAX_PATH];
+    win32_io_config_t cfg;
+    ext2_filsys fs = NULL;
+    ext4_probe_result_t probe;
+    ext4_mount_advice_t advice;
+    const char *names[32];
+    size_t n;
+    FILE *fp;
+    uint8_t sb_raw[1024];
+
+    test_make_temp_path(img_path, sizeof(img_path), "probe_diag.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "DIAGTEST"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.sector_size = 4096;
+    win32_io_set_next_config(&cfg);
+    TEST_ASSERT_EQ_INT(0, ext2fs_open2(img_path, NULL, EXT2_FLAG_RW | EXT2_FLAG_64BITS,
+                                       0, 0, win32_io_manager, &fs));
+    fs->super->s_mtime = 1700000000U;
+    fs->super->s_lastcheck = 1700000100U;
+    fs->super->s_error_count = 3U;
+    ext2fs_mark_super_dirty(fs);
+    TEST_ASSERT_EQ_INT(0, ext2fs_close_free(&fs));
+
+    TEST_ASSERT_EQ_INT(0, ext4_probe_partition(img_path, 0, 0, 4096, &probe));
+    TEST_ASSERT_EQ_INT(1700000000LL, (long long)probe.last_mount_time);
+    TEST_ASSERT_EQ_INT(1700000100LL, (long long)probe.last_fsck_time);
+    TEST_ASSERT_EQ_INT(3, probe.fsck_error_count);
+    TEST_ASSERT_EQ_INT(1, probe.metadata_csum_enabled);
+    TEST_ASSERT_EQ_INT(1, probe.sb_checksum_valid);
+
+    n = ext4_feature_incompat_names(probe.feature_incompat, names, _countof(names));
+    TEST_ASSERT(has_str_in_list(names, n, "extents"));
+    TEST_ASSERT(has_str_in_list(names, n, "64bit"));
+    n = ext4_feature_ro_compat_names(probe.feature_ro_compat, names, _countof(names));
+    TEST_ASSERT(has_str_in_list(names, n, "metadata_csum"));
+
+    ext4_evaluate_mount_advice(&probe, &advice);
+    TEST_ASSERT_EQ_INT(1, advice.read_only_allowed);
+    TEST_ASSERT_EQ_INT(1, advice.overlay_allowed);
+    TEST_ASSERT_EQ_INT(1, advice.read_write_allowed);
+    TEST_ASSERT(strcmp(advice.recommended_mode, "read_only") == 0);
+
+    probe.journal_state = EXT4_JOURNAL_NEEDS_RECOVERY;
+    ext4_evaluate_mount_advice(&probe, &advice);
+    TEST_ASSERT_EQ_INT(1, advice.read_only_allowed);
+    TEST_ASSERT_EQ_INT(1, advice.overlay_allowed);
+    TEST_ASSERT_EQ_INT(0, advice.read_write_allowed);
+
+    probe.journal_state = EXT4_JOURNAL_CLEAN;
+    probe.feature_incompat |= EXT4_FEATURE_INCOMPAT_ENCRYPT;
+    ext4_evaluate_mount_advice(&probe, &advice);
+    TEST_ASSERT_EQ_INT(1, advice.read_only_allowed);
+    TEST_ASSERT_EQ_INT(1, advice.overlay_allowed);
+    TEST_ASSERT_EQ_INT(0, advice.read_write_allowed);
+
+    /* Corrupt raw superblock checksum bytes and verify detection */
+    fp = fopen(img_path, "rb");
+    TEST_ASSERT(fp != NULL);
+    TEST_ASSERT_EQ_INT(0, fseek(fp, 1024, SEEK_SET));
+    TEST_ASSERT_EQ_INT(sizeof(sb_raw), (long long)fread(sb_raw, 1, sizeof(sb_raw), fp));
+    fclose(fp);
+    sb_raw[offsetof(struct ext2_super_block, s_checksum)] ^= 0x5AU;
+
+    TEST_ASSERT_EQ_INT(0, ext4_probe_superblock_buffer(sb_raw, &probe));
+    TEST_ASSERT_EQ_INT(1, probe.metadata_csum_enabled);
+    TEST_ASSERT_EQ_INT(0, probe.sb_checksum_valid);
+    ext4_evaluate_mount_advice(&probe, &advice);
+    TEST_ASSERT_EQ_INT(0, advice.read_only_allowed);
+    TEST_ASSERT_EQ_INT(0, advice.overlay_allowed);
+    TEST_ASSERT_EQ_INT(0, advice.read_write_allowed);
+    TEST_ASSERT(strcmp(advice.recommended_mode, "none") == 0);
+
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_partition_and_probe(void) {
     int suite_failures = 0;
     RUN_TEST(test_gpt_disk_and_embedded_ext4);
     RUN_TEST(test_mbr_and_ebr_logical_partitions);
     RUN_TEST(test_dirty_journal_and_jbd2_probe);
+    RUN_TEST(test_probe_extended_diagnostics_and_mount_advice);
     return suite_failures;
 }
