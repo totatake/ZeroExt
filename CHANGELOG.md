@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-28
+
+### Fixed
+- Fixed case-insensitive directory-open failures when a real directory (e.g., `AAA` / `ZZZ`) and a case-colliding symlink pointing to it (`aaa -> AAA` / `zzz -> ZZZ`) coexist in the same parent directory (`src/vfs/op_init.c`, `src/overlay/overlay_vfs.c`):
+  - Added `leaf_canonical` tracking and `all_ci_unique` guards in `ext4_vfs_lookup_locked_ex()` / `dentry_cache` so mixed-case ancestor lookups never cache unverified exact matches as case-insensitive wildcards (`exact_only = 0`), preventing `STATUS_REPARSE_POINT_NOT_RESOLVED` loops.
+  - Scoped `overlay_assign_ino()` (`ov_find_by_path_for_assign_locked()`) by `lower_ino` to prevent symlink/directory inode aliasing under case-insensitive mounts, and resolved Lower directories using the actual Upper directory leaf casing after copy-up in `overlay_resolve_impl()`.
+
+### Changed
+- Bundled `docs/guides/usage.md` in the Windows release ZIP archive (`.github/workflows/release.yml`) so `README.md` / `README.ja.md` links resolve offline after extraction.
+- Added regression tests (`test_ci_dir_and_self_symlink_dentry_cache`, `test_overlay_ci_dir_and_self_symlink`, `test_winfsp_ci_dir_and_self_symlink_reparse`; 57 CTest functions total) and synchronized release documentation to `v0.11.1`.
+
 ## [0.11.0] - 2026-11-28
 
 ### Added
@@ -153,7 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt4 / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/totatake/ZeroExt4/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/totatake/ZeroExt4/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/totatake/ZeroExt4/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/totatake/ZeroExt4/compare/v0.10.0...v0.10.1

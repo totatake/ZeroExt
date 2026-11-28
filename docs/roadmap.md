@@ -1,6 +1,6 @@
 # ロードマップ
 
-本書は **ZeroExt4**（`v0.11.0` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
+本書は **ZeroExt4**（`v0.11.1` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
 
 ---
 
@@ -22,6 +22,7 @@
 | `v0.10.1` | 2026-11-27 | 独自バッチ連続エクステント読込／書込を新オプトイン **`--rw-fast-io`** へ分離し、既定 `--rw` / `--no-direct-io` を `e2fsprogs` 準拠へ復元（GUI / `--rw-bench` 比較含む）、多段エクステント境界ホール修正、`FspRename` 既存ディレクトリ上書拒否修正、`fsx` 型ファザー・10 スレッド並列 RW ストレス・WSL2 Linux カーネル双方向検証・WinFsp 公式 `winfsp-tests`（45/45 PASS）整備およびドキュメント整合 |
 | `v0.10.2` | 2026-11-28 | `--rw-fast-io` のデータ先行書込＆部分失敗ロールバック・R/W ガード対称化・`win32_io` 書込エラー時キャッシュ無条件破棄、`ZEROEXT4_FSX_SEED`/`ZEROEXT4_FSX_OPS` 可変ファザー・4 GiB スパース境界テスト（計 40 関数）・WinFsp 実マウント乱数 I/O + WSL2 検証拡充 |
 | `v0.11.0` | 2026-11-28 | **Phase 1〜3 完了**: Overlay v2 識別子・非空未識別フォルダ拒否・`inspect` 拡張診断／`doctor`（GUI Dirty 時 RW 自動抑止含む）、`overlay status/diff/validate/export/reset`・O(1) 双方向ハッシュマップ＆決定論的 inode・WinFsp Reparse Point symlink・Windows 予約名／大小文字衝突ガード・ケースのみリネーム修正、未対応 ext4 機能明示検出＆`--ignore-csum-errors`・非破壊 4 パス診断 `fsck-lite`・既定 `--rw` ステートレス方針明確化・POSIX UID/GID/パーミッション設定（CLI/GUI・ブラウザ `UID:GID` 表示含む、CTest 54 関数・GUI 12 テスト）・性能評価レポート `v0.11.0` 全項目再計測 |
+| `v0.11.1` | 2026-11-28 | ケース非区別環境での実ディレクトリ／自己参照 symlink 共存時のオープン不具合修正（`dentry_cache` 衝突ガード・Overlay `lower_ino` 分離・Copy-up 後実表記解決）、リリースアーカイブへ [利用ガイド](guides/usage.md) 同梱（CTest 57 関数・GUI 12 テスト） |
 
 ---
 
