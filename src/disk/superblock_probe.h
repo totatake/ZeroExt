@@ -40,8 +40,11 @@ typedef struct ext4_probe_result {
     uint32_t             feature_incompat;
     uint32_t             feature_ro_compat;
     uint32_t             journal_inum;
+    uint32_t             journal_dev;
     uint32_t             journal_start;
     int32_t              journal_errno;
+    uint32_t             unsupported_incompat;
+    uint32_t             unsupported_ro_compat;
     uint16_t             state_flags;
     uint64_t             last_mount_time;
     uint64_t             last_fsck_time;
@@ -73,6 +76,7 @@ const char *ext4_journal_state_name(ext4_journal_state_t state);
 size_t ext4_feature_compat_names(uint32_t mask, const char **out_names, size_t max_names);
 size_t ext4_feature_incompat_names(uint32_t mask, const char **out_names, size_t max_names);
 size_t ext4_feature_ro_compat_names(uint32_t mask, const char **out_names, size_t max_names);
+int ext4_probe_has_external_journal(const ext4_probe_result_t *probe);
 void ext4_evaluate_mount_advice(const ext4_probe_result_t *probe, ext4_mount_advice_t *out);
 
 #ifdef __cplusplus

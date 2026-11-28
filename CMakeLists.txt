@@ -168,6 +168,7 @@ add_library(zeroext4_core STATIC
     src/disk/superblock_probe.c
     src/disk/partition_table.c
     src/disk/disk_scanner.c
+    src/disk/fsck_lite.c
     src/extent/extent_map.c
     src/overlay/overlay_vfs.c
     src/overlay/overlay_tools.c

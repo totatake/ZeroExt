@@ -1,8 +1,10 @@
 #include "test_common.h"
 #include "../src/disk/partition_table.h"
 #include "../src/disk/superblock_probe.h"
+#include "../src/disk/fsck_lite.h"
 #include "../src/vfs/ext4_vfs.h"
 #include "../src/io/win32_io.h"
+#include <errno.h>
 #include <ext2fs/ext2fs.h>
 
 static void write_le16(uint8_t *p, uint16_t v) {
@@ -393,11 +395,240 @@ static int test_probe_extended_diagnostics_and_mount_advice(void) {
     return 0;
 }
 
+static int fsck_has_code(const fsck_lite_report_t *rep, const char *code) {
+    if (!rep || !code) return 0;
+    for (size_t i = 0; i < rep->finding_count; i++) {
+        if (strcmp(rep->findings[i].code, code) == 0) return 1;
+    }
+    return 0;
+}
+
+static int test_unsupported_feature_detection_and_ignore_csum(void) {
+    char img_path[MAX_PATH];
+    win32_io_config_t io_cfg;
+    ext2_filsys fs = NULL;
+    ext4_probe_result_t probe;
+    ext4_mount_advice_t advice;
+    ext4_mount_config_t mcfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    uint32_t orig_incompat, orig_ro_compat, orig_compat, orig_j_inum, orig_j_dev;
+
+    test_make_temp_path(img_path, sizeof(img_path), "unsupp_features.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "FEATTEST"));
+
+    memset(&io_cfg, 0, sizeof(io_cfg));
+    io_cfg.sector_size = 4096;
+    win32_io_set_next_config(&io_cfg);
+    TEST_ASSERT_EQ_INT(0, ext2fs_open2(img_path, NULL, EXT2_FLAG_RW | EXT2_FLAG_64BITS, 0, 0, win32_io_manager, &fs));
+    orig_compat = fs->super->s_feature_compat;
+    orig_incompat = fs->super->s_feature_incompat;
+    orig_ro_compat = fs->super->s_feature_ro_compat;
+    orig_j_inum = fs->super->s_journal_inum;
+    orig_j_dev = fs->super->s_journal_dev;
+
+    /* 1. fs-verity (RO_COMPAT_VERITY): RO allowed, RW blocked (-ENOTSUP) */
+    fs->super->s_feature_ro_compat = orig_ro_compat | EXT4_FEATURE_RO_COMPAT_VERITY;
+    ext2fs_mark_super_dirty(fs);
+    TEST_ASSERT_EQ_INT(0, ext2fs_close_free(&fs));
+
+    TEST_ASSERT_EQ_INT(0, ext4_probe_partition(img_path, 0, 0, 4096, &probe));
+    ext4_evaluate_mount_advice(&probe, &advice);
+    TEST_ASSERT_EQ_INT(1, advice.read_only_allowed);
+    TEST_ASSERT_EQ_INT(0, advice.read_write_allowed);
+
+    memset(&mcfg, 0, sizeof(mcfg));
+    mcfg.source_path = img_path;
+    mcfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_mount(&mcfg, &ctx));
+    mcfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&mcfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 2. fscrypt (INCOMPAT_ENCRYPT): RO allowed, RW blocked (-ENOTSUP) */
+    win32_io_set_next_config(&io_cfg);
+    TEST_ASSERT_EQ_INT(0, ext2fs_open2(img_path, NULL, EXT2_FLAG_RW | EXT2_FLAG_64BITS | EXT2_FLAG_IGNORE_CSUM_ERRORS,
+                                       0, 0, win32_io_manager, &fs));
+    fs->super->s_feature_ro_compat = orig_ro_compat;
+    fs->super->s_feature_incompat = orig_incompat | EXT4_FEATURE_INCOMPAT_ENCRYPT;
+    ext2fs_mark_super_dirty(fs);
+    TEST_ASSERT_EQ_INT(0, ext2fs_close_free(&fs));
+
+    mcfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_mount(&mcfg, &ctx));
+    mcfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&mcfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 3. External journal reference (HAS_JOURNAL, s_journal_inum=0, s_journal_dev!=0) */
+    win32_io_set_next_config(&io_cfg);
+    TEST_ASSERT_EQ_INT(0, ext2fs_open2(img_path, NULL, EXT2_FLAG_RW | EXT2_FLAG_64BITS, 0, 0, win32_io_manager, &fs));
+    fs->super->s_feature_incompat = orig_incompat;
+    fs->super->s_feature_compat = orig_compat | EXT3_FEATURE_COMPAT_HAS_JOURNAL;
+    fs->super->s_journal_inum = 0;
+    fs->super->s_journal_dev = 0x0801U;
+    ext2fs_mark_super_dirty(fs);
+    TEST_ASSERT_EQ_INT(0, ext2fs_close_free(&fs));
+
+    TEST_ASSERT_EQ_INT(0, ext4_probe_partition(img_path, 0, 0, 4096, &probe));
+    TEST_ASSERT_EQ_INT(1, ext4_probe_has_external_journal(&probe));
+    ext4_evaluate_mount_advice(&probe, &advice);
+    TEST_ASSERT_EQ_INT(1, advice.read_only_allowed);
+    TEST_ASSERT_EQ_INT(0, advice.read_write_allowed);
+    mcfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_mount(&mcfg, &ctx));
+
+    /* 4. JOURNAL_DEV & Unknown incompat bit -> blocked even in RO */
+    win32_io_set_next_config(&io_cfg);
+    TEST_ASSERT_EQ_INT(0, ext2fs_open2(img_path, NULL, EXT2_FLAG_RW | EXT2_FLAG_64BITS, 0, 0, win32_io_manager, &fs));
+    fs->super->s_feature_compat = orig_compat;
+    fs->super->s_journal_inum = orig_j_inum;
+    fs->super->s_journal_dev = orig_j_dev;
+    fs->super->s_feature_incompat = orig_incompat | EXT3_FEATURE_INCOMPAT_JOURNAL_DEV;
+    ext2fs_mark_super_dirty(fs);
+    TEST_ASSERT_EQ_INT(0, ext2fs_close_free(&fs));
+
+    mcfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(-ENOTSUP, ext4_vfs_mount(&mcfg, &ctx));
+
+    /* 5. Corrupt superblock csum & verify --ignore-csum-errors RO works while RW refuses -EINVAL */
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "CSUMTEST"));
+
+    {
+        FILE *fp = fopen(img_path, "r+b");
+        uint8_t sb_raw[1024];
+        TEST_ASSERT(fp != NULL);
+        TEST_ASSERT_EQ_INT(0, fseek(fp, 1024, SEEK_SET));
+        TEST_ASSERT_EQ_INT(sizeof(sb_raw), (long long)fread(sb_raw, 1, sizeof(sb_raw), fp));
+        sb_raw[offsetof(struct ext2_super_block, s_checksum)] ^= 0xFFU;
+        TEST_ASSERT_EQ_INT(0, fseek(fp, 1024, SEEK_SET));
+        TEST_ASSERT_EQ_INT(sizeof(sb_raw), (long long)fwrite(sb_raw, 1, sizeof(sb_raw), fp));
+        fclose(fp);
+    }
+
+    mcfg.read_only = 1;
+    mcfg.ignore_csum_errors = 0;
+    TEST_ASSERT(ext4_vfs_mount(&mcfg, &ctx) != 0);
+
+    mcfg.ignore_csum_errors = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&mcfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    mcfg.read_only = 0;
+    mcfg.ignore_csum_errors = 1;
+    TEST_ASSERT_EQ_INT(-EINVAL, ext4_vfs_mount(&mcfg, &ctx));
+
+    DeleteFileA(img_path);
+    return 0;
+}
+
+static int test_fsck_lite_clean_and_corruptions(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t mcfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    fsck_lite_report_t rep;
+    win32_io_config_t io_cfg;
+    ext2_filsys fs = NULL;
+    uint32_t w = 0;
+    uint8_t pattern[4096];
+    ext2_ino_t ino_a = 0, ino_b = 0;
+
+    test_make_temp_path(img_path, sizeof(img_path), "fsck_lite_test.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "FSCKTEST"));
+
+    memset(&mcfg, 0, sizeof(mcfg));
+    mcfg.source_path = img_path;
+    mcfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&mcfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/sub", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/sub/a.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &ino_a));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/sub/b.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, &ino_b));
+    memset(pattern, 0x5A, sizeof(pattern));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/sub/a.bin", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, pattern, 0, sizeof(pattern), 0, &w, NULL));
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/sub/b.bin", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, pattern, 0, sizeof(pattern), 0, &w, NULL));
+    ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 1. Clean volume must report healthy=1, error_count=0 */
+    TEST_ASSERT_EQ_INT(0, ext4_fsck_lite_run(img_path, 0, 0, 4096, &rep));
+    TEST_ASSERT_EQ_INT(1, rep.healthy);
+    TEST_ASSERT_EQ_INT(0ULL, (long long)rep.error_count);
+    TEST_ASSERT(rep.checked_inodes >= 4);
+    TEST_ASSERT(rep.checked_dirs >= 2);
+    TEST_ASSERT(rep.checked_dirents >= 4);
+    ext4_fsck_lite_free_report(&rep);
+
+    /* 2. Inject duplicate physical block + orphan + out-of-range pblk & verify detection */
+    memset(&io_cfg, 0, sizeof(io_cfg));
+    io_cfg.sector_size = 4096;
+    win32_io_set_next_config(&io_cfg);
+    TEST_ASSERT_EQ_INT(0, ext2fs_open2(img_path, NULL, EXT2_FLAG_RW | EXT2_FLAG_64BITS, 0, 0, win32_io_manager, &fs));
+    {
+        struct ext2_inode_large ia, ib;
+        struct ext3_extent *ea, *eb;
+        memset(&ia, 0, sizeof(ia));
+        memset(&ib, 0, sizeof(ib));
+        TEST_ASSERT_EQ_INT(0, ext2fs_read_inode_full(fs, ino_a, (struct ext2_inode *)&ia, sizeof(ia)));
+        TEST_ASSERT_EQ_INT(0, ext2fs_read_inode_full(fs, ino_b, (struct ext2_inode *)&ib, sizeof(ib)));
+        ea = (struct ext3_extent *)((char *)ia.i_block + sizeof(struct ext3_extent_header));
+        eb = (struct ext3_extent *)((char *)ib.i_block + sizeof(struct ext3_extent_header));
+        /* Force b.bin extent to point at a.bin's physical block (duplicate block!) */
+        eb->ee_start = ea->ee_start;
+        eb->ee_start_hi = ea->ee_start_hi;
+        TEST_ASSERT_EQ_INT(0, ext2fs_write_inode_full(fs, ino_b, (struct ext2_inode *)&ib, sizeof(ib)));
+        /* Register a.bin in orphan list */
+        fs->super->s_last_orphan = ino_a;
+        ext2fs_mark_super_dirty(fs);
+    }
+    TEST_ASSERT_EQ_INT(0, ext2fs_close_free(&fs));
+
+    {
+        /* Snapshot whole image before running fsck-lite to prove strict Read-Only behavior */
+        FILE *fp = fopen(img_path, "rb");
+        uint8_t *snap_before = (uint8_t *)malloc(8ULL * 1024ULL * 1024ULL);
+        uint8_t *snap_after = (uint8_t *)malloc(8ULL * 1024ULL * 1024ULL);
+        TEST_ASSERT(fp != NULL && snap_before != NULL && snap_after != NULL);
+        TEST_ASSERT_EQ_INT(8LL * 1024LL * 1024LL, (long long)fread(snap_before, 1, 8ULL * 1024ULL * 1024ULL, fp));
+        fclose(fp);
+
+        TEST_ASSERT_EQ_INT(0, ext4_fsck_lite_run(img_path, 0, 0, 4096, &rep));
+        TEST_ASSERT_EQ_INT(0, rep.healthy);
+        TEST_ASSERT(rep.duplicate_blocks >= 1);
+        TEST_ASSERT(rep.orphan_count >= 1);
+        TEST_ASSERT(fsck_has_code(&rep, "EXTENT_DUPLICATE_BLOCK"));
+        TEST_ASSERT(fsck_has_code(&rep, "ORPHAN_INODE_PRESENT"));
+        ext4_fsck_lite_free_report(&rep);
+
+        fp = fopen(img_path, "rb");
+        TEST_ASSERT(fp != NULL);
+        TEST_ASSERT_EQ_INT(8LL * 1024LL * 1024LL, (long long)fread(snap_after, 1, 8ULL * 1024ULL * 1024ULL, fp));
+        fclose(fp);
+        TEST_ASSERT_EQ_INT(0, memcmp(snap_before, snap_after, 8ULL * 1024ULL * 1024ULL));
+        free(snap_before);
+        free(snap_after);
+    }
+
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_partition_and_probe(void) {
     int suite_failures = 0;
     RUN_TEST(test_gpt_disk_and_embedded_ext4);
     RUN_TEST(test_mbr_and_ebr_logical_partitions);
     RUN_TEST(test_dirty_journal_and_jbd2_probe);
     RUN_TEST(test_probe_extended_diagnostics_and_mount_advice);
+    RUN_TEST(test_unsupported_feature_detection_and_ignore_csum);
+    RUN_TEST(test_fsck_lite_clean_and_corruptions);
     return suite_failures;
 }

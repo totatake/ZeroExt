@@ -2,6 +2,7 @@
 #include "../disk/disk_scanner.h"
 #include "../disk/partition_table.h"
 #include "../disk/superblock_probe.h"
+#include "../disk/fsck_lite.h"
 #include "../vfs/ext4_vfs.h"
 #include "../extent/extent_map.h"
 #include "../overlay/overlay_vfs.h"
@@ -94,6 +95,7 @@ static void print_usage(void) {
         "Usage:\n"
         "  zeroext4 list [<image_or_disk>] [--json]\n"
         "  zeroext4 inspect <image_or_disk> [--partition <N>] [--json]\n"
+        "  zeroext4 fsck-lite <image_or_disk> [--partition <N>] [--json]\n"
         "  zeroext4 doctor [--source <image_or_disk>] [--partition <N>] [--overlay <ntfs_upper_dir>] [--case-sensitive] [--json]\n"
         "  zeroext4 overlay <status|diff|validate|export|reset> --upper <ntfs_upper_dir> [--lower <image_or_disk>] [--partition <N>]\n"
         "                  [--case-sensitive] [--output <archive.tar>] [--yes] [--json]\n"
@@ -108,7 +110,7 @@ static void print_usage(void) {
         "  zeroext4 extents <image_or_disk> <ext4_path> [--partition <N>]\n"
         "  zeroext4 mount --source <image_or_disk> --mountpoint <L:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
         "                [--rw-fast-io] [--case-sensitive] [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>]\n"
-        "                [--ro-fallback] [--force-dirty] [--cache-blocks <N>] [--debug] [--stop-event <name>]\n"
+        "                [--ro-fallback] [--force-dirty] [--ignore-csum-errors] [--cache-blocks <N>] [--debug] [--stop-event <name>]\n"
         "                [--json-events] [--stats-interval <ms>] [--trace <output_json>] [--trace-events <N>]\n"
         "  zeroext4 unmount <L:>     (remove a stale drive letter left by a terminated mount)\n"
         "\n"
@@ -280,8 +282,12 @@ static void print_partition_json(const pt_partition_entry_t *p) {
     printf("\"feature_incompat_names\":"); print_json_str_array(incompat_names, incompat_cnt); putchar(',');
     printf("\"feature_ro_compat_names\":"); print_json_str_array(ro_compat_names, ro_compat_cnt); putchar(',');
     printf("\"journal_inum\":%u,", p->probe.journal_inum);
+    printf("\"journal_dev\":%u,", p->probe.journal_dev);
+    printf("\"external_journal\":%s,", ext4_probe_has_external_journal(&p->probe) ? "true" : "false");
     printf("\"journal_start\":%u,", p->probe.journal_start);
     printf("\"journal_errno\":%d,", p->probe.journal_errno);
+    printf("\"unsupported_incompat\":%u,", p->probe.unsupported_incompat);
+    printf("\"unsupported_ro_compat\":%u,", p->probe.unsupported_ro_compat);
     printf("\"state_flags\":%u,", (unsigned)p->probe.state_flags);
     printf("\"last_mount_time\":%llu,", (unsigned long long)p->probe.last_mount_time);
     printf("\"last_fsck_time\":%llu,", (unsigned long long)p->probe.last_fsck_time);
@@ -462,6 +468,14 @@ static int cmd_inspect(int argc, char **argv) {
             printf("  JournalState : %s (inum=%u, s_start=%u, s_errno=%d)\n",
                    ext4_journal_state_name(p->probe.journal_state),
                    p->probe.journal_inum, p->probe.journal_start, p->probe.journal_errno);
+            if (ext4_probe_has_external_journal(&p->probe)) {
+                printf("  ExtJournal   : s_journal_dev=0x%X (external journal cannot be attached on Windows)\n",
+                       p->probe.journal_dev);
+            }
+            if (p->probe.unsupported_incompat != 0 || p->probe.unsupported_ro_compat != 0) {
+                printf("  Unsupported  : incompat=0x%08X ro_compat=0x%08X\n",
+                       p->probe.unsupported_incompat, p->probe.unsupported_ro_compat);
+            }
             printf("  LastMount    : %s | LastFsck: %s | ErrorCount: %u\n",
                    mtime_str, fsck_str, p->probe.fsck_error_count);
             printf("  MetadataCsum : %s\n",
@@ -478,6 +492,101 @@ static int cmd_inspect(int argc, char **argv) {
     }
     free(res);
     return 0;
+}
+
+static int cmd_fsck_lite(int argc, char **argv) {
+    int json = has_flag(argc, argv, "--json");
+    const char *src = find_positional_skip_opts(argc, argv, 2, 0);
+    uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
+    uint64_t part_off = 0, part_size = 0;
+    uint32_t sector_size = 0;
+    fsck_lite_report_t rep;
+    int rc;
+
+    if (!src) {
+        print_usage();
+        return 1;
+    }
+
+    if (part > 0) {
+        if (pt_resolve_partition_ex(src, part, &part_off, &part_size, &sector_size, NULL, 0) != 0) {
+            fprintf(stderr, "Failed to resolve partition %u in '%s'\n", part, src);
+            return 1;
+        }
+    } else {
+        pt_resolve_partition_ex(src, 0, &part_off, &part_size, &sector_size, NULL, 0);
+    }
+
+    rc = ext4_fsck_lite_run(src, part_off, part_size, sector_size, &rep);
+    if (rc != 0) {
+        fprintf(stderr, "fsck-lite failed to open '%s' (err=%d)\n", src, rc);
+        return 1;
+    }
+
+    if (json) {
+        printf("{\"source\":"); print_json_str(src);
+        printf(",\"partition\":%u", part);
+        printf(",\"healthy\":%s", rep.healthy ? "true" : "false");
+        printf(",\"fs_kind\":"); print_json_str(rep.fs_kind);
+        printf(",\"volume_label\":"); print_json_str(rep.volume_label);
+        printf(",\"uuid\":"); print_json_str(rep.uuid);
+        printf(",\"block_size\":%u", rep.block_size);
+        printf(",\"inode_size\":%u", rep.inode_size);
+        printf(",\"blocks_count\":%llu", (unsigned long long)rep.blocks_count);
+        printf(",\"inodes_count\":%llu", (unsigned long long)rep.inodes_count);
+        printf(",\"group_count\":%u", rep.group_count);
+        printf(",\"checked_inodes\":%llu", (unsigned long long)rep.checked_inodes);
+        printf(",\"checked_extents\":%llu", (unsigned long long)rep.checked_extents);
+        printf(",\"checked_dirs\":%llu", (unsigned long long)rep.checked_dirs);
+        printf(",\"checked_dirents\":%llu", (unsigned long long)rep.checked_dirents);
+        printf(",\"orphan_count\":%llu", (unsigned long long)rep.orphan_count);
+        printf(",\"duplicate_blocks\":%llu", (unsigned long long)rep.duplicate_blocks);
+        printf(",\"journal_state\":"); print_json_str(rep.journal_state);
+        printf(",\"error_count\":%llu", (unsigned long long)rep.error_count);
+        printf(",\"warning_count\":%llu", (unsigned long long)rep.warning_count);
+        printf(",\"info_count\":%llu", (unsigned long long)rep.info_count);
+        printf(",\"findings\":[");
+        for (size_t i = 0; i < rep.finding_count; i++) {
+            const fsck_lite_finding_t *f = &rep.findings[i];
+            if (i > 0) putchar(',');
+            printf("{\"severity\":"); print_json_str(f->severity);
+            printf(",\"category\":"); print_json_str(f->category);
+            printf(",\"code\":"); print_json_str(f->code);
+            printf(",\"inode\":%llu", (unsigned long long)f->inode);
+            printf(",\"block\":%llu", (unsigned long long)f->block);
+            printf(",\"message\":"); print_json_str(f->message);
+            printf("}");
+        }
+        printf("]}\n");
+        fflush(stdout);
+    } else {
+        printf("fsck-lite (Read-Only): %s (partition=%u)\n", src, part);
+        printf("  Status         : %s\n", rep.healthy ? "HEALTHY" : "ISSUES DETECTED");
+        printf("  Filesystem     : %s (label='%s', uuid='%s')\n",
+               rep.fs_kind, rep.volume_label, rep.uuid);
+        printf("  Geometry       : block_size=%u, inode_size=%u, blocks=%llu, inodes=%llu, groups=%u\n",
+               rep.block_size, rep.inode_size, (unsigned long long)rep.blocks_count,
+               (unsigned long long)rep.inodes_count, rep.group_count);
+        printf("  Checked        : inodes=%llu, extents=%llu, dirs=%llu, dirents=%llu\n",
+               (unsigned long long)rep.checked_inodes, (unsigned long long)rep.checked_extents,
+               (unsigned long long)rep.checked_dirs, (unsigned long long)rep.checked_dirents);
+        printf("  JournalState   : %s | Orphans: %llu | DuplicateBlocks: %llu\n",
+               rep.journal_state, (unsigned long long)rep.orphan_count,
+               (unsigned long long)rep.duplicate_blocks);
+        printf("  Summary        : errors=%llu, warnings=%llu, infos=%llu\n",
+               (unsigned long long)rep.error_count, (unsigned long long)rep.warning_count,
+               (unsigned long long)rep.info_count);
+        for (size_t i = 0; i < rep.finding_count; i++) {
+            const fsck_lite_finding_t *f = &rep.findings[i];
+            printf("  [%s] %s/%s (ino=%llu, blk=%llu): %s\n",
+                   f->severity, f->category, f->code,
+                   (unsigned long long)f->inode, (unsigned long long)f->block, f->message);
+        }
+    }
+
+    int exit_code = rep.healthy ? 0 : 1;
+    ext4_fsck_lite_free_report(&rep);
+    return exit_code;
 }
 
 static int cmd_mkfs(int argc, char **argv) {
@@ -930,6 +1039,7 @@ static int cmd_mount(int argc, char **argv) {
     int rw_fast_io = has_flag(argc, argv, "--rw-fast-io");
     int ro_fallback = has_flag(argc, argv, "--ro-fallback");
     int force_dirty = has_flag(argc, argv, "--force-dirty");
+    int ignore_csum_errors = has_flag(argc, argv, "--ignore-csum-errors");
     int direct_io = has_flag(argc, argv, "--direct-io");
     int no_direct_io = has_flag(argc, argv, "--no-direct-io");
     int case_sensitive = has_flag(argc, argv, "--case-sensitive");
@@ -972,6 +1082,13 @@ static int cmd_mount(int argc, char **argv) {
 
     if (rw_fast_io && !rw) {
         const char *msg = "Error: --rw-fast-io is only supported with --rw.";
+        fprintf(stderr, "%s\n", msg);
+        emit_mount_error_json(json_events, "args", -EINVAL, msg);
+        return 1;
+    }
+
+    if (ignore_csum_errors && rw) {
+        const char *msg = "Error: --ignore-csum-errors is only supported in Read-Only (default) or --overlay mode.";
         fprintf(stderr, "%s\n", msg);
         emit_mount_error_json(json_events, "args", -EINVAL, msg);
         return 1;
@@ -1045,6 +1162,7 @@ static int cmd_mount(int argc, char **argv) {
     }
     cfg.ro_fallback_on_dirty = (cfg.read_only || ro_fallback) ? 1 : 0;
     cfg.force_rw_on_dirty = force_dirty;
+    cfg.ignore_csum_errors = ignore_csum_errors;
     cfg.case_insensitive = case_sensitive ? 0 : 1;
     cfg.enable_direct_io = direct_io ? 1 : 0;
     cfg.disable_direct_io = no_direct_io ? 1 : 0;
@@ -1744,6 +1862,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "unmount") == 0 || strcmp(cmd, "umount") == 0) rc = cmd_unmount(argc, argv);
     else if (strcmp(cmd, "list") == 0) rc = cmd_list(argc, argv);
     else if (strcmp(cmd, "inspect") == 0) rc = cmd_inspect(argc, argv);
+    else if (strcmp(cmd, "fsck-lite") == 0) rc = cmd_fsck_lite(argc, argv);
     else if (strcmp(cmd, "doctor") == 0) rc = cmd_doctor(argc, argv);
     else if (strcmp(cmd, "overlay") == 0) rc = cmd_overlay(argc, argv);
     else if (strcmp(cmd, "mkfs") == 0) rc = cmd_mkfs(argc, argv);

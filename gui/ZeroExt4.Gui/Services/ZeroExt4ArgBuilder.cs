@@ -37,6 +37,21 @@ namespace ZeroExt4.Gui.Services
             return args;
         }
 
+        public static List<string> BuildFsckLiteArgs(string sourcePath, uint? partitionNumber = null, bool json = true)
+        {
+            var args = new List<string> { "fsck-lite", sourcePath };
+            if (partitionNumber.HasValue && partitionNumber.Value > 0)
+            {
+                args.Add("--partition");
+                args.Add(partitionNumber.Value.ToString(CultureInfo.InvariantCulture));
+            }
+            if (json)
+            {
+                args.Add("--json");
+            }
+            return args;
+        }
+
         public static List<string> BuildLsArgs(string sourcePath, string ext4Path, uint partitionNumber, bool json = true)
         {
             string targetPath = string.IsNullOrWhiteSpace(ext4Path) ? "/" : ext4Path;

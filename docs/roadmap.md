@@ -108,32 +108,32 @@
 
 ---
 
-## 6. Phase 3：ext4 互換性・読み取り専用診断 (`fsck-lite`)・RW 標準経路の改善
+## 6. Phase 3：ext4 互換性・読み取り専用診断 (`fsck-lite`)・RW 標準経路の改善（完了）
 
-### 6.1 未対応 ext4 機能の明示検出と境界テスト拡充
+### 6.1 未対応 ext4 機能の明示検出と境界テスト拡充（完了）
 
-- **未対応 incompatible 機能の明示エラー化**:
-  - `fscrypt`（`EXT4_FEATURE_INCOMPAT_ENCRYPT`）、`fs-verity`、外部ジャーナルデバイス等の未サポート機能が有効なボリュームをプローブ／マウントした際、汎用エラーではなく理由と対処方法を明示したエラー・警告を返すようにする。
+- **未対応／制限付き ext4 機能の明示検出とガード**:
+  - `src/disk/superblock_probe.c` で `s_journal_dev`（外部ジャーナル参照 `ext4_probe_has_external_journal`）、`unsupported_incompat`、`unsupported_ro_compat` を検出し、`ext4_evaluate_mount_advice`・`ext4_vfs_mount`・`zeroext4 inspect` に理由と対処方法付きの詳細診断を実装した。
+  - `EXT3_FEATURE_INCOMPAT_JOURNAL_DEV` および未知 `incompat` ビットは `-ENOTSUP` でマウントを拒否し、`fscrypt` (`encrypt`) / `fs-verity` (`verity`) / 外部ジャーナル (`s_journal_dev`) / 未知 `ro_compat` は直接 `--rw` を `-ENOTSUP` で遮断したうえで RO／Overlay 時に明示警告を出力する。
+  - CLI `mount` に `--ignore-csum-errors` オプションを実装し、`--rw` との併用は `-EINVAL` で拒否して RO／Overlay の診断・救出用途に限定した。
 - **ext4 フォーマット境界の回帰テスト拡充**:
-  - 多段（depth >= 2）エクステントツリー、uninitialized extent（`EXT2_EXTENT_FLAGS_UNINIT`）、スパースファイル（hole ゼロ埋め・`truncate` 境界）、`inline_data`、`huge_file` / 64bit ブロック、`metadata_csum` 不正時のエラー検出・`--ignore-csum-errors` 挙動をカバーするテストを拡充する。
+  - `test_ext4_format_boundaries_phase3` 等により、1KB ブロック 380 断片による `eh_depth >= 2` 多段エクステント木、実ブロック非ゼロ汚染済みの未初期化エクステント (`EXT2_EXTENT_FLAGS_UNINIT`) の RO/RW 双方でのゼロ埋め読取、`inline_data` の RO Direct I/O フォールバック読取および `--rw` 書き込み時の透過的エクステント展開、スパース／`truncate`／`huge_file`（4 GiB 超境界）・`metadata_csum` 不正検出と `--ignore-csum-errors` を網羅した。
 
-### 6.2 読み取り専用整合性診断 (`zeroext4 fsck-lite`)
+### 6.2 読み取り専用整合性診断 (`zeroext4 fsck-lite`)（完了）
 
-- Windows 上で ext4 メタデータの健全性を非破壊で検証できる `zeroext4 fsck-lite <image_or_disk> [--partition N] [--json]` を実装する。
-- 主な検証対象：
-  - スーパーブロック／ブロックグループ記述子（magic, block/inode size, 64bit フィールド、checksum）
-  - ブロック／inode ビットマップおよび inode table のパーティション境界内チェック
-  - エクステントツリーの越境・論理オフセット不整合・重複ブロック候補検出
-  - ディレクトリエントリの破損・不正長、孤立 inode リスト、JBD2 ジャーナルヘッダ状態
-- **位置づけ**: 危険検出とレポート出力に限定し、修復操作は一切行わない。
+- **非破壊診断エンジン & CLI／GUI 連携**:
+  - [fsck_lite.h](../src/disk/fsck_lite.h)・[fsck_lite.c](../src/disk/fsck_lite.c) を新設し、常に `read_only = 1` ＋ `EXT2_FLAG_IGNORE_CSUM_ERRORS`（書き込みゼロ）で 4 パスの整合性検査を行う `zeroext4 fsck-lite <image_or_disk> [--partition <N>] [--json]` および `ZeroExt4CoreClient.RunFsckLiteAsync` を実装した。
+- **主な検査項目**:
+  - **Pass 1**: スーパーブロック magic・パーティション境界超過・CRC32C チェックサム、各ブロックグループ記述子 (BGD) のチェックサム・ビットマップ/inode table 境界・空き数上限検査
+  - **Pass 2**: ブロック／inode ビットマップ読込およびメタデータチェックサム検証、重複ブロック追跡（64 GB 以下は厳密ビットセット、超大容量時は有界ハッシュテーブル）
+  - **Pass 3**: 割り当て済み inode の CRC32C チェックサム、`EXT4_EXTENTS_FL` ツリーの論理オフセット単調性／重複／物理ブロック境界・ビットマップ整合・複数ファイル間の物理ブロック重複検出 (`EXTENT_DUPLICATE_BLOCK`)
+  - **Pass 4**: 全ディレクトリのブロックチェックサム・`rec_len`/`name_len`/inode 範囲・`.`/`..`・htree/inline_data 整合、孤立 inode チェーン (`s_last_orphan`) の循環・範囲検査、JBD2 ジャーナルヘッダ (`magic`, `s_start`, `s_errno`) 検査
 
-### 6.3 `--rw` 標準 `libext2fs` 経路の最適化（Direct I/O は無効維持）
+### 6.3 `--rw` 標準 `libext2fs` 経路の整合性維持・ポリシー明確化（完了）
 
-- 前述の安全境界通り、`--rw` では Direct Extent I/O を有効化せず、整合性を最優先する。
-- 直接 `--rw` マウント時の書き込み・読み取りスループット改善は、`v0.10.1` 以降は安全性のためオプトインの **`--rw --rw-fast-io`** として提供し、既定の `--rw` は上流 `e2fsprogs` (`ext2fs_file_read`/`write`) 準拠の標準経路を維持する。標準経路内の安全な改善候補は以下の通り：
-  - オープン済みハンドル (`ext4_file_handle_t`) における `ext2_file_t` の再利用（非エクステントファイル／フォールバック経路での毎 Read/Write `ext2fs_file_open` / `close` 削減）
-  - 連続小口（4 KB 単位等）書き込みのさらなるバッチ化と `ctx->rwlock` 排他ロック保持時間の短縮
-  - メタデータ更新時（`truncate` / `unlink` / `rename` / `write`）の各種キャッシュ無効化がすべて排他ロック保護下で行われることの継続検証
+- **標準 `--rw` は完全ステートレス経路を維持（設計決定）**:
+  - 4 モードの役割と安全性境界を明確化するため、既定の `--rw` は Direct Extent I/O を無効としたまま **I/O ごとに `ext2fs_file_open` / `ext2fs_file_close` を行う完全ステートレスな上流 `libext2fs` リファレンス経路** を維持する方針を決定した（キャッシュ性能は `win32_io` 32 シャードブロックキャッシュおよび `libext2fs` inode キャッシュで確保し、高速化パスは実験的オプトイン `--rw --rw-fast-io` に明確分離）。
+  - また `ext4_vfs_standard_read_fallback_locked()` における `inline_data` 読み取り時の `EXT2_I_SIZE` 上限クランプ修正（上流 `ext2fs_file_read_inline_data` の余剰ゼロ埋め回避）と、標準 `--rw` 連続書込／別ハンドル間即時可視性／`truncate` 後 `fsck-lite` 整合性検証（`test_rw_standard_stateless_coherence`）を追加した。
 
 ---
 

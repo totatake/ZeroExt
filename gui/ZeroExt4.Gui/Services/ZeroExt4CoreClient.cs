@@ -59,6 +59,22 @@ namespace ZeroExt4.Gui.Services
             return ParseScanResponse(res.StdOut);
         }
 
+        public async Task<FsckLiteReport> RunFsckLiteAsync(
+            string sourcePath,
+            uint? partitionNumber = null,
+            CancellationToken ct = default)
+        {
+            List<string> args = ZeroExt4ArgBuilder.BuildFsckLiteArgs(sourcePath, partitionNumber, json: true);
+            CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(res.StdOut))
+            {
+                string detail = string.IsNullOrWhiteSpace(res.StdErr) ? $"exit={res.ExitCode}" : res.StdErr;
+                throw new InvalidOperationException(
+                    LocalizationService.Format("Str_CoreInspectFailFmt", sourcePath, res.ExitCode, detail).Trim());
+            }
+            return ParseFsckLiteReport(res.StdOut);
+        }
+
         public async Task<LsResponse> ListDirectoryAsync(
             string sourcePath,
             string ext4Path,
@@ -283,6 +299,12 @@ namespace ZeroExt4.Gui.Services
         {
             OverlayResetResponse? parsed = JsonSerializer.Deserialize<OverlayResetResponse>(json, JsonOptions);
             return parsed ?? new OverlayResetResponse();
+        }
+
+        public static FsckLiteReport ParseFsckLiteReport(string json)
+        {
+            FsckLiteReport? parsed = JsonSerializer.Deserialize<FsckLiteReport>(json, JsonOptions);
+            return parsed ?? new FsckLiteReport();
         }
 
         public static MountEventMessage? TryParseMountEvent(string line)

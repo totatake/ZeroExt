@@ -35,6 +35,7 @@ namespace ZeroExt4.Gui.Tests
             Run("MainViewModel_ValidationAndPreview", Test_MainViewModel_ValidationAndPreview);
             Run("TrayIconService_MountUnmountMenuRebuild", Test_TrayIconService_MountUnmountMenuRebuild);
             await RunAsync("LiveCoreCli_InspectAndBrowseIntegration", Test_LiveCoreCli_InspectAndBrowseIntegrationAsync);
+            await RunAsync("Phase3_FsckLiteArgsAndLiveIntegration", Test_Phase3_FsckLiteArgsAndLiveIntegrationAsync);
 
             Console.WriteLine();
             Console.WriteLine($"Summary: passed={_passed}, failed={_failed}");
@@ -881,6 +882,43 @@ namespace ZeroExt4.Gui.Tests
             DriveUnmountInspection cDrive = DriveLetterService.InspectDriveForUnmount("C:");
             Assert(cDrive.HasTarget, "C: has target");
             Assert(!cDrive.IsSafeToUnmount, "C: must never be marked safe to unmount");
+        }
+
+        private static async Task Test_Phase3_FsckLiteArgsAndLiveIntegrationAsync()
+        {
+            List<string> args1 = ZeroExt4ArgBuilder.BuildFsckLiteArgs(@"D:\data\ext4.img", 2, json: true);
+            AssertEqual(5, args1.Count, "BuildFsckLiteArgs count");
+            AssertEqual("fsck-lite", args1[0], "fsck-lite subcommand");
+            AssertEqual(@"D:\data\ext4.img", args1[1], "fsck-lite target");
+            AssertEqual("--partition", args1[2], "fsck-lite partition flag");
+            AssertEqual("2", args1[3], "fsck-lite partition number");
+            AssertEqual("--json", args1[4], "fsck-lite json flag");
+
+            string? exe = CoreExecutableLocator.Locate();
+            Assert(!string.IsNullOrWhiteSpace(exe), "zeroext4.exe must be found for fsck-lite integration test");
+
+            string tmpDir = Path.Combine(Path.GetTempPath(), $"zeroext4_gui_fsck_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tmpDir);
+            string imgPath = Path.Combine(tmpDir, "fsck_check.img");
+            try
+            {
+                var client = new ZeroExt4CoreClient(() => exe);
+                await client.CreateImageAsync(imgPath, 8, "FSCK_GUI");
+                CoreCommandResult wr = await client.RunCommandAsync(new[] { "write", imgPath, "/sample.txt", "phase3-fsck-lite-check" });
+                AssertEqual(0, wr.ExitCode, "write exit for fsck-lite");
+
+                FsckLiteReport report = await client.RunFsckLiteAsync(imgPath);
+                Assert(report.Healthy, "fsck-lite live report must be healthy");
+                AssertEqual(0UL, report.ErrorCount, "fsck-lite error count");
+                AssertEqual("ext4", report.FsKind, "fsck-lite fs_kind");
+                Assert(report.CheckedInodes >= 3, "fsck-lite checked inodes");
+                Assert(report.CheckedDirs >= 1, "fsck-lite checked dirs");
+                Assert(report.CheckedDirents >= 3, "fsck-lite checked dirents");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, recursive: true); } catch { }
+            }
         }
     }
 }

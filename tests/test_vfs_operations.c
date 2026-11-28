@@ -1,5 +1,6 @@
 #include "test_common.h"
 #include "../src/vfs/ext4_vfs.h"
+#include "../src/disk/fsck_lite.h"
 #include "../src/extent/extent_map.h"
 #include "../src/io/win32_io.h"
 #include <errno.h>
@@ -2703,6 +2704,287 @@ static int test_case_insensitive_collision_priority(void) {
     return 0;
 }
 
+static int test_ext4_format_boundaries_phase3(void) {
+    char depth_img[MAX_PATH], bound_img[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *hf = NULL, *hs = NULL;
+    uint32_t w = 0, r = 0;
+
+    /* 1. Multi-level extent tree with guaranteed eh_depth >= 2 on 1KB-block volume */
+    test_make_temp_path(depth_img, sizeof(depth_img), "vfs_depth2.img");
+    DeleteFileA(depth_img);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(depth_img, 3ULL * 1024ULL * 1024ULL, "DEPTH2"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = depth_img;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/frag_d2.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/spacer.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/frag_d2.bin", 1, &hf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/spacer.bin", 1, &hs));
+
+    /* 380 alternating 1KB blocks force > 4*84 extents at 1KB block size => eh_depth >= 2 */
+    for (uint32_t i = 0; i < 380U; i++) {
+        uint8_t b1[1024], b2[1024];
+        memset(b1, (uint8_t)((i * 19U + 3U) & 0xFF), sizeof(b1));
+        memset(b2, 0xCC, sizeof(b2));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, hf->ino, b1, (uint64_t)i * 1024ULL,
+                                             sizeof(b1), 0, &w, NULL));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, hs->ino, b2, (uint64_t)i * 1024ULL,
+                                             sizeof(b2), 0, &w, NULL));
+    }
+    ext4_vfs_close_handle(hf);
+    ext4_vfs_close_handle(hs);
+
+    {
+        struct ext2_inode_large ino_st;
+        struct ext3_extent_header *eh = (struct ext3_extent_header *)ino_st.i_block;
+        ext4_stat_t fst;
+        memset(&ino_st, 0, sizeof(ino_st));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/frag_d2.bin", &fst));
+        TEST_ASSERT_EQ_INT(0, ext2fs_read_inode_full(ctx->fs, fst.ino, (struct ext2_inode *)&ino_st, sizeof(ino_st)));
+        TEST_ASSERT(eh->eh_depth >= 2);
+    }
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Verify depth>=2 read under Direct Extent I/O and fsck-lite healthy */
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/frag_d2.bin", 0, &hf));
+    for (uint32_t i = 0; i < 380U; i += 17U) {
+        uint8_t rbuf[1024];
+        uint8_t exp = (uint8_t)((i * 19U + 3U) & 0xFF);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, hf, rbuf, (uint64_t)i * 1024ULL, sizeof(rbuf), &r));
+        TEST_ASSERT_EQ_INT(1024, (int)r);
+        TEST_ASSERT_EQ_INT(exp, rbuf[0]);
+        TEST_ASSERT_EQ_INT(exp, rbuf[1023]);
+    }
+    ext4_vfs_close_handle(hf);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    {
+        fsck_lite_report_t rep;
+        TEST_ASSERT_EQ_INT(0, ext4_fsck_lite_run(depth_img, 0, 0, 4096, &rep));
+        TEST_ASSERT_EQ_INT(1, rep.healthy);
+        TEST_ASSERT(rep.checked_extents >= 760);
+        ext4_fsck_lite_free_report(&rep);
+    }
+    DeleteFileA(depth_img);
+
+    /* 2. Uninitialized extents (EXT2_EXTENT_FLAGS_UNINIT) & inline_data + expansion */
+    test_make_temp_path(bound_img, sizeof(bound_img), "vfs_boundaries.img");
+    DeleteFileA(bound_img);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(bound_img, 8ULL * 1024ULL * 1024ULL, "BNDP3"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = bound_img;
+    cfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/uninit.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/tiny_inline.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    {
+        win32_io_config_t iocfg;
+        ext2_filsys fs = NULL;
+        ext2_ino_t uninit_ino = 0, inline_ino = 0;
+        blk64_t ublk = 0;
+        uint8_t junk[4096];
+        const char *inline_msg = "inline-ext4-payload-phase3-test";
+        size_t inline_len = strlen(inline_msg);
+
+        memset(&iocfg, 0, sizeof(iocfg));
+        iocfg.sector_size = 4096;
+        win32_io_set_next_config(&iocfg);
+        TEST_ASSERT_EQ_INT(0, ext2fs_open2(bound_img, NULL, EXT2_FLAG_RW | EXT2_FLAG_64BITS,
+                                           0, 0, win32_io_manager, &fs));
+        TEST_ASSERT_EQ_INT(0, ext2fs_read_bitmaps(fs));
+        TEST_ASSERT_EQ_INT(0, ext2fs_namei(fs, EXT2_ROOT_INO, EXT2_ROOT_INO, "/uninit.bin", &uninit_ino));
+        TEST_ASSERT_EQ_INT(0, ext2fs_namei(fs, EXT2_ROOT_INO, EXT2_ROOT_INO, "/tiny_inline.txt", &inline_ino));
+
+        /* Allocate 1 block, write 0xA5 on disk, then attach as UNINIT extent */
+        TEST_ASSERT_EQ_INT(0, ext2fs_alloc_block2(fs, 10, NULL, &ublk));
+        memset(junk, 0xA5, sizeof(junk));
+        TEST_ASSERT_EQ_INT(0, io_channel_write_blk64(fs->io, ublk, 1, junk));
+        {
+            ext2_extent_handle_t eh = NULL;
+            struct ext2fs_extent ext;
+            struct ext2_inode_large u_st;
+            memset(&ext, 0, sizeof(ext));
+            ext.e_lblk = 0;
+            ext.e_pblk = ublk;
+            ext.e_len = 1;
+            ext.e_flags = EXT2_EXTENT_FLAGS_UNINIT;
+            TEST_ASSERT_EQ_INT(0, ext2fs_extent_open(fs, uninit_ino, &eh));
+            TEST_ASSERT_EQ_INT(0, ext2fs_extent_insert(eh, 0, &ext));
+            ext2fs_extent_free(eh);
+
+            memset(&u_st, 0, sizeof(u_st));
+            TEST_ASSERT_EQ_INT(0, ext2fs_read_inode_full(fs, uninit_ino, (struct ext2_inode *)&u_st, sizeof(u_st)));
+            TEST_ASSERT_EQ_INT(0, ext2fs_iblk_add_blocks(fs, (struct ext2_inode *)&u_st, 1));
+            TEST_ASSERT_EQ_INT(0, ext2fs_inode_size_set(fs, (struct ext2_inode *)&u_st, 4096));
+            TEST_ASSERT_EQ_INT(0, ext2fs_write_inode_full(fs, uninit_ino, (struct ext2_inode *)&u_st, sizeof(u_st)));
+        }
+
+        /* Enable inline_data feature & populate /tiny_inline.txt inline */
+        fs->super->s_feature_incompat |= EXT4_FEATURE_INCOMPAT_INLINE_DATA;
+        ext2fs_mark_super_dirty(fs);
+        {
+            struct ext2_inode_large i_st;
+            char ibuf[64];
+            memset(&i_st, 0, sizeof(i_st));
+            TEST_ASSERT_EQ_INT(0, ext2fs_read_inode_full(fs, inline_ino, (struct ext2_inode *)&i_st, sizeof(i_st)));
+            i_st.i_flags &= ~EXT4_EXTENTS_FL;
+            i_st.i_flags |= EXT4_INLINE_DATA_FL;
+            memset(i_st.i_block, 0, sizeof(i_st.i_block));
+            TEST_ASSERT_EQ_INT(0, ext2fs_write_inode_full(fs, inline_ino, (struct ext2_inode *)&i_st, sizeof(i_st)));
+            TEST_ASSERT_EQ_INT(0, ext2fs_inline_data_init(fs, inline_ino));
+            memset(ibuf, 0, sizeof(ibuf));
+            memcpy(ibuf, inline_msg, inline_len);
+            TEST_ASSERT_EQ_INT(0, ext2fs_inline_data_set(fs, inline_ino, NULL, ibuf, inline_len));
+            TEST_ASSERT_EQ_INT(0, ext2fs_read_inode_full(fs, inline_ino, (struct ext2_inode *)&i_st, sizeof(i_st)));
+            TEST_ASSERT_EQ_INT(0, ext2fs_inode_size_set(fs, (struct ext2_inode *)&i_st, inline_len));
+            TEST_ASSERT_EQ_INT(0, ext2fs_write_inode_full(fs, inline_ino, (struct ext2_inode *)&i_st, sizeof(i_st)));
+        }
+        TEST_ASSERT_EQ_INT(0, ext2fs_close_free(&fs));
+    }
+
+    /* RO Direct Extent I/O must zero-fill UNINIT and read inline_data via fallback */
+    cfg.read_only = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(1, ctx->enable_direct_io);
+    {
+        uint8_t rbuf[4096];
+        ext4_file_handle_t *hu = NULL, *hi = NULL;
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/uninit.bin", 0, &hu));
+        memset(rbuf, 0xFF, sizeof(rbuf));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, hu, rbuf, 0, 4096, &r));
+        TEST_ASSERT_EQ_INT(4096, (int)r);
+        for (size_t i = 0; i < 4096; i++) {
+            if (rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, rbuf[i]);
+        }
+        ext4_vfs_close_handle(hu);
+
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/tiny_inline.txt", 0, &hi));
+        memset(rbuf, 0, sizeof(rbuf));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, hi, rbuf, 0, 128, &r));
+        TEST_ASSERT_EQ_INT(31, (int)r);
+        TEST_ASSERT(memcmp(rbuf, "inline-ext4-payload-phase3-test", 31) == 0);
+        ext4_vfs_close_handle(hi);
+    }
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Standard --rw read UNINIT (zeros) & expand inline_data past inline size */
+    cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    {
+        uint8_t *rbuf = (uint8_t *)malloc(4096U);
+        uint8_t *big = (uint8_t *)malloc(5000U);
+        uint8_t *got_big = (uint8_t *)malloc(5000U);
+        ext4_file_handle_t *hu = NULL, *hi = NULL;
+        TEST_ASSERT(rbuf != NULL && big != NULL && got_big != NULL);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/uninit.bin", 0, &hu));
+        memset(rbuf, 0xFF, 4096U);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, hu, rbuf, 0, 4096, &r));
+        TEST_ASSERT_EQ_INT(4096, (int)r);
+        for (size_t i = 0; i < 4096; i++) {
+            if (rbuf[i] != 0) TEST_ASSERT_EQ_INT(0, rbuf[i]);
+        }
+        ext4_vfs_close_handle(hu);
+
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/tiny_inline.txt", 1, &hi));
+        memset(rbuf, 0, 4096U);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, hi, rbuf, 0, 64, &r));
+        TEST_ASSERT_EQ_INT(31, (int)r);
+        TEST_ASSERT(memcmp(rbuf, "inline-ext4-payload-phase3-test", 31) == 0);
+
+        for (size_t i = 0; i < 5000U; i++) big[i] = (uint8_t)((i * 29 + 7) & 0xFF);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, hi->ino, big, 0, 5000U, 0, &w, NULL));
+        TEST_ASSERT_EQ_INT(5000, (int)w);
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, hi, got_big, 0, 5000U, &r));
+        TEST_ASSERT_EQ_INT(5000, (int)r);
+        TEST_ASSERT_EQ_INT(0, memcmp(big, got_big, 5000U));
+        ext4_vfs_close_handle(hi);
+        free(rbuf);
+        free(big);
+        free(got_big);
+    }
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    DeleteFileA(bound_img);
+    return 0;
+}
+
+static int test_rw_standard_stateless_coherence(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *ha = NULL, *hb = NULL;
+    fsck_lite_report_t rep;
+    uint8_t blk[4096], rbuf[4096];
+    uint32_t w = 0, r = 0;
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_rw_stateless.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "RWSTATE"));
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.enable_rw_fast_io = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/seq.bin", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/seq.bin", 1, &ha));
+    for (uint32_t i = 0; i < 64U; i++) {
+        memset(blk, (uint8_t)(i + 10U), sizeof(blk));
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, ha->ino, blk, (uint64_t)i * 4096ULL,
+                                             sizeof(blk), 0, &w, NULL));
+        TEST_ASSERT_EQ_INT(4096, (int)w);
+    }
+    for (uint32_t i = 0; i < 64U; i++) {
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, ha, rbuf, (uint64_t)i * 4096ULL, sizeof(rbuf), &r));
+        TEST_ASSERT_EQ_INT(4096, (int)r);
+        TEST_ASSERT_EQ_INT((uint8_t)(i + 10U), rbuf[0]);
+        TEST_ASSERT_EQ_INT((uint8_t)(i + 10U), rbuf[4095]);
+    }
+
+    /* Cross-handle stateless coherence */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/seq.bin", 1, &hb));
+    memset(blk, 0x7E, sizeof(blk));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, hb->ino, blk, 4096ULL, sizeof(blk), 0, &w, NULL));
+    TEST_ASSERT_EQ_INT(4096, (int)w);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, ha, rbuf, 4096ULL, sizeof(rbuf), &r));
+    TEST_ASSERT_EQ_INT(4096, (int)r);
+    TEST_ASSERT_EQ_INT(0x7E, rbuf[0]);
+    TEST_ASSERT_EQ_INT(0x7E, rbuf[4095]);
+    ext4_vfs_close_handle(hb);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_truncate(ctx, ha->ino, 1024ULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, ha, rbuf, 512ULL, 1024U, &r));
+    TEST_ASSERT_EQ_INT(512, (int)r);
+    ext4_vfs_close_handle(ha);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_fsck_lite_run(img_path, 0, 0, 4096, &rep));
+    TEST_ASSERT_EQ_INT(1, rep.healthy);
+    ext4_fsck_lite_free_report(&rep);
+
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -2724,5 +3006,7 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_rw_fast_io_concurrent_rw_stress);
     RUN_TEST(test_rw_fast_io_large_file_4gb_sparse_boundary);
     RUN_TEST(test_case_insensitive_collision_priority);
+    RUN_TEST(test_ext4_format_boundaries_phase3);
+    RUN_TEST(test_rw_standard_stateless_coherence);
     return suite_failures;
 }

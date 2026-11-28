@@ -559,6 +559,19 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
         return -EINVAL;
     }
 
+    if (probe.feature_incompat & EXT3_FEATURE_INCOMPAT_JOURNAL_DEV) {
+        ext4_log(EXT4_LOG_ERROR,
+                 "Source '%s' is an external JBD2 journal device (journal_dev) and cannot be mounted.",
+                 cfg->source_path);
+        return -ENOTSUP;
+    }
+    if (probe.unsupported_incompat != 0) {
+        ext4_log(EXT4_LOG_ERROR,
+                 "Unsupported ext4 incompat features (0x%08X) on '%s'. Cannot mount safely.",
+                 probe.unsupported_incompat, cfg->source_path);
+        return -ENOTSUP;
+    }
+
     int has_overlay = (cfg->overlay_upper_dir && cfg->overlay_upper_dir[0] != '\0');
     int lower_ro = has_overlay ? 1 : cfg->read_only;
     read_only = cfg->read_only;
@@ -582,6 +595,71 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
         ext4_log(EXT4_LOG_ERROR,
                  "--rw-fast-io is only supported in direct Read-Write (--rw) mode.");
         return -EINVAL;
+    }
+
+    if (!lower_ro) {
+        if (cfg->ignore_csum_errors) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "--ignore-csum-errors is only allowed in Read-Only or --overlay mode (refusing RW).");
+            return -EINVAL;
+        }
+        if (probe.feature_incompat & EXT4_FEATURE_INCOMPAT_ENCRYPT) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "fscrypt (encrypt) is enabled on '%s'; Read-Write (--rw) is blocked. Use Read-Only or --overlay.",
+                     cfg->source_path);
+            return -ENOTSUP;
+        }
+        if (probe.feature_ro_compat & EXT4_FEATURE_RO_COMPAT_VERITY) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "fs-verity (verity) is enabled on '%s'; Read-Write (--rw) is blocked to protect Merkle trees. Use Read-Only or --overlay.",
+                     cfg->source_path);
+            return -ENOTSUP;
+        }
+        if (ext4_probe_has_external_journal(&probe)) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "External journal device (s_journal_dev=0x%X) on '%s'; Read-Write (--rw) is blocked. Replay on Linux or use Read-Only/--overlay.",
+                     probe.journal_dev, cfg->source_path);
+            return -ENOTSUP;
+        }
+        if (probe.unsupported_ro_compat != 0) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "Unsupported ext4 ro_compat features (0x%08X) on '%s'; Read-Write (--rw) is blocked.",
+                     probe.unsupported_ro_compat, cfg->source_path);
+            return -ENOTSUP;
+        }
+        if (probe.feature_ro_compat & EXT4_FEATURE_RO_COMPAT_READONLY) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "Volume '%s' has RO_COMPAT_READONLY set; Read-Write (--rw) is blocked.",
+                     cfg->source_path);
+            return -EROFS;
+        }
+        if (probe.feature_ro_compat & EXT4_FEATURE_RO_COMPAT_SHARED_BLOCKS) {
+            ext4_log(EXT4_LOG_ERROR,
+                     "Volume '%s' uses shared_blocks; Read-Write (--rw) is blocked.",
+                     cfg->source_path);
+            return -ENOTSUP;
+        }
+    } else {
+        if (probe.feature_incompat & EXT4_FEATURE_INCOMPAT_ENCRYPT) {
+            ext4_log(EXT4_LOG_WARN,
+                     "Volume '%s' uses fscrypt (encrypt): encrypted files/names will appear as ciphertext or fail without Linux keys.",
+                     cfg->source_path);
+        }
+        if (probe.feature_ro_compat & EXT4_FEATURE_RO_COMPAT_VERITY) {
+            ext4_log(EXT4_LOG_WARN,
+                     "Volume '%s' uses fs-verity: Read-Only mount does not verify fs-verity Merkle digests.",
+                     cfg->source_path);
+        }
+        if (ext4_probe_has_external_journal(&probe)) {
+            ext4_log(EXT4_LOG_WARN,
+                     "Volume '%s' references an external journal (s_journal_dev=0x%X), which is not attached on Windows.",
+                     cfg->source_path, probe.journal_dev);
+        }
+        if (cfg->ignore_csum_errors) {
+            ext4_log(EXT4_LOG_WARN,
+                     "Mounting '%s' with --ignore-csum-errors (metadata CRC32C checks bypassed in read-only lower).",
+                     cfg->source_path);
+        }
     }
 
     if (!lower_ro && dirty && !cfg->force_rw_on_dirty) {

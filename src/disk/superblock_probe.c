@@ -51,6 +51,9 @@ int ext4_probe_superblock_buffer(const uint8_t *sb_1024, ext4_probe_result_t *ou
     out->feature_incompat = sb->s_feature_incompat;
     out->feature_ro_compat = sb->s_feature_ro_compat;
     out->journal_inum = sb->s_journal_inum;
+    out->journal_dev = sb->s_journal_dev;
+    out->unsupported_incompat = sb->s_feature_incompat & ~(uint32_t)EXT2_LIB_FEATURE_INCOMPAT_SUPP;
+    out->unsupported_ro_compat = sb->s_feature_ro_compat & ~(uint32_t)EXT2_LIB_FEATURE_RO_COMPAT_SUPP;
     out->state_flags = sb->s_state;
     out->last_mount_time = (uint64_t)sb->s_mtime | ((uint64_t)sb->s_mtime_hi << 32);
     out->last_fsck_time = (uint64_t)sb->s_lastcheck | ((uint64_t)sb->s_lastcheck_hi << 32);
@@ -265,6 +268,13 @@ size_t ext4_feature_ro_compat_names(uint32_t mask, const char **out_names, size_
     return collect_feature_names(mask, kRoCompat, sizeof(kRoCompat) / sizeof(kRoCompat[0]), out_names, max_names);
 }
 
+int ext4_probe_has_external_journal(const ext4_probe_result_t *probe) {
+    if (!probe) return 0;
+    return ((probe->feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL) != 0 &&
+            probe->journal_inum == 0 &&
+            probe->journal_dev != 0) ? 1 : 0;
+}
+
 void ext4_evaluate_mount_advice(const ext4_probe_result_t *probe, ext4_mount_advice_t *out) {
     if (!out) return;
     memset(out, 0, sizeof(*out));
@@ -284,12 +294,24 @@ void ext4_evaluate_mount_advice(const ext4_probe_result_t *probe, ext4_mount_adv
         return;
     }
 
+    if (probe->unsupported_incompat != 0) {
+        char msg[160];
+        snprintf(msg, sizeof(msg),
+                 "Unsupported incompat feature bits 0x%08X; libext2fs cannot safely mount this volume.",
+                 probe->unsupported_incompat);
+        strcpy_s(out->recommended_mode, sizeof(out->recommended_mode), "none");
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason), msg);
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason), msg);
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason), msg);
+        return;
+    }
+
     if (probe->metadata_csum_enabled && !probe->sb_checksum_valid) {
         strcpy_s(out->recommended_mode, sizeof(out->recommended_mode), "none");
         strcpy_s(out->ro_reason, sizeof(out->ro_reason),
-                 "Superblock CRC32C checksum mismatch detected; inspect or repair with Linux e2fsck before mounting.");
+                 "Superblock CRC32C checksum mismatch; run fsck-lite / Linux e2fsck or --ignore-csum-errors (RO only).");
         strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
-                 "Superblock CRC32C checksum mismatch detected; inspect or repair with Linux e2fsck before mounting.");
+                 "Superblock CRC32C checksum mismatch; run fsck-lite / Linux e2fsck or --ignore-csum-errors (Overlay).");
         strcpy_s(out->rw_reason, sizeof(out->rw_reason),
                  "Superblock CRC32C checksum mismatch detected; mounting RW is unsafe.");
         return;
@@ -298,23 +320,49 @@ void ext4_evaluate_mount_advice(const ext4_probe_result_t *probe, ext4_mount_adv
     out->read_only_allowed = 1;
     out->overlay_allowed = 1;
     strcpy_s(out->recommended_mode, sizeof(out->recommended_mode), "read_only");
-    strcpy_s(out->ro_reason, sizeof(out->ro_reason),
-             "Safe non-destructive Read-Only access with Direct Extent I/O.");
-    strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
-             "Keeps lower ext4 strictly Read-Only and writes changes to an NTFS upperdir.");
+
+    if (probe->feature_incompat & EXT4_FEATURE_INCOMPAT_ENCRYPT) {
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason),
+                 "Allowed Read-Only, but fscrypt entries appear unreadable/encrypted without Linux kernel keys.");
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
+                 "Lower fscrypt entries appear unreadable; only NTFS upperdir files can be written.");
+    } else if (ext4_probe_has_external_journal(probe)) {
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason),
+                 "Allowed Read-Only, but external journal (s_journal_dev) cannot be inspected/replayed on Windows.");
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
+                 "Lower keeps ext4 RO; external journal (s_journal_dev) is ignored while changes go to upperdir.");
+    } else if (probe->feature_ro_compat & EXT4_FEATURE_RO_COMPAT_VERITY) {
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason),
+                 "Allowed Read-Only with Direct Extent I/O (fs-verity Merkle verification is not enforced).");
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
+                 "Keeps lower ext4 strictly RO (fs-verity protected) and writes changes to an NTFS upperdir.");
+    } else {
+        strcpy_s(out->ro_reason, sizeof(out->ro_reason),
+                 "Safe non-destructive Read-Only access with Direct Extent I/O.");
+        strcpy_s(out->overlay_reason, sizeof(out->overlay_reason),
+                 "Keeps lower ext4 strictly Read-Only and writes changes to an NTFS upperdir.");
+    }
 
     if (probe->journal_state == EXT4_JOURNAL_HAS_ERRORS) {
         out->read_write_allowed = 0;
         strcpy_s(out->rw_reason, sizeof(out->rw_reason),
-                 "Filesystem error flag (EXT2_ERROR_FS) or journal errno is set; run Linux e2fsck before Read-Write.");
+                 "Filesystem error flag (EXT2_ERROR_FS) or journal errno is set; run fsck-lite / Linux e2fsck before Read-Write.");
     } else if (probe->journal_state == EXT4_JOURNAL_NEEDS_RECOVERY) {
         out->read_write_allowed = 0;
         strcpy_s(out->rw_reason, sizeof(out->rw_reason),
                  "Unreplayed JBD2 journal (NEEDS_RECOVERY); replay journal in Linux or use Read-Only / Overlay.");
+    } else if (ext4_probe_has_external_journal(probe)) {
+        out->read_write_allowed = 0;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "External journal device (s_journal_dev) is set; Read-Write is blocked for safety.");
     } else if (probe->feature_incompat & EXT4_FEATURE_INCOMPAT_ENCRYPT) {
         out->read_write_allowed = 0;
         strcpy_s(out->rw_reason, sizeof(out->rw_reason),
                  "fscrypt encryption (encrypt) is enabled; direct Read-Write is blocked for safety.");
+    } else if (probe->feature_ro_compat & EXT4_FEATURE_RO_COMPAT_VERITY) {
+        out->read_write_allowed = 0;
+        strcpy_s(out->rw_reason, sizeof(out->rw_reason),
+                 "fs-verity (verity) is enabled; direct Read-Write is blocked to avoid Merkle tree mismatch.");
     } else if (probe->feature_ro_compat & EXT4_FEATURE_RO_COMPAT_READONLY) {
         out->read_write_allowed = 0;
         strcpy_s(out->rw_reason, sizeof(out->rw_reason),
@@ -323,6 +371,11 @@ void ext4_evaluate_mount_advice(const ext4_probe_result_t *probe, ext4_mount_adv
         out->read_write_allowed = 0;
         strcpy_s(out->rw_reason, sizeof(out->rw_reason),
                  "Shared blocks feature is enabled; direct Read-Write is blocked.");
+    } else if (probe->unsupported_ro_compat != 0) {
+        out->read_write_allowed = 0;
+        snprintf(out->rw_reason, sizeof(out->rw_reason),
+                 "Unsupported ro_compat feature bits 0x%08X; direct Read-Write is blocked.",
+                 probe->unsupported_ro_compat);
     } else {
         out->read_write_allowed = 1;
         strcpy_s(out->rw_reason, sizeof(out->rw_reason),

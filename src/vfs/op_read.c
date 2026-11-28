@@ -74,9 +74,16 @@ static int ext4_vfs_standard_read_fallback_locked(ext4_vfs_ctx_t *ctx, ext2_ino_
         if (LINUX_S_ISDIR(inode->i_mode)) {
             retval = EISDIR;
         } else {
-            retval = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, NULL);
-            if (retval == 0) {
-                retval = ext2fs_file_read(file, buf, length, &got);
+            uint64_t isize = EXT2_I_SIZE(inode);
+            if (offset >= isize) {
+                got = 0;
+            } else {
+                uint64_t avail = isize - offset;
+                unsigned int to_read = (avail < (uint64_t)length) ? (unsigned int)avail : (unsigned int)length;
+                retval = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, NULL);
+                if (retval == 0) {
+                    retval = ext2fs_file_read(file, buf, to_read, &got);
+                }
             }
         }
         ext2fs_file_close(file);

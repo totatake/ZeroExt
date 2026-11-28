@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **47 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **51 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -51,6 +51,8 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_mbr_and_ebr_logical_partitions` | MBR + 拡張 EBR チェーン解析（論理パーティション 5 の ext4 検出） |
 | `test_dirty_journal_and_jbd2_probe` | JBD2 inode 8 スーパーブロック（Big-Endian `s_start != 0`）および `EXT2_ERROR_FS` 検出 |
 | `test_probe_extended_diagnostics_and_mount_advice` | 可読機能フラグ名配列、`last_mount_time`/`last_fsck_time`/`fsck_error_count`、クリーン/Dirty/`encrypt`/スーパーブロック CRC32C 破損時の `ext4_evaluate_mount_advice` 検証 |
+| `test_unsupported_feature_detection_and_ignore_csum` | `verity`/`encrypt`/外部ジャーナル (`s_journal_dev`) 時の RW `-ENOTSUP` 拒否、`journal_dev` 全拒否、CRC32C 破損時の `--ignore-csum-errors` RO 救出／RW `-EINVAL` 拒否検証 |
+| `test_fsck_lite_clean_and_corruptions` | `ext4_fsck_lite_run` の正常イメージ診断、重複物理ブロック・孤立 inode チェーン検出、実行前後イメージバイト不変（厳密 RO）検証 |
 
 ### 2.3 `vfs_operations` ([tests/test_vfs_operations.c](../tests/test_vfs_operations.c))
 
@@ -75,6 +77,8 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_rw_fast_io_concurrent_rw_stress` | `--rw --rw-fast-io` 有効下での 10 スレッド同時並列 RW ストレス（同一 iノード異ストライプ 4 書込＋128KB スパースホール維持・Read-After-Write 検証、別ファイル `truncate`/`flush`、作成/リネーム/削除競合、並列 4 読込）＋ `verify_ext4_image_integrity` ＋ RO Direct I/O 全ストライプ照合 |
 | `test_rw_fast_io_large_file_4gb_sparse_boundary` | `--rw --rw-fast-io` での `2 GiB` / `4 GiB` 境界跨ぎスパース書込・ホールゼロ読取・`LARGE_FILE` 機能フラグ付与・4 GiB 境界跨ぎ `truncate` 縮小／再伸長ゼロ埋め＋`verify_ext4_image_integrity`＋RO Direct Extent I/O 再照合 |
 | `test_case_insensitive_collision_priority` | `/Foo.txt`・`/foo.txt` 共存下での厳密一致優先・フォールバック時の決定論的順序解決 ＆ `ext4_vfs_get_ci_collision_count` 検証 |
+| `test_ext4_format_boundaries_phase3` | 1KB ブロック 380 断片の `eh_depth >= 2` 多段木＋`fsck-lite` 検証、非ゼロ汚染済み `UNINIT` エクステントの RO/RW ゼロ埋め直読、`inline_data` の RO フォールバック読取＆`--rw` 書込展開検証 |
+| `test_rw_standard_stateless_coherence` | 標準 `--rw`（ステートレス経路）における連続 64 回 4KB 書込/読込、別ハンドル書込即時可視性、`truncate` および事後 `fsck-lite` 健全性検証 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 
@@ -114,7 +118,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 3. GUI 自動テスト (`ZeroExt4.Gui.Tests` / `--self-test`)
 
-[gui/ZeroExt4.Gui.Tests/Program.cs](../gui/ZeroExt4.Gui.Tests/Program.cs) に **11 件** の自動テストが実装されており、`scripts/build_gui.ps1` ではテスト実行に加えて実バイナリの `ZeroExt4Gui.exe --self-test` も検証します。
+[gui/ZeroExt4.Gui.Tests/Program.cs](../gui/ZeroExt4.Gui.Tests/Program.cs) に **12 件** の自動テストが実装されており、`scripts/build_gui.ps1` ではテスト実行に加えて実バイナリの `ZeroExt4Gui.exe --self-test` も検証します。
 
 | テスト名 | 主な検証内容 |
 | :--- | :--- |
@@ -129,6 +133,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `MainViewModel_ValidationAndPreview` | マウント前入力検証・Dirty ボリューム時の RW 自動抑止／プリセット強制変換・CLI プレビュー更新検証 |
 | `TrayIconService_MountUnmountMenuRebuild` | マウント／アンマウントに伴うシステムトレイメニュー再構築検証 |
 | `LiveCoreCli_InspectAndBrowseIntegration` | 実 `zeroext4.exe` サブプロセス起動による `inspect`（拡張診断）／`doctor`／`overlay`（`diff`/`validate`/`export`/`reset`）／`ls --json` 疎結合統合検証 |
+| `Phase3_FsckLiteArgsAndLiveIntegration` | `BuildFsckLiteArgs` および実 `zeroext4.exe fsck-lite --json` サブプロセス起動による `FsckLiteReport` JSON 統合検証 |
 
 ---
 

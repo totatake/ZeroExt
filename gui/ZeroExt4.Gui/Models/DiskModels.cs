@@ -681,6 +681,96 @@ namespace ZeroExt4.Gui.Models
         public ulong RemovedEntries { get; set; }
     }
 
+    public sealed class FsckLiteFinding
+    {
+        [JsonPropertyName("severity")]
+        public string Severity { get; set; } = string.Empty;
+
+        [JsonPropertyName("category")]
+        public string Category { get; set; } = string.Empty;
+
+        [JsonPropertyName("code")]
+        public string Code { get; set; } = string.Empty;
+
+        [JsonPropertyName("inode")]
+        public ulong Inode { get; set; }
+
+        [JsonPropertyName("block")]
+        public ulong Block { get; set; }
+
+        [JsonPropertyName("message")]
+        public string Message { get; set; } = string.Empty;
+    }
+
+    public sealed class FsckLiteReport
+    {
+        [JsonPropertyName("source")]
+        public string Source { get; set; } = string.Empty;
+
+        [JsonPropertyName("partition")]
+        public uint Partition { get; set; }
+
+        [JsonPropertyName("healthy")]
+        public bool Healthy { get; set; }
+
+        [JsonPropertyName("fs_kind")]
+        public string FsKind { get; set; } = string.Empty;
+
+        [JsonPropertyName("volume_label")]
+        public string VolumeLabel { get; set; } = string.Empty;
+
+        [JsonPropertyName("uuid")]
+        public string Uuid { get; set; } = string.Empty;
+
+        [JsonPropertyName("block_size")]
+        public uint BlockSize { get; set; }
+
+        [JsonPropertyName("inode_size")]
+        public uint InodeSize { get; set; }
+
+        [JsonPropertyName("blocks_count")]
+        public ulong BlocksCount { get; set; }
+
+        [JsonPropertyName("inodes_count")]
+        public ulong InodesCount { get; set; }
+
+        [JsonPropertyName("group_count")]
+        public uint GroupCount { get; set; }
+
+        [JsonPropertyName("checked_inodes")]
+        public ulong CheckedInodes { get; set; }
+
+        [JsonPropertyName("checked_extents")]
+        public ulong CheckedExtents { get; set; }
+
+        [JsonPropertyName("checked_dirs")]
+        public ulong CheckedDirs { get; set; }
+
+        [JsonPropertyName("checked_dirents")]
+        public ulong CheckedDirents { get; set; }
+
+        [JsonPropertyName("orphan_count")]
+        public ulong OrphanCount { get; set; }
+
+        [JsonPropertyName("duplicate_blocks")]
+        public ulong DuplicateBlocks { get; set; }
+
+        [JsonPropertyName("journal_state")]
+        public string JournalState { get; set; } = string.Empty;
+
+        [JsonPropertyName("error_count")]
+        public ulong ErrorCount { get; set; }
+
+        [JsonPropertyName("warning_count")]
+        public ulong WarningCount { get; set; }
+
+        [JsonPropertyName("info_count")]
+        public ulong InfoCount { get; set; }
+
+        [JsonPropertyName("findings")]
+        public List<FsckLiteFinding> Findings { get; set; } = new List<FsckLiteFinding>();
+    }
+
     public static class ByteFormatter
     {
         public static string Format(ulong bytes)

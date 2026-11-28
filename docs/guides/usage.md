@@ -71,6 +71,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 # 物理ドライブ一覧またはイメージファイルのパーティション解析・診断（管理者権限で物理ディスクアクセス可）
 .\build\zeroext4.exe list
 .\build\zeroext4.exe inspect <image_or_disk> [--partition <N>] [--json]
+.\build\zeroext4.exe fsck-lite <image_or_disk> [--partition <N>] [--json]
 .\build\zeroext4.exe doctor [--source <image_or_disk>] [--partition <N>] [--overlay <ntfs_upper_dir>] [--json]
 
 # Overlay Upperdir の差分確認・検証・.tar エクスポート・安全リセット
@@ -136,6 +137,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 - `--file-info-timeout <ms|infinite>`: WinFsp カーネルメタデータ／キャッシュ有効時間（RO 時は既定 `infinite`）
 - `--ro-fallback`: `--rw` 指定時に Dirty Journal 検出時へ RO 自動フォールバック
 - `--force-dirty`: Dirty Journal 検出時でも強制的に RW オープン（非推奨・上級者向け）
+- `--ignore-csum-errors`: Read-Only / `--overlay` 時のメタデータ CRC32C 検査バイパス（破損調査・救出向け、`--rw` とは併用不可）
 - `--debug`: WinFsp デバッグログ有効化
 - `--stop-event <name>`: 指定 Win32 Event シグナル受信時に安全アンマウント
 - `--json-events`: マウント状態・統計・エラーを 1 行 JSON イベントで標準出力へ通知
