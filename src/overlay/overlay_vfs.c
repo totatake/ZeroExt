@@ -1516,12 +1516,33 @@ void overlay_vfs_destroy(ext4_overlay_ctx_t *ov) {
 
 /* ---- VFS Operations ---- */
 
-int overlay_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
+static int overlay_get_upper_actual_leaf(const wchar_t *upper_path_w, char *out_leaf, size_t out_leaf_sz) {
+    WIN32_FIND_DATAW fd;
+    HANDLE hfind;
+
+    if (!upper_path_w || !upper_path_w[0] || !out_leaf || out_leaf_sz == 0) return -EINVAL;
+    out_leaf[0] = '\0';
+    hfind = FindFirstFileW(upper_path_w, &fd);
+    if (hfind == INVALID_HANDLE_VALUE) {
+        return win32_err_to_errno(GetLastError());
+    }
+    FindClose(hfind);
+    if (ext4_wide_to_utf8(fd.cFileName, out_leaf, out_leaf_sz) != 0) {
+        out_leaf[0] = '\0';
+        return -ENAMETOOLONG;
+    }
+    return 0;
+}
+
+int overlay_vfs_stat_with_name(ext4_vfs_ctx_t *ctx, const char *path,
+                               ext4_stat_t *out_st, char *out_leaf, size_t out_leaf_sz) {
     char norm[1024];
     ov_resolution_t res;
     int rc;
 
     if (!ctx || !ctx->overlay || !path || !out_st) return -EINVAL;
+    if (out_leaf && out_leaf_sz > 0) out_leaf[0] = '\0';
+
     rc = overlay_resolve(ctx, path, norm, sizeof(norm), &res);
     if (rc != 0) return rc;
     if (!res.exists) return -ENOENT;
@@ -1529,9 +1550,22 @@ int overlay_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st)
     if (res.in_upper) {
         fill_stat_from_upper(ctx, norm, res.upper_path_w,
                              res.in_lower ? res.lower_st.ino : 0, out_st);
+        if (out_leaf && out_leaf_sz > 0) {
+            if (strcmp(norm, "/") == 0) {
+                strcpy_s(out_leaf, out_leaf_sz, "/");
+            } else if (overlay_get_upper_actual_leaf(res.upper_path_w, out_leaf, out_leaf_sz) != 0) {
+                const char *slash = strrchr(norm, '/');
+                strcpy_s(out_leaf, out_leaf_sz, slash ? (slash + 1) : norm);
+            }
+        }
     } else {
-        *out_st = res.lower_st;
-        out_st->ino = overlay_assign_ino(ctx, norm, res.lower_st.ino);
+        if (out_leaf && out_leaf_sz > 0) {
+            rc = ext4_vfs_lower_stat_with_name(ctx, norm, out_st, out_leaf, out_leaf_sz);
+            if (rc != 0) return rc;
+        } else {
+            *out_st = res.lower_st;
+        }
+        out_st->ino = overlay_assign_ino(ctx, norm, out_st->ino);
         /* In an active RW overlay, lower-only files are logically writable via copy-up
          * unless the POSIX mode lacks write bits or the context is configured read-only. */
         if (ctx->read_only) {
@@ -1541,6 +1575,10 @@ int overlay_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st)
         }
     }
     return 0;
+}
+
+int overlay_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st) {
+    return overlay_vfs_stat_with_name(ctx, path, out_st, NULL, 0);
 }
 
 int overlay_vfs_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st) {
@@ -2348,6 +2386,7 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
     char new_parent[1024], new_leaf[EXT2_NAME_LEN + 1];
     char old_parent[1024], old_leaf[EXT2_NAME_LEN + 1];
     wchar_t new_wh_w[1024];
+    int is_case_only_ci = 0;
     int rc;
 
     if (!ctx || !ctx->overlay || !old_path || !new_path) return -EINVAL;
@@ -2387,11 +2426,6 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
             goto out_free;
         }
     }
-    if (same_path(ctx, old_norm, new_norm)) {
-        rc = 0;
-        goto out_free;
-    }
-
     rc = ext4_vfs_split_parent(new_norm, new_parent, sizeof(new_parent), new_leaf, sizeof(new_leaf));
     if (rc != 0) goto out_free;
     if (is_reserved_wh_name(new_leaf)) {
@@ -2400,6 +2434,32 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
     }
     rc = ext4_vfs_split_parent(old_norm, old_parent, sizeof(old_parent), old_leaf, sizeof(old_leaf));
     if (rc != 0) goto out_free;
+
+    is_case_only_ci = (ctx->case_insensitive && _stricmp(old_norm, new_norm) == 0) ? 1 : 0;
+    if (!ctx->case_insensitive) {
+        if (strcmp(old_norm, new_norm) == 0) {
+            rc = 0;
+            goto out_free;
+        }
+    } else if (is_case_only_ci) {
+        char actual_old_leaf[EXT2_NAME_LEN + 1];
+        ext4_stat_t dummy_st;
+        int leaf_rc;
+
+        actual_old_leaf[0] = '\0';
+        if (old_res->in_upper) {
+            leaf_rc = overlay_get_upper_actual_leaf(old_res->upper_path_w, actual_old_leaf, sizeof(actual_old_leaf));
+        } else {
+            leaf_rc = ext4_vfs_lower_stat_with_name(ctx, old_norm, &dummy_st, actual_old_leaf, sizeof(actual_old_leaf));
+        }
+        if (leaf_rc != 0 || actual_old_leaf[0] == '\0') {
+            strcpy_s(actual_old_leaf, sizeof(actual_old_leaf), old_leaf);
+        }
+        if (strcmp(actual_old_leaf, new_leaf) == 0) {
+            rc = 0;
+            goto out_free;
+        }
+    }
 
     EnterCriticalSection(&ctx->overlay->mut_cs);
     rc = overlay_resolve(ctx, new_parent, NULL, 0, new_parent_res);
@@ -2410,7 +2470,7 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
     rc = overlay_resolve(ctx, old_parent, NULL, 0, old_parent_res);
     if (rc != 0) goto out_unlock;
 
-    if (new_res->exists) {
+    if (new_res->exists && !is_case_only_ci) {
         if (!replace_if_exists) { rc = -EEXIST; goto out_unlock; }
         if (new_res->is_dir) {
             ov_empty_check_t chk = {0};
@@ -2468,9 +2528,12 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
         DeleteFileW(new_wh_w);
     }
 
-    if (!MoveFileExW(old_res->upper_path_w, new_res->upper_path_w, MOVEFILE_REPLACE_EXISTING)) {
-        rc = win32_err_to_errno(GetLastError());
-        goto out_unlock;
+    {
+        DWORD move_flags = (old_res->is_dir || is_case_only_ci) ? 0 : MOVEFILE_REPLACE_EXISTING;
+        if (!MoveFileExW(old_res->upper_path_w, new_res->upper_path_w, move_flags)) {
+            rc = win32_err_to_errno(GetLastError());
+            goto out_unlock;
+        }
     }
 
     /* If moving a directory and new_norm also existed as a lower dir, mark new_norm opaque */
@@ -2484,8 +2547,9 @@ int overlay_vfs_rename(ext4_vfs_ctx_t *ctx, const char *old_path, const char *ne
         }
     }
 
-    /* Whiteout old_norm if it still exists in Lower */
-    if (old_parent_res->lower_scope_active && old_parent_res->in_lower) {
+    /* Whiteout old_norm if it still exists in Lower (skip for case-only rename under CI,
+     * otherwise .wh.<old_leaf> would case-insensitively hide the newly renamed Upper target). */
+    if (!is_case_only_ci && old_parent_res->lower_scope_active && old_parent_res->in_lower) {
         ext4_stat_t lower_old;
         if (ext4_vfs_lower_stat(ctx, old_norm, &lower_old) == 0) {
             wchar_t old_wh_w[1024];

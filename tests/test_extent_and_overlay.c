@@ -1171,6 +1171,170 @@ static int test_overlay_symlink_and_windows_namespace_guards(void) {
     return 0;
 }
 
+typedef struct ov_case_readdir_check {
+    const char *want_exact;
+    const char *forbid_exact;
+    int         want_count;
+    int         forbid_count;
+} ov_case_readdir_check_t;
+
+static int ov_case_readdir_cb(const char *name, const ext4_stat_t *st, void *user_ctx) {
+    ov_case_readdir_check_t *chk = (ov_case_readdir_check_t *)user_ctx;
+    (void)st;
+    if (chk->want_exact && strcmp(name, chk->want_exact) == 0) chk->want_count++;
+    if (chk->forbid_exact && strcmp(name, chk->forbid_exact) == 0) chk->forbid_count++;
+    return 0;
+}
+
+static int test_overlay_case_only_rename(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    char wh_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st;
+    char actual_leaf[EXT2_NAME_LEN + 1];
+    char buf[64];
+    uint32_t nw = 0, nr = 0;
+    ov_case_readdir_check_t rchk;
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_case_ren.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "ov_case_ren_upper");
+    DeleteFileA(img_path);
+    cleanup_dir_recursive(upper_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "OVCASEREN"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/hello.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/hello.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "lower-hello", 0, 11, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/lower_dir", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/lower_dir/inside.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/lower_dir/inside.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "lower-inside", 0, 12, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    cfg.overlay_upper_dir = upper_dir;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    /* 1. Upper-only file: a.txt -> a.TXT (replace=0), simulating WinFsp uppercased FileName too */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/a.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/a.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "hello-case", 0, 10, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/a.txt", "/a.TXT", 0));
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/a.txt", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "a.TXT") == 0);
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "a.TXT";
+    rchk.forbid_exact = "a.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, EXT2_ROOT_INO, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    TEST_ASSERT_EQ_INT(0, rchk.forbid_count);
+
+    /* 2. Upper-only file: a.TXT -> A.txt (replace=1) must NOT self-delete */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/A.TXT", "/A.txt", 1));
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/a.txt", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "A.txt") == 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/A.txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, buf, 0, 10, &nr));
+    TEST_ASSERT_EQ_INT(10, (long long)nr);
+    TEST_ASSERT(memcmp(buf, "hello-case", 10) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* 3. Genuine no-op when actual on-disk casing already matches */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/a.txt", "/A.txt", 0));
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/a.txt", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "A.txt") == 0);
+
+    /* 4. Lower-only file case-only rename (replace=0 & replace=1) must NOT whiteout itself */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/hello.txt", "/hello.TXT", 0));
+    snprintf(wh_path, sizeof(wh_path), "%s\\.wh.hello.txt", upper_dir);
+    TEST_ASSERT(GetFileAttributesA(wh_path) == INVALID_FILE_ATTRIBUTES);
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/hello.txt", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "hello.TXT") == 0);
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "hello.TXT";
+    rchk.forbid_exact = "hello.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, EXT2_ROOT_INO, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    TEST_ASSERT_EQ_INT(0, rchk.forbid_count);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/hello.TXT", "/Hello.Txt", 1));
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/hello.txt", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "Hello.Txt") == 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/Hello.Txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, buf, 0, 11, &nr));
+    TEST_ASSERT_EQ_INT(11, (long long)nr);
+    TEST_ASSERT(memcmp(buf, "lower-hello", 11) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/Hello.Txt"));
+    TEST_ASSERT_EQ_INT(-ENOENT, ext4_vfs_stat(ctx, "/hello.txt", &st));
+
+    /* 5. Upper-only directory case-only rename (replace=0 & replace=1) */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/sub_case", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/sub_case/item.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/sub_case/item.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "sub-item", 0, 8, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/sub_case", "/SUB_CASE", 0));
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/sub_case", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "SUB_CASE") == 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/SUB_CASE", "/Sub_Case", 1));
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/sub_case", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "Sub_Case") == 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/Sub_Case/item.txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, buf, 0, 8, &nr));
+    TEST_ASSERT_EQ_INT(8, (long long)nr);
+    TEST_ASSERT(memcmp(buf, "sub-item", 8) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* 6. Lower directory case-only rename preserves children without self-whiteout */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_rename(ctx, "/lower_dir", "/LOWER_DIR", 0));
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_with_name(ctx, "/lower_dir", &st, actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT(strcmp(actual_leaf, "LOWER_DIR") == 0);
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "LOWER_DIR";
+    rchk.forbid_exact = "lower_dir";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, EXT2_ROOT_INO, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    TEST_ASSERT_EQ_INT(0, rchk.forbid_count);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/LOWER_DIR/inside.txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, buf, 0, 12, &nr));
+    TEST_ASSERT_EQ_INT(12, (long long)nr);
+    TEST_ASSERT(memcmp(buf, "lower-inside", 12) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+    cleanup_dir_recursive(upper_dir);
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_extent_and_overlay(void) {
     int suite_failures = 0;
     printf("\n=== Suite: extent_and_overlay ===\n");
@@ -1183,5 +1347,6 @@ int run_suite_extent_and_overlay(void) {
     RUN_TEST(test_overlay_hashmap_scalability_and_deterministic_inodes);
     RUN_TEST(test_overlay_tools_status_diff_validate_export_reset);
     RUN_TEST(test_overlay_symlink_and_windows_namespace_guards);
+    RUN_TEST(test_overlay_case_only_rename);
     return suite_failures;
 }

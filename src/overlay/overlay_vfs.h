@@ -53,6 +53,8 @@ int overlay_vfs_create(ext4_vfs_ctx_t *lower_ctx, const char *upper_dir_utf8,
 void overlay_vfs_destroy(ext4_overlay_ctx_t *ov);
 
 int overlay_vfs_stat(ext4_vfs_ctx_t *ctx, const char *path, ext4_stat_t *out_st);
+int overlay_vfs_stat_with_name(ext4_vfs_ctx_t *ctx, const char *path,
+                               ext4_stat_t *out_st, char *out_leaf, size_t out_leaf_sz);
 int overlay_vfs_stat_ino(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, const char *leaf_name, ext4_stat_t *out_st);
 int overlay_vfs_set_times(ext4_vfs_ctx_t *ctx, ext2_ino_t ino, uint32_t win_attrs,
                           uint64_t ctime_ft, uint64_t atime_ft, uint64_t mtime_ft, uint64_t chgtime_ft);

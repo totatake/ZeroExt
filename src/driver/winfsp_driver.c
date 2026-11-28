@@ -1,6 +1,7 @@
 #include "winfsp_driver.h"
 #include "../common/ext4_errno.h"
 #include "../common/win_namespace.h"
+#include "../overlay/overlay_vfs.h"
 #include "../trace/perfetto_trace.h"
 #include <sddl.h>
 #include <shlobj.h>
@@ -1190,8 +1191,7 @@ static NTSTATUS FspGetDirInfoByName_impl(FSP_FILE_SYSTEM *FileSystem, PVOID File
         if (!ctx->overlay) {
             rc = ext4_vfs_lower_stat_with_name(ctx, full_path, &st, actual_leaf, sizeof(actual_leaf));
         } else {
-            rc = ext4_vfs_stat(ctx, full_path, &st);
-            strcpy_s(actual_leaf, sizeof(actual_leaf), leaf_req);
+            rc = overlay_vfs_stat_with_name(ctx, full_path, &st, actual_leaf, sizeof(actual_leaf));
         }
     }
 
