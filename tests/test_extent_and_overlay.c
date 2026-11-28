@@ -1404,6 +1404,158 @@ static int test_overlay_case_only_rename(void) {
     return 0;
 }
 
+static int test_overlay_ci_dir_and_self_symlink(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st_sym, st_dir, st_chk;
+    char buf[64];
+    uint32_t nw = 0, nr = 0;
+    ov_case_readdir_check_t rchk;
+
+    test_make_temp_path(img_path, sizeof(img_path), "ov_ci_dir_sym.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "ov_ci_dir_sym_upper");
+    DeleteFileA(img_path);
+    cleanup_dir_recursive(upper_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "OVCISYM"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/AAA", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/AAA/hello.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/AAA/hello.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "hello-aaa", 0, 9, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/aaa", "AAA"));
+
+    /* Create symlink /zzz BEFORE directory /ZZZ */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/zzz", "ZZZ"));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/ZZZ", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/ZZZ/hello_z.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/ZZZ/hello_z.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "hello-zzz", 0, 9, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/DirMix", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/DirMix/AAA", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/DirMix/AAA/nested.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/DirMix/aaa", "AAA"));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Mount CI overlay */
+    cfg.case_insensitive = 1;
+    cfg.read_only = 0;
+    cfg.overlay_upper_dir = upper_dir;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    /* 1. Visit /zzz FIRST, then /ZZZ: inodes and stat must never alias */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/zzz", &st_sym));
+    TEST_ASSERT_EQ_INT(1, st_sym.is_symlink);
+    TEST_ASSERT_EQ_INT(0, st_sym.is_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/ZZZ", 0, &h, &st_dir));
+    TEST_ASSERT_EQ_INT(1, st_dir.is_dir);
+    TEST_ASSERT_EQ_INT(0, st_dir.is_symlink);
+    TEST_ASSERT(st_dir.ino != st_sym.ino);
+
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_ino(ctx, st_sym.ino, "zzz", &st_chk));
+    TEST_ASSERT_EQ_INT(1, st_chk.is_symlink);
+    TEST_ASSERT_EQ_INT(0, overlay_vfs_stat_ino(ctx, st_dir.ino, "ZZZ", &st_chk));
+    TEST_ASSERT_EQ_INT(1, st_chk.is_dir);
+
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "hello_z.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, h->ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* 2. Visit /aaa FIRST, then /AAA */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/aaa", &st_sym));
+    TEST_ASSERT_EQ_INT(1, st_sym.is_symlink);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/AAA", 0, &h, &st_dir));
+    TEST_ASSERT_EQ_INT(1, st_dir.is_dir);
+    TEST_ASSERT_EQ_INT(0, st_dir.is_symlink);
+    TEST_ASSERT(st_dir.ino != st_sym.ino);
+
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "hello.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, h->ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* 3. Mixed-case parent lookup of symlink then real dir */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/dirmix/aaa", &st_sym));
+    TEST_ASSERT_EQ_INT(1, st_sym.is_symlink);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/dirmix/AAA", 0, &h, &st_dir));
+    TEST_ASSERT_EQ_INT(1, st_dir.is_dir);
+    TEST_ASSERT_EQ_INT(0, st_dir.is_symlink);
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "nested.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, h->ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    /* 4. Create file inside /AAA (copy-up upper/AAA): both /AAA and /aaa must keep lower hello.txt + upper_new.txt */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/AAA/upper_new.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/AAA/upper_new.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "upper-data", 0, 10, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/AAA", 0, &h));
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "hello.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, h->ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "upper_new.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, h->ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open_stat(ctx, "/aaa", 0, &h, &st_chk));
+    TEST_ASSERT_EQ_INT(1, st_chk.is_dir);
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "hello.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, h->ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    memset(&rchk, 0, sizeof(rchk));
+    rchk.want_exact = "upper_new.txt";
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_readdir(ctx, h->ino, ov_case_readdir_cb, &rchk));
+    TEST_ASSERT_EQ_INT(1, rchk.want_count);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/aaa/hello.txt", 0, &h));
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, buf, 0, 9, &nr));
+    TEST_ASSERT_EQ_INT(9, (long long)nr);
+    TEST_ASSERT(memcmp(buf, "hello-aaa", 9) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+    cleanup_dir_recursive(upper_dir);
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_extent_and_overlay(void) {
     int suite_failures = 0;
     printf("\n=== Suite: extent_and_overlay ===\n");
@@ -1417,5 +1569,6 @@ int run_suite_extent_and_overlay(void) {
     RUN_TEST(test_overlay_tools_status_diff_validate_export_reset);
     RUN_TEST(test_overlay_symlink_and_windows_namespace_guards);
     RUN_TEST(test_overlay_case_only_rename);
+    RUN_TEST(test_overlay_ci_dir_and_self_symlink);
     return suite_failures;
 }

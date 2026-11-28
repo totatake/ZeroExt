@@ -1120,6 +1120,166 @@ static int test_winfsp_overlay_case_only_rename(void) {
     return 0;
 }
 
+static int test_winfsp_ci_dir_and_self_symlink_reparse(void) {
+    char img_path[MAX_PATH];
+    char upper_dir[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    FSP_FILE_SYSTEM *fs = NULL;
+    const FSP_FILE_SYSTEM_INTERFACE *iface = NULL;
+    FSP_FSCTL_FILE_INFO fi;
+    PVOID fctx = NULL, dctx = NULL;
+    uint8_t *buf = (uint8_t *)malloc(8192);
+    UINT32 attrs = 0;
+    ULONG transferred = 0;
+    FSP_IO_STATUS_BLOCK iosb;
+    SIZE_T sz = 0;
+
+    TEST_ASSERT(buf != NULL);
+    test_make_temp_path(img_path, sizeof(img_path), "winfsp_ci_dir_sym.img");
+    test_make_temp_path(upper_dir, sizeof(upper_dir), "winfsp_ci_dir_sym_upper");
+    DeleteFileA(img_path);
+    cleanup_winfsp_test_dir(upper_dir);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "FSPCISYM"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/AAA", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/AAA/hello.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/aaa", "AAA"));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/zzz", "ZZZ"));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/ZZZ", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/ZZZ/hello_z.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/DirMix", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/DirMix/AAA", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/DirMix/AAA/nested.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/DirMix/aaa", "AAA"));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    for (int pass = 0; pass < 2; pass++) {
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.source_path = img_path;
+        cfg.case_insensitive = 1;
+        if (pass == 0) {
+            cfg.read_only = 1;
+        } else {
+            cfg.read_only = 0;
+            cfg.overlay_upper_dir = upper_dir;
+        }
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+        TEST_ASSERT_EQ_INT(0, winfsp_driver_create_test_fs(ctx, &fs));
+        iface = winfsp_driver_get_interface();
+        TEST_ASSERT(iface != NULL);
+
+        /* 1. Enumerate root directory first (as Windows Explorer does) */
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->Open(fs, L"\\", FILE_DIRECTORY_FILE, FILE_LIST_DIRECTORY, &dctx, &fi));
+        transferred = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->ReadDirectory(fs, dctx, NULL, NULL, buf, 8192, &transferred));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"ZZZ"));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"zzz"));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"AAA"));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"aaa"));
+        iface->Close(fs, dctx);
+        dctx = NULL;
+
+        /* 2. Query symlink \zzz first, then open real directory \ZZZ and list its entries */
+        attrs = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->GetSecurityByName(fs, L"\\zzz", &attrs, NULL, NULL));
+        TEST_ASSERT((attrs & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ==
+                    (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY));
+
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->Open(fs, L"\\ZZZ", FILE_DIRECTORY_FILE, FILE_LIST_DIRECTORY, &dctx, &fi));
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+        transferred = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->ReadDirectory(fs, dctx, NULL, NULL, buf, 8192, &transferred));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"hello_z.txt"));
+        iface->Close(fs, dctx);
+        dctx = NULL;
+
+        /* 3. Open symlink \aaa with FILE_OPEN_REPARSE_POINT first, then open real dir \AAA */
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                           iface->Open(fs, L"\\aaa", FILE_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, &fctx, &fi));
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+        iface->Close(fs, fctx);
+        fctx = NULL;
+
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->Open(fs, L"\\AAA", FILE_DIRECTORY_FILE, FILE_LIST_DIRECTORY, &dctx, &fi));
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+        transferred = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->ReadDirectory(fs, dctx, NULL, NULL, buf, 8192, &transferred));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"hello.txt"));
+        iface->Close(fs, dctx);
+        dctx = NULL;
+
+        /* 4. Mixed-case ancestor + symlink \dirmix\aaa, then \dirmix\AAA and \DirMix\AAA */
+        attrs = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->GetSecurityByName(fs, L"\\dirmix\\aaa", &attrs, NULL, NULL));
+        TEST_ASSERT((attrs & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ==
+                    (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY));
+
+        memset(&iosb, 0, sizeof(iosb));
+        sz = 4096;
+        TEST_ASSERT_EQ_INT(STATUS_REPARSE,
+                           iface->ResolveReparsePoints(fs, L"\\dirmix\\aaa\\nested.txt", 0, FALSE,
+                                                       &iosb, buf, &sz));
+        {
+            const FSP_SYMLINK_REPARSE_DATA_BUFFER *rb = (const FSP_SYMLINK_REPARSE_DATA_BUFFER *)buf;
+            TEST_ASSERT_EQ_INT(IO_REPARSE_TAG_SYMLINK, rb->ReparseTag);
+            TEST_ASSERT_EQ_INT(3 * sizeof(WCHAR), rb->SubstituteNameLength);
+            TEST_ASSERT(wcsncmp(rb->PathBuffer, L"AAA", 3) == 0);
+        }
+
+        attrs = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->GetSecurityByName(fs, L"\\dirmix\\AAA", &attrs, NULL, NULL));
+        TEST_ASSERT((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0);
+        TEST_ASSERT((attrs & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+
+        attrs = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->GetSecurityByName(fs, L"\\dirmix\\AAA\\nested.txt", &attrs, NULL, NULL));
+        TEST_ASSERT((attrs & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                           iface->Open(fs, L"\\dirmix\\AAA", FILE_DIRECTORY_FILE, FILE_LIST_DIRECTORY, &dctx, &fi));
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+        transferred = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->ReadDirectory(fs, dctx, NULL, NULL, buf, 8192, &transferred));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"nested.txt"));
+        iface->Close(fs, dctx);
+        dctx = NULL;
+
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS,
+                           iface->Open(fs, L"\\DirMix\\AAA", FILE_DIRECTORY_FILE, FILE_LIST_DIRECTORY, &dctx, &fi));
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+        TEST_ASSERT((fi.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+        transferred = 0;
+        TEST_ASSERT_EQ_INT(STATUS_SUCCESS, iface->ReadDirectory(fs, dctx, NULL, NULL, buf, 8192, &transferred));
+        TEST_ASSERT_EQ_INT(1, find_dir_entry_exact(buf, transferred, L"nested.txt"));
+        iface->Close(fs, dctx);
+        dctx = NULL;
+
+        winfsp_driver_destroy_test_fs(fs);
+        fs = NULL;
+        TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+        ctx = NULL;
+    }
+
+    cleanup_winfsp_test_dir(upper_dir);
+    DeleteFileA(img_path);
+    free(buf);
+    return 0;
+}
+
 int run_suite_winfsp_callbacks(void) {
     int suite_failures = 0;
     RUN_TEST(test_winfsp_interface_e2e);
@@ -1129,5 +1289,6 @@ int run_suite_winfsp_callbacks(void) {
     RUN_TEST(test_winfsp_safe_unmount_target);
     RUN_TEST(test_winfsp_symlink_reparse_points_and_namespace_guards);
     RUN_TEST(test_winfsp_overlay_case_only_rename);
+    RUN_TEST(test_winfsp_ci_dir_and_self_symlink_reparse);
     return suite_failures;
 }

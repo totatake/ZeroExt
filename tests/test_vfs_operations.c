@@ -3094,6 +3094,122 @@ static int test_create_uid_gid_modes_and_inheritance(void) {
     return 0;
 }
 
+static int test_ci_dir_and_self_symlink_dentry_cache(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_file_handle_t *h = NULL;
+    ext4_stat_t st_sym, st_dir, st_dir2;
+    char actual_leaf[EXT2_NAME_LEN + 1];
+    char rbuf[32];
+    uint32_t nw = 0, nr = 0;
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_ci_dir_sym.img");
+    DeleteFileA(img_path);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "CIDIRSYM"));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/DirMix", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/DirMix/AAA", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/DirMix/AAA/file.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/DirMix/AAA/file.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "dataA", 0, 5, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/DirMix/aaa", "AAA"));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/DirMix/bbb", 0755, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/DirMix/bbb/file_b.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/DirMix/bbb/file_b.txt", 1, &h));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "dataB", 0, 5, 0, &nw, NULL));
+    ext4_vfs_close_handle(h);
+    h = NULL;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/DirMix/BBB", "bbb"));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* Mount RO case-insensitive: exact-case leaf lookup via mixed-case parent must not poison dentry_cache */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 1;
+    cfg.case_insensitive = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+
+    /* 1. Symlink /dirmix/aaa first, then real directory /dirmix/AAA and /DirMix/AAA */
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/dirmix/aaa", &st_sym,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT_EQ_INT(1, st_sym.is_symlink);
+    TEST_ASSERT(strcmp(actual_leaf, "aaa") == 0);
+
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/dirmix/AAA", &st_dir,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT_EQ_INT(1, st_dir.is_dir);
+    TEST_ASSERT_EQ_INT(0, st_dir.is_symlink);
+    TEST_ASSERT(st_dir.ino != st_sym.ino);
+    TEST_ASSERT(strcmp(actual_leaf, "AAA") == 0);
+
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/DirMix/AAA", &st_dir2,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT_EQ_INT(1, st_dir2.is_dir);
+    TEST_ASSERT_EQ_INT(0, st_dir2.is_symlink);
+    TEST_ASSERT_EQ_INT((long long)st_dir.ino, (long long)st_dir2.ino);
+    TEST_ASSERT(strcmp(actual_leaf, "AAA") == 0);
+
+    /* 2. Reverse casing: symlink /dirmix/BBB first, then real directory /dirmix/bbb and /DirMix/bbb */
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/dirmix/BBB", &st_sym,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT_EQ_INT(1, st_sym.is_symlink);
+    TEST_ASSERT(strcmp(actual_leaf, "BBB") == 0);
+
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/dirmix/bbb", &st_dir,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT_EQ_INT(1, st_dir.is_dir);
+    TEST_ASSERT_EQ_INT(0, st_dir.is_symlink);
+    TEST_ASSERT(st_dir.ino != st_sym.ino);
+    TEST_ASSERT(strcmp(actual_leaf, "bbb") == 0);
+
+    actual_leaf[0] = '\0';
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_lower_stat_with_name(ctx, "/DirMix/bbb", &st_dir2,
+                                                        actual_leaf, sizeof(actual_leaf)));
+    TEST_ASSERT_EQ_INT(1, st_dir2.is_dir);
+    TEST_ASSERT_EQ_INT(0, st_dir2.is_symlink);
+    TEST_ASSERT_EQ_INT((long long)st_dir.ino, (long long)st_dir2.ino);
+    TEST_ASSERT(strcmp(actual_leaf, "bbb") == 0);
+
+    /* Reading nested files through real dirs works cleanly */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/DirMix/AAA/file.txt", 0, &h));
+    memset(rbuf, 0, sizeof(rbuf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, rbuf, 0, 16, &nr));
+    TEST_ASSERT_EQ_INT(5, (long long)nr);
+    TEST_ASSERT(memcmp(rbuf, "dataA", 5) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/dirmix/bbb/file_b.txt", 0, &h));
+    memset(rbuf, 0, sizeof(rbuf));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_read_handle(ctx, h, rbuf, 0, 16, &nr));
+    TEST_ASSERT_EQ_INT(5, (long long)nr);
+    TEST_ASSERT(memcmp(rbuf, "dataB", 5) == 0);
+    ext4_vfs_close_handle(h);
+    h = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -3118,5 +3234,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_ext4_format_boundaries_phase3);
     RUN_TEST(test_rw_standard_stateless_coherence);
     RUN_TEST(test_create_uid_gid_modes_and_inheritance);
+    RUN_TEST(test_ci_dir_and_self_symlink_dentry_cache);
     return suite_failures;
 }
