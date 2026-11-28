@@ -12,7 +12,7 @@
 Windows 10 / 11 x64 環境（Visual Studio 2022 + Python 3.x + 任意で `.NET 10 SDK`）で以下を実行します（**WinFsp SDK はビルド・自動テスト実行時には不要**で、[winfsp.h](../third_party/winfsp/include/winfsp/winfsp.h) と `winfsp_driver_create_test_fs()` によるインプロセス検証に対応しています）：
 
 ```powershell
-# 1. コア C11 ビルド + CTest 6 スイート + GUI ビルド + GUI 自動テスト 11 件 + --self-test
+# 1. コア C11 ビルド + CTest 6 スイート + GUI ビルド + GUI 自動テスト 12 件 + --self-test
 powershell -ExecutionPolicy Bypass -File .\scripts\build_and_test.ps1
 
 # 2. C/CMake/CTest のみ（-SkipGui）

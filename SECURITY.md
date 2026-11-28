@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | :--- | :--- |
-| Latest release (`v0.10.x` / `main`) | Yes |
-| Older releases (`<= v0.9.x`) | Best-effort / No |
+| Latest release (`v0.11.x` / `main`) | Yes |
+| Older releases (`<= v0.10.x`) | Best-effort / No |
 
 ## Security Boundaries in ZeroExt4
 

@@ -19,12 +19,13 @@ flowchart TD
     end
 
     subgraph DriverExe["ZeroExt4 / zeroext4.exe (ユーザー空間・GPLv2)"]
-        CLI["src/cli/main.c\n(list / inspect / extents / mount / unmount 等)"]
-        WinFspDrv["src/driver/winfsp_driver.c\n(FSP_FILE_SYSTEM_INTERFACE + UACセッション対応)"]
-        Overlay["src/overlay/overlay_vfs.c\n(--overlay 時: Upper NTFS + Copy-up + Whiteout)"]
+        CLI["src/cli/main.c\n(list / inspect / fsck-lite / doctor / overlay / mount / unmount 等)"]
+        WinFspDrv["src/driver/winfsp_driver.c\n(FSP_FILE_SYSTEM_INTERFACE + Reparse Symlink + UAC対応)"]
+        Overlay["src/overlay/overlay_vfs.c & overlay_tools.c\n(--overlay 時: O(1) Map + Copy-up + Whiteout + 差分管理)"]
         VFS["src/vfs/op_*.c\n(モジュラーVFS + 2階層SRWLOCK + Dentryキャッシュ)"]
         Extent["src/extent/extent_map.c\n(エクステント抽出 / 16シャードキャッシュ + 二分探索Read)"]
-        Disk["src/disk/\n(partition_table / superblock_probe / disk_scanner)"]
+        Disk["src/disk/\n(partition_table / superblock_probe / fsck_lite / disk_scanner)"]
+        Common["src/common/\n(ext4_errno / win_namespace 予約名ガード)"]
         Trace["src/trace/perfetto_trace.c\n(--trace 時: ロックレス TLS リングバッファ)"]
         LibExt2["third_party/e2fsprogs/lib/ext2fs\n(64bit / Extents / CRC32C / 256B Inode)"]
         Compat["compat/ (msvc_compat.h + include/)\n+ scripts/generate_e2fsprogs_headers.py"]

@@ -1,6 +1,6 @@
 # ロードマップ
 
-本書は **ZeroExt4**（`v0.10.2` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
+本書は **ZeroExt4**（`v0.11.0` 時点：`zeroext4.exe` ユーザー空間ドライバ／CLI ＆ `ZeroExt4Gui.exe` デスクトップアプリ）の完了済みマイルストーンと、今後の安全強化・運用性向上・ext4 互換性拡充のロードマップを管理するものである。詳細な変更履歴は [CHANGELOG.md](../CHANGELOG.md) を参照されたい。
 
 ---
 
@@ -20,7 +20,8 @@
 | `v0.9.0` | 2026-11-26 | プロジェクト名・バイナリ・CMake ターゲット／オプション・WPF GUI・設定パスを `ZeroExt4` へ全面リネーム（破壊的変更）、[Ext4Windows との技術比較分析](reports/ext4windows-comparison.md) 追加 |
 | `v0.10.0` | 2026-11-27 | `--rw` / 標準経路のバッチ連続エクステント書込・`fs_lock` 外並列読込・整列ゼロコピー書込最適化、`--rw-bench` ＆一貫性テスト追加、同一 SSD / WinFsp 実マウント / VFS ベンチマーク再評価 |
 | `v0.10.1` | 2026-11-27 | 独自バッチ連続エクステント読込／書込を新オプトイン **`--rw-fast-io`** へ分離し、既定 `--rw` / `--no-direct-io` を `e2fsprogs` 準拠へ復元（GUI / `--rw-bench` 比較含む）、多段エクステント境界ホール修正、`FspRename` 既存ディレクトリ上書拒否修正、`fsx` 型ファザー・10 スレッド並列 RW ストレス・WSL2 Linux カーネル双方向検証・WinFsp 公式 `winfsp-tests`（45/45 PASS）整備およびドキュメント整合 |
-| `v0.10.2` | 2026-11-28 | `--rw-fast-io` のデータ先行書込＆部分失敗ロールバック・R/W ガード対称化・`win32_io` 書込エラー時キャッシュ無条件破棄、`ZEROEXT4_FSX_SEED`/`ZEROEXT4_FSX_OPS` 可変ファザー・4 GiB スパース境界テスト（計 40 関数）・WinFsp 実マウント乱数 I/O + WSL2 検証拡充） |
+| `v0.10.2` | 2026-11-28 | `--rw-fast-io` のデータ先行書込＆部分失敗ロールバック・R/W ガード対称化・`win32_io` 書込エラー時キャッシュ無条件破棄、`ZEROEXT4_FSX_SEED`/`ZEROEXT4_FSX_OPS` 可変ファザー・4 GiB スパース境界テスト（計 40 関数）・WinFsp 実マウント乱数 I/O + WSL2 検証拡充 |
+| `v0.11.0` | 2026-11-28 | **Phase 1〜3 完了**: Overlay v2 識別子・非空未識別フォルダ拒否・`inspect` 拡張診断／`doctor`（GUI Dirty 時 RW 自動抑止含む）、`overlay status/diff/validate/export/reset`・O(1) 双方向ハッシュマップ＆決定論的 inode・WinFsp Reparse Point symlink・Windows 予約名／大小文字衝突ガード、未対応 ext4 機能明示検出＆`--ignore-csum-errors`・非破壊 4 パス診断 `fsck-lite`・既定 `--rw` ステートレス方針明確化（CTest 51 関数・GUI 12 テスト）・性能評価レポート `v0.11.0` 全項目再計測 |
 
 ---
 
@@ -48,7 +49,7 @@
 | :--- | :--- | :--- | :---: |
 | **Phase 1**<br>（短期） | **安全性・診断の強化** | 非空未識別 Upperdir の拒否＆v2 `.wh.__ext4_lower_id` 強化、GUI Dirty/エラー時 RW 抑止、`inspect` 診断拡充・`zeroext4 doctor`（GUI i18n は `v0.5.0`、安全 `unmount` 検証は `v0.6.0`、`--case-sensitive` は `v0.8.0` で完了） | **完了** |
 | **Phase 2**<br>（中期） | **Overlay 運用性・スケーラビリティ・名前空間の強化** | `overlay status/diff/validate/export/reset`、ハッシュ化による inode/path マップ O(1) 高速化、WinFsp Reparse Point 経由の symlink 透過対応、Windows 予約名／大小文字衝突の整理 | **完了** |
-| **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出、非破壊診断 `zeroext4 fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、`--rw` 標準 `libext2fs` 経路の追加最適化（バッチ連続エクステント書込・並列読込は `v0.10.0` で完了） | **中** |
+| **Phase 3**<br>（中長期） | **ext4 互換性・読み取り専用診断・RW 標準経路の改善** | `fscrypt` / 外部ジャーナル等の明示検出＆`--ignore-csum-errors`、非破壊診断 `zeroext4 fsck-lite`、多段 extent / sparse / inline / csum 破損境界テスト、既定 `--rw` のステートレス `libext2fs` 経路維持＆`inline_data` 境界修正 | **完了** |
 | **Phase 4**<br>（長期） | **配布パッケージング・エコシステム拡充** | `winget` マニフェスト、`.NET` 自己完結／ポータブル配布評価、停止済み WSL2 `ext4.vhdx` 連携ワークフロー強化 | **低〜中** |
 
 ---

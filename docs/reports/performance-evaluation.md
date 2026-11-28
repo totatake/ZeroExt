@@ -2,7 +2,7 @@
 
 本書は、**`ZeroExt4` (`zeroext4.exe` / `zeroext4_bench.exe`) の全 I/O モード比較**（Read-Only 既定のダイレクト・エクステント I/O、`--no-direct-io` 標準経路、`--rw` 既定経路、オプトイン `--rw --rw-fast-io` 経路）および **同一物理 NVMe SSD 上での Windows Native (NTFS)・`ZeroExt4`・`wsl --mount --vhd` 横並び比較** の実測結果をまとめたものである。
 
-- 対象プロジェクト: **`ZeroExt4`**（コマンド名: `zeroext4.exe`、ベンチマークバイナリ: `zeroext4_bench.exe`、評価バージョン: `v0.10.2` / Phase 3 完了時点、`2026-11-28` 全項目再計測）
+- 対象プロジェクト: **`ZeroExt4`**（コマンド名: `zeroext4.exe`、ベンチマークバイナリ: `zeroext4_bench.exe`、評価バージョン: `v0.11.0` / Phase 1〜3 完了時点、`2026-11-28` 全項目再計測）
 - ベンチマーク実装: [tests/bench_direct_io.c](../../tests/bench_direct_io.c)（ビルド成果物: `build/zeroext4_bench.exe`）
 - 同一 SSD 比較スクリプト: [scripts/bench_compare_ssd.ps1](../../scripts/bench_compare_ssd.ps1)（管理者権限 PowerShell 実行）
 - 最適化の経緯と詳細トレース解析: [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md)
@@ -51,7 +51,7 @@
 
 ---
 
-## 2. 測定結果（`v0.10.2` / Phase 3 完了時点・`2026-11-28` 再計測）
+## 2. 測定結果（`v0.11.0` / Phase 1〜3 完了時点・`2026-11-28` 再計測）
 
 ### 2.1 WinFsp ライブマウント経由（256 MB `.img` 上の `model.gguf`・4 モード実測比較）
 

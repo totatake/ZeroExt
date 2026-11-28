@@ -2,7 +2,7 @@
 
 > **一言でいうと**: `ZeroExt4` は、Windows 上から Linux の ext2 / ext3 / ext4 パーティション・イメージを **BSOD リスクゼロのユーザー空間ドライバ** でありながら **Windows Native NTFS 並み（Warm 読取 10.5 GB/s / 258K IOPS・Cold 実 SSD 読取 1.39 GB/s）** で直接共有できるファイルシステムドライバです。
 
-- 本書の前提となるベンチマーク実測値・検証環境は [性能評価レポート](reports/performance-evaluation.md)（`v0.10.2` / `2026-11-28` 再計測）および [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) に基づきます。
+- 本書の前提となるベンチマーク実測値・検証環境は [性能評価レポート](reports/performance-evaluation.md)（`v0.11.0` / `2026-11-28` 再計測）および [Perfetto トレース解析・最適化レポート](reports/perfetto-trace-analysis.md) に基づきます。
 - コンポーネント構成・ADR（設計判断記録）は [アーキテクチャ設計書](architecture.md) を参照してください。
 
 ---

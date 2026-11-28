@@ -38,6 +38,8 @@ ZeroExt4\
 │   ├── build_gui.ps1                     # .NET 10 WPF GUI ビルド＆テストスクリプト
 │   ├── find_vs.ps1                       # Visual Studio ツールチェーン自動検出ヘルパー
 │   ├── run_sanitizers.ps1                # ASan / Debug CRT リーク / /analyze 検証スクリプト
+│   ├── run_winfsp_tests.ps1              # WinFsp 公式 winfsp-tests-x64.exe 互換検証スクリプト
+│   ├── verify_e2fsck_wsl.ps1             # WSL2 Linux 実カーネル + e2fsck -fn 双方向検証スクリプト
 │   └── bench_compare_ssd.ps1             # 同一 SSD 5方式比較ベンチマークスクリプト (NTFS/ZeroExt4/WSL2)
 ├── compat/
 │   ├── msvc_compat.h                     # ext2fs PRIVATE /FI 強制インクルード用互換シム
@@ -47,17 +49,17 @@ ZeroExt4\
 │   ├── e2fsprogs/                        # 上流 e2fsprogs 1.47.4 (lib/et, lib/e2p/e2p.h, lib/ext2fs)
 │   └── winfsp/include/winfsp/winfsp.h    # WinFsp ABI 定義 & 動的ローダー
 ├── src/
-│   ├── common/                           # ext4_errno.h / .c
+│   ├── common/                           # ext4_errno, win_namespace (予約名・禁止文字ガード)
 │   ├── trace/                            # perfetto_trace.h / .c (Chrome Trace Event JSON)
 │   ├── io/                               # win32_io.h / .c
-│   ├── disk/                             # partition_table, superblock_probe, disk_scanner
+│   ├── disk/                             # partition_table, superblock_probe, fsck_lite, disk_scanner
 │   ├── extent/                           # extent_map.h / .c (ダイレクト・エクステント直結I/O)
-│   ├── overlay/                          # overlay_vfs.h / .c (NTFS Upperdir OverlayFS)
+│   ├── overlay/                          # overlay_vfs (O(1)ハッシュ/Copy-up/Whiteout), overlay_tools (status/diff/validate/export/reset)
 │   ├── vfs/                              # ext4_vfs.h, op_*.c
-│   ├── driver/                           # winfsp_driver.h / .c
+│   ├── driver/                           # winfsp_driver.h / .c (Reparse Point symlink 含む)
 │   └── cli/                              # main.c (zeroext4.exe)
-├── tests/                                # test_main.c + 単体・結合テスト群 + bench_direct_io.c
-└── gui/                                  # ZeroExt4.sln (.NET 10 WPF ZeroExt4.Gui + ZeroExt4.Gui.Tests)
+├── tests/                                # test_main.c + 単体・結合テスト群 (6スイート51関数) + bench_direct_io.c
+└── gui/                                  # ZeroExt4.sln (.NET 10 WPF ZeroExt4.Gui + ZeroExt4.Gui.Tests 12件)
 ```
 
 ### 1.2 CMake ターゲット構成
@@ -234,15 +236,15 @@ typedef struct ext4_vfs_ctx {
 - **キャッシュ (`ext4_extent_cache_t` ＋ オープンハンドルキャッシュ)**:
   - 16 シャード（各 `SRWLOCK` Shared 参照対応）によるキャッシュ管理に加え、WinFsp 経由のオープンファイルハンドル (`ext4_file_handle_t.cached_extents`) にマップを直接保持することで、2 回目以降の Read におけるキャッシュロック・`ref_count` 操作をゼロ化している。各 `ext4_extent_map_t` は `InterlockedIncrement` / `InterlockedDecrement` による `ref_count` 管理を行い、evict と並列 Read の競合を防止する。
 
-### 6.2 `src/overlay/overlay_vfs.h` / `.c`
-- **基本原則 & Lower-ID 照合**: `cfg.overlay_upper_dir` 指定時、Lower (`ctx->fs`) は強制的に Read-Only でオープンし、すべての更新系操作は NTFS 上の `upper_dir` に向ける。`overlay_vfs_create` 時に `<upper_dir>\.wh.__ext4_lower_id`（UUID・総ブロック数・ブロックサイズ）を検査／記録し、異なる Lower ボリュームへの誤流用を `-EINVAL` でブロックする（未マーカーの非空ディレクトリに対しては警告ログを出力）。
+### 6.2 `src/overlay/overlay_vfs.h` / `.c` & `overlay_tools.h` / `.c`
+- **基本原則 & Lower-ID v2 照合**: `cfg.overlay_upper_dir` 指定時、Lower (`ctx->fs`) は強制的に Read-Only でオープンし、すべての更新系操作は NTFS 上の `upper_dir` に向ける。マウント時に `<upper_dir>\.wh.__ext4_lower_id`（v2 形式: UUID・総ブロック数・ブロックサイズ・GPT PartUUID・パーティション配置・`:cs` フラグ。v1 も後方互換維持）を検査／記録し、異なる Lower ボリュームへの誤流用 (`-EINVAL`)・破損／未知バージョン (`-ENOTSUP`)・未マーカーの非空フォルダ (`-ENOTEMPTY`) をブロックする。
 - **解決規則 (`overlay_resolve`)**:
   - ルート `/` からパス要素ごとにたどり、`upper_dir` 上の `.wh.<name>`（ホワイトアウト）およびディレクトリ内 `.wh.__dir_opaque`（削除後再作成による不透過ディレクトリ）を判定した上で Upper 優先 → Lower フォールバックを行う。Upper に通常ファイルが存在する場合は同名の Lower ディレクトリおよび配下を遮蔽する。
-- **iノード安定性 (`overlay_assign_ino` / `overlay_lookup_ino`)**:
-  - Lower に由来するエントリには Lower の `ext2_ino_t` を引き継ぎ、Upper 新規作成エントリには `0x80000000U` 以降の合成 `ext2_ino_t` を割り当て、`path <-> ino` 双方向表で管理（`rename` 時もプレフィックス配下のパスを一括更新）。
-- **Copy-up (`ensure_upper_copy`) & マージ列挙 (`overlay_vfs_readdir`)**:
-  - Lower のみ存在するファイルへの `writable` オープン・`write`・`truncate`・`set_times`・`rename` 時に一時ファイル経由で Upper へ原子的コピーアップ（`ext4_vfs_lower_read` により Direct Extent 経由で高速転送）。
-  - `readdir` は Upper と Lower を重複排除・ホワイトアウトフィルタ付きで統合し、`.wh.*` マーカーを透過的に隠蔽する。
+- **O(1) ハッシュマップ & iノード安定性 (`overlay_assign_ino` / `overlay_lookup_ino`)**:
+  - Lower に由来するエントリには Lower の `ext2_ino_t` を引き継ぎ、Upper 新規作成エントリにはパスハッシュ由来の決定論的合成 `ext2_ino_t`（`0x80000000U+`）を割り当て、動的リサイズ可能な `ino_buckets` / `path_buckets` 双方向ハッシュテーブル（Shared ロック高速パス付き `O(1)` 検索）で管理（`rename` 時も `ino` を不変に保ちつつ配下パスを一括更新）。
+- **Copy-up (`ensure_upper_copy`) & マージ列挙 (`overlay_vfs_readdir`) & 管理ツール (`overlay_tools.c`)**:
+  - Lower のみ存在するファイルへの `writable` オープン・`write`・`truncate`・`set_times`・`rename` 時に一時ファイル経由で Upper へ原子的コピーアップ（`ext4_vfs_lower_read` により Direct Extent 経由で高速転送。ディレクトリ rename の事前サイズ計測・NTFS 空き容量検査・失敗時ロールバック付き）。
+  - `readdir` は Upper と Lower をハッシュ索引 (`ov_name_list_t`) で重複排除・ホワイトアウトフィルタ付きで統合し、`.wh.*` マーカーを透過的に隠蔽する。`overlay_tools.c` はオフライン `status` / `diff` / `validate` / `export` (POSIX USTAR `.tar` + `manifest.json`) / `reset` を提供する。
 
 ---
 

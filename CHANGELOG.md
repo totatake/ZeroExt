@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-28
+
+### Added
+- **Phase 1 — Safety & Diagnostics**:
+  - Extended `zeroext4 inspect` / `list --json` diagnostics with `partition_uuid`, readable feature-flag arrays (`feature_compat_names`, `feature_incompat_names`, `feature_ro_compat_names`), `last_mount_time`, `last_fsck_time`, `fsck_error_count`, `metadata_csum_enabled`, `sb_checksum_valid`, and `mount_advice` (`read_only_allowed`, `overlay_allowed`, `read_write_allowed`, `recommended_mode`, `reasons`), plus automatic RW suppression / RO preset fallback in `ZeroExt4Gui.exe` (`MountAdvice.ReadWriteAllowed == false`).
+  - Added `zeroext4 doctor` CLI subcommand and GUI Diagnostics panel integration to check WinFsp runtime status/version, process elevation, target volume health, and `--overlay` upperdir compatibility in one command.
+  - Upgraded `.wh.__ext4_lower_id` to v2 format (`v2;uuid=...;blocks=...;bsize=...;part_uuid=...;part_off=...;part_size=...;cs=...`) to detect cloned `.img`/VHDX volumes and layout mismatches while maintaining v1 backward compatibility; rejected non-empty unmarked upperdirs (`-ENOTEMPTY`), corrupted markers (`-EINVAL`), and unknown future marker versions (`-ENOTSUP`).
+- **Phase 2 — Overlay Operations, Scalability & Namespace**:
+  - Added `zeroext4 overlay <status|diff|validate|export|reset> --upper <dir>` CLI subcommands (`src/overlay/overlay_tools.c`)—including POSIX USTAR `.tar` export with `manifest.json`—along with preview, `.tar` export, and confirmed reset actions in `ZeroExt4Gui.exe`.
+  - Replaced linear `O(N)` overlay inode/path maps with dynamically resizing bidirectional hash tables (`O(1)` lookup with shared-lock fast path) and deterministic hash-derived synthetic inodes (`0x80000000U+`) preserved across remounts and renames (`src/overlay/overlay_vfs.c`), plus pre-copyup tree sizing, NTFS free-space validation (`-ENOSPC`), and partial-copy rollback (`measure_lower_tree_copyup`).
+  - Added WinFsp Reparse Point symlink pass-through (`IO_REPARSE_TAG_SYMLINK`, `ResolveReparsePoints`, `GetReparsePoint`, `SetReparsePoint`, `DeleteReparsePoint`) with POSIX-absolute-to-volume-relative translation, directory symlink post-processing, 16-hop loop guard, host-escape blocking, and overlay lower readlink/whiteout support (blocking symlink copy-up/creation/rename with `-ENOTSUP`).
+  - Added Windows namespace safety guards (`src/common/win_namespace.c`) blocking creation, rename, and overlay copy-up of Windows reserved device names (`CON`, `NUL`, `AUX`, `PRN`, `COM1..9`, `LPT1..9` including extensions), forbidden characters, and trailing dots/spaces while keeping lower RO reads accessible, plus deterministic case-insensitive collision resolution (exact match -> lexicographical minimum -> lowest inode) with `stat_ci_collisions` tracking.
+- **Phase 3 — ext4 Compatibility, Read-Only `fsck-lite` & Stateless RW Policy**:
+  - Added explicit detection and RW guards for unsupported/restricted ext4 features (`s_journal_dev` external journal, `encrypt` / `fscrypt`, `verity`, `shared_blocks`, unknown `incompat`/`ro_compat` bits) across `superblock_probe`, `mount_advice`, `ext4_vfs_mount`, and `inspect`, plus `--ignore-csum-errors` for RO / `--overlay` rescue mounts (rejected under `--rw` with `-EINVAL`).
+  - Added non-destructive 4-pass read-only ext4 consistency diagnostics (`zeroext4 fsck-lite`, `src/disk/fsck_lite.c`) and GUI integration (`ZeroExt4CoreClient.RunFsckLiteAsync`) checking superblocks, block group descriptors, bitmaps, extent trees / duplicate blocks, directory entries, orphan chains, and JBD2 headers without modifying the image/disk.
+  - Expanded test coverage to 51 CTest functions and 12 GUI automated tests (including `test_ext4_format_boundaries_phase3`, `test_rw_standard_stateless_coherence`, `test_fsck_lite_clean_and_corruptions`, `test_overlay_tools_status_diff_validate_export_reset`, `test_winfsp_symlink_reparse_points_and_namespace_guards`, and `Phase3_FsckLiteArgsAndLiveIntegration`).
+
+### Changed
+- Formalized the stateless upstream `libext2fs` (`ext2fs_file_open` -> I/O -> `ext2fs_file_close`) reference policy for default `--rw` mounts (keeping custom batch optimizations strictly gated behind opt-in `--rw --rw-fast-io`), and fixed `inline_data` read clamping to `EXT2_I_SIZE` in `ext4_vfs_standard_read_fallback_locked()` (`src/vfs/op_read.c`).
+- Re-measured all 4 I/O modes and same-NVMe-SSD 5-backend benchmarks on the current codebase (`2026-11-28`), clarified `--rw-fast-io` vs default modes in [`docs/reports/performance-evaluation.md`](docs/reports/performance-evaluation.md), and synchronized figures and version references to `v0.11.0` across `README.md`, `README.ja.md`, `docs/overview.md`, `docs/reports/ext4windows-comparison.md`, `docs/reports/perfetto-trace-analysis.md`, `docs/roadmap.md`, `docs/testing.md`, `docs/requirements.md`, `docs/architecture.md`, `docs/design/detailed-design.md`, and `SECURITY.md`.
+
 ## [0.10.2] - 2026-11-28
 
 ### Fixed
@@ -128,7 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented lockless Direct Extent I/O engine (`src/extent/`, enabled by default for Read-Only and `--overlay`), non-destructive NTFS Overlay VFS (`--overlay` with `.wh.__ext4_lower_id` lower-volume guard), Dirty Journal safety protection, and `UmFileContextIsUserContext2 = 1` per-open handle context tracking.
 - Added Direct I/O benchmark tool (`tests/bench_direct_io.c`) and same-SSD NTFS / ZeroExt4 / WSL2 comparison suite (`scripts/bench_compare_ssd.ps1`).
 
-[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/totatake/ZeroExt4/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/totatake/ZeroExt4/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/totatake/ZeroExt4/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/totatake/ZeroExt4/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/totatake/ZeroExt4/compare/v0.9.0...v0.10.0

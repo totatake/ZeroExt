@@ -39,11 +39,11 @@ flowchart LR
 
 ## 主な特徴
 
-- **本家 `e2fsprogs` (`libext2fs` `1.47.4`) 採用**: 64bit ブロック番号、ext4 エクステント (`EXT4_EXTENTS_FL`)、256B+ iノード（ナノ秒タイムスタンプ・`crtime`）、`metadata_csum` (CRC32C)、HTree ディレクトリに対応。
+- **本家 `e2fsprogs` (`libext2fs` `1.47.4`) 採用**: 64bit ブロック番号、ext4 エクステント (`EXT4_EXTENTS_FL`)、256B+ iノード（ナノ秒タイムスタンプ・`crtime`）、`metadata_csum` (CRC32C)、HTree ディレクトリ、および WinFsp Reparse Point シンボリックリンク（`IO_REPARSE_TAG_SYMLINK`）に対応。
 - **2-Tier 高速・安全 WinFsp パイプライン**: Read-Only 時は既定 `FileInfoTimeout = INFINITE` で Windows NT Cache Manager (`CcCopyRead` / `Mm`) と協調し、`PassQueryDirectoryFileName = 1`・`FspGetDirInfoByName`・早期 `Marker` スキップ・統合 Open/Write Stat でメタデータ経路も高速化。
 - **ダイレクト・エクステント I/O エンジン（RO / Overlay 時既定有効、`--no-direct-io` で無効化可）**: オープンハンドル `cached_extents` と 16 シャード `extent_cache` を用い、`O(log N)` 二分探索＋ロックレス物理セクタ直読 (`win32_io_pread_direct`) を実行（`--rw` 時は自動無効）。
-- **非破壊 NTFS Overlay マウント (`--overlay`)**: Lower ext4 を厳密 Read-Only に保ったまま NTFS フォルダへ Copy-up・新規作成・Whiteout 削除（`.wh.*`）を逃がし、`.wh.__ext4_lower_id` 検証および `--case-sensitive`（`FileCaseSensitiveInfo`）に対応。
-- **Windows ネイティブ非同期 I/O & 多層セーフティ**: `FILE_FLAG_OVERLAPPED`＋FLS イベント再利用で `FileObject->Lock` 直列化を解消し、4KB RMW、GPT/MBR/EBR 境界ガード、Dirty Journal 検出時の RW 抑止（`--ro-fallback`）、安全な `unmount` ターゲット検証を搭載。
+- **非破壊 NTFS Overlay マウント (`--overlay`)**: Lower ext4 を厳密 Read-Only に保ったまま NTFS フォルダへ Copy-up・新規作成・Whiteout 削除（`.wh.*`）を逃がし、O(1) ハッシュマップ、v2 `.wh.__ext4_lower_id` 検証、`--case-sensitive`（`FileCaseSensitiveInfo`）、および `overlay <status|diff|validate|export|reset>` 管理ツールに対応。
+- **Windows ネイティブ非同期 I/O・診断・多層セーフティ**: `FILE_FLAG_OVERLAPPED`＋FLS イベント再利用で `FileObject->Lock` 直列化を解消し、4KB RMW、GPT/MBR/EBR 境界ガード、Dirty Journal／未対応機能（`encrypt`/`verity`/外部ジャーナル）検出時の RW 抑止（`--ro-fallback`）、Windows 予約名 (`CON`/`NUL` 等) ガード、非破壊 `fsck-lite`・`doctor` 診断、安全な `unmount` ターゲット検証を搭載。
 - **Perfetto トレース (`--trace`) & Zero-Patch `e2fsprogs`**: 無効時ゼロオーバーヘッドで [Perfetto UI](https://ui.perfetto.dev/) 形式を出力でき、MSVC 互換シムは `compat/` へ分離。
 
 ## クイックスタート
