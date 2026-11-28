@@ -51,13 +51,13 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
   - `.img` / `.raw` ファイルの追加（**「イメージを追加...」** ボタンまたはドラッグ＆ドロップ）と新規 ext4 イメージ作成（**「新規作成...」**）は左ペイン下部から実行できます（非管理者権限のまま利用可能）。
 - **マウント設定タブ**:
   - モードカードから **Read-Only**（既定・Direct I/O ON）・**Overlay**（v2 `.wh.__ext4_lower_id` 事前検証・非空未識別フォルダ拒否ガード・**差分確認 / `.tar` エクスポート / 安全リセット** UI 付き）・**Read-Write**（Dirty／エラー／暗号化検出時は安全のため自動抑止し RO / Overlay を推奨）を選択し、空きドライブレター（既定は `L:` 優先）または空 NTFS フォルダへワンクリックでマウントします。
-  - 詳細設定では Direct I/O 切替・大文字／小文字の区別（`--case-sensitive`）・LRU キャッシュブロック数・デバッグログ・Perfetto トレース出力・同等 CLI コマンドのコピーを行えます（「詳細 & ログ」タブの **「診断を実行 (`doctor`)」** ボタンから環境・ボリューム・Upperdir の一括診断も可能です）。
+  - 詳細設定では Direct I/O 切替・大文字／小文字の区別（`--case-sensitive`）・**POSIX 所有者／パーミッション設定**（`--uid` / `--gid` / `--inherit-owner` / `--fmode` / `--dmode`、ボリュームごとのプリセット保存対応）・LRU キャッシュブロック数・デバッグログ・Perfetto トレース出力・同等 CLI コマンドのコピーを行えます（「詳細 & ログ」タブの **「診断を実行 (`doctor`)」** ボタンから環境・ボリューム・Upperdir の一括診断も可能です）。
 - **アクティブマウントタブ & システムトレイ**:
   - 稼働中のマウントごとの読取／書込スループット（MB/s）および累計転送量をリアルタイム表示し、「エクスプローラーで開く」や安全なアンマウントを実行できます。
   - マウント中にウィンドウを閉じた場合はシステムトレイへ最小化してマウントを維持できます（トレイメニューから再表示・開く・一括アンマウント終了が可能）。
   - 異常終了などで残留したドライブレターがある場合は **「残留ドライブ解除」** からクリーンアップできます（`QueryDosDeviceW` / `GetVolumeInformationW` により ZeroExt4/WinFsp 残留ドライブまたは `ext4` マウントのみを自動検出し、`C:` や通常の NTFS/exFAT ドライブ等は誤って解除されないよう保護されています）。
 - **ファイルブラウザタブ（WinFsp 不要）**:
-  - WinFsp が未導入の環境でも、`zeroext4 ls --json` を通じて ext2 / ext3 / ext4 内のディレクトリ・ファイル一覧を非破壊で閲覧できます。
+  - WinFsp が未導入の環境でも、`zeroext4 ls --json` を通じて ext2 / ext3 / ext4 内のディレクトリ・ファイル一覧（種別・名前・サイズ・`Mode`・**`UID:GID`**・`Inode`・更新日時）を非破壊で閲覧できます。
 - **ライト／ダークテーマ切替**:
   - 右上のテーマボタンから即座に切り替え可能です（設定およびボリュームごとのマウントプリセットは `%LOCALAPPDATA%\ZeroExt4\gui_settings.json` に保存されます）。
 
@@ -76,19 +76,19 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 
 # Overlay Upperdir の差分確認・検証・.tar エクスポート・安全リセット
 .\build\zeroext4.exe overlay status   --upper D:\ext4_upper [--lower <image_or_disk>] [--partition <N>] [--json]
-.\build\zeroext4.exe overlay diff     --upper D:\ext4_upper [--lower <image_or_disk>] [--partition <N>] [--json]
+.\build\zeroext4.exe overlay diff     --upper D:\ext4_upper [--lower <image_or_disk>] [--partition <N>] [--uid <N>] [--gid <N>] [--inherit-owner] [--fmode <octal>] [--dmode <octal>] [--json]
 .\build\zeroext4.exe overlay validate --upper D:\ext4_upper [--lower <image_or_disk>] [--partition <N>] [--json]
-.\build\zeroext4.exe overlay export   --upper D:\ext4_upper --output overlay_diff.tar [--lower <image_or_disk>] [--json]
+.\build\zeroext4.exe overlay export   --upper D:\ext4_upper --output overlay_diff.tar [--lower <image_or_disk>] [--uid <N>] [--gid <N>] [--inherit-owner] [--fmode <octal>] [--dmode <octal>] [--json]
 .\build\zeroext4.exe overlay reset    --upper D:\ext4_upper --yes [--json]
 
 # ext4 イメージ新規作成（4KB ブロック・256B iノード・extents・64bit・metadata_csum 有効）
 .\build\zeroext4.exe mkfs test.img --size-mb 64 --label MYEXT4
 
-# ファイル操作（イメージまたは物理パーティションに対して直接実行）
-.\build\zeroext4.exe mkdir test.img /data [--partition <N>]
-.\build\zeroext4.exe write test.img /data/hello.txt "Hello ext4!" [--partition <N>]
-.\build\zeroext4.exe write test.img /data/model.bin C:\path\to\local.bin --from-file [--partition <N>]
-.\build\zeroext4.exe ls      test.img /data [--partition <N>]
+# ファイル操作（イメージまたは物理パーティションに対して直接実行；stat / ls --json は UID:GID も出力）
+.\build\zeroext4.exe mkdir test.img /data [--partition <N>] [--uid <N>] [--gid <N>] [--inherit-owner] [--mode <octal> | --dmode <octal>]
+.\build\zeroext4.exe write test.img /data/hello.txt "Hello ext4!" [--partition <N>] [--uid <N>] [--gid <N>] [--inherit-owner] [--mode <octal> | --fmode <octal>]
+.\build\zeroext4.exe write test.img /data/model.bin C:\path\to\local.bin --from-file [--partition <N>] [--uid <N>] [--gid <N>] [--inherit-owner] [--mode <octal> | --fmode <octal>]
+.\build\zeroext4.exe ls      test.img /data [--partition <N>] [--json]
 .\build\zeroext4.exe stat    test.img /data/hello.txt [--partition <N>]
 .\build\zeroext4.exe cat     test.img /data/hello.txt [--partition <N>]
 .\build\zeroext4.exe extents test.img /data/model.bin [--partition <N>]
@@ -131,6 +131,9 @@ Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name InstallDir
 - `--rw-fast-io`: `--rw` 併用時のみ有効な実験的オプション。`ext2fs_file_read`/`write` をバイパスし、独自のバッチ連続エクステント書込・`fs_lock` 外並列読込を有効化（想定外の不具合リスクを避けるため既定は無効）
 - `--overlay <dir>`: NTFS Upperdir を指定して非破壊 Overlay RW マウント（Lower ext4 は厳密 RO、`--rw` とは併用不可、v2 `.wh.__ext4_lower_id` で UUID・GPT PartUUID・パーティション配置・`:cs` モードを照合し、マーカー無し非空フォルダは `-ENOTEMPTY` で拒否）
 - `--case-sensitive`: ファイル名・ディレクトリ名の大文字・小文字を区別してマウント（`--overlay` 併用時は空の NTFS Upperdir に `FileCaseSensitiveInfo` 属性を設定し、`.wh.__ext4_lower_id` に `:cs` 識別子を記録）
+- `--uid <N>` / `--gid <N>`: `--rw` / `--overlay` マウント時・オフライン `write`/`mkdir`・`overlay diff`/`export` で新規エントリに適用する POSIX UID/GID（既定 `0`、Linux 慣例の `1000` 等を指定可；未指定かつ親ディレクトリに `setgid` がある場合は親 GID を継承）
+- `--inherit-owner`: `--uid`/`--gid` 固定指定の代わりに、親（または `overlay` 時は最寄り下位祖先の）ディレクトリの UID/GID を新規作成エントリへ継承（`mount` / `write` / `mkdir` / `overlay diff`/`export` 対応）
+- `--fmode <octal>` / `--dmode <octal>`（オフライン `write`/`mkdir` では `--mode <octal>` も可）: 新規作成ファイル（既定 `0644`）および新規ディレクトリ（既定 `0755`）の 8 進数 POSIX パーミッションを指定（`0001..7777`、親が `setgid` ならディレクトリへ `02000` を自動継承）
 - `--no-direct-io`: RO / `--overlay` 時の既定 Direct Extent I/O を無効化し、標準ブロックキャッシュ経路を使用
 - `--direct-io`: Direct Extent I/O を明示有効化（RO / `--overlay` では既定 ON のため通常不要、`--rw` とは併用不可）
 - `--cache-blocks <N>`: LRU ブロックキャッシュ数（既定 2048 ブロック = 8MB @ 4KB）

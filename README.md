@@ -42,7 +42,7 @@ See [docs/overview.md](docs/overview.md#3-実践ユースケース) for command 
 - **Upstream `e2fsprogs` (`libext2fs` `1.47.4`)**: Supports 64-bit blocks, ext4 extents (`EXT4_EXTENTS_FL`), 256B+ inodes (nanosecond timestamps, `crtime`), `metadata_csum` (CRC32C), HTree directories, and WinFsp Reparse Point symlinks (`IO_REPARSE_TAG_SYMLINK`).
 - **2-Tier High-Speed WinFsp Pipeline**: Read-only mounts default to `FileInfoTimeout = INFINITE` (`CcCopyRead` / `Mm`) alongside `PassQueryDirectoryFileName = 1`, `FspGetDirInfoByName`, early `Marker` skipping, and single-pass Open/Write Stat.
 - **Direct Extent I/O Engine (Default ON for RO / Overlay; disable with `--no-direct-io`)**: Uses open-handle `cached_extents`, a 16-shard `extent_cache`, `O(log N)` binary search, and lockless parallel physical-sector reads (`win32_io_pread_direct`). Automatically disabled in `--rw` mode.
-- **Non-Destructive NTFS Overlay Mount (`--overlay`)**: Keeps the lower ext4 volume strictly read-only while redirecting copy-up writes, new files, and whiteout deletions (`.wh.*`) to an NTFS folder with O(1) hash maps, v2 `.wh.__ext4_lower_id` guard, `--case-sensitive` (`FileCaseSensitiveInfo`) support, and `overlay <status|diff|validate|export|reset>` management tools.
+- **Non-Destructive NTFS Overlay Mount (`--overlay`)**: Keeps the lower ext4 volume strictly read-only while redirecting copy-up writes, new files, and whiteout deletions (`.wh.*`) to an NTFS folder with O(1) hash maps, v2 `.wh.__ext4_lower_id` guard, `--case-sensitive` (`FileCaseSensitiveInfo`) support, configurable POSIX ownership/permissions (`--uid`/`--gid`/`--inherit-owner`/`--fmode`/`--dmode`), and `overlay <status|diff|validate|export|reset>` management tools.
 - **Native Windows Async I/O, Diagnostics & Safety Guards**: Eliminates `FileObject->Lock` contention via `FILE_FLAG_OVERLAPPED` + FLS events, performs 4KB RMW, enforces GPT/MBR/EBR partition boundary clamping, blocks unsafe RW mounts on dirty JBD2 journals (`--ro-fallback`) or unsupported ext4 features (`encrypt`/`verity`/`s_journal_dev`), guards Windows reserved names (`CON`/`NUL`/etc.), provides read-only `fsck-lite` & `doctor` diagnostics, and verifies WinFsp/ext4 ownership on `unmount`.
 - **Perfetto Tracing (`--trace`) & Zero-Patch `e2fsprogs`**: Exports lockless thread-local trace spans for [Perfetto UI](https://ui.perfetto.dev/) with zero overhead when off, while isolating MSVC compatibility shims in `compat/`.
 
@@ -70,7 +70,7 @@ See [Usage Guide §1](docs/guides/usage.md#1-winfsp-ランタイムのインス�
 
 ### 3. Launch GUI or Mount via CLI
 
-- **Desktop GUI (`.\build\gui\ZeroExt4Gui.exe`)**: Auto-detects disks and `.img` files, inspects JBD2 journal status, switches RO / Overlay / RW modes (default `L:` drive preference, `--case-sensitive`, English/Japanese UI, Dark/Light theme), stays in the system tray, and communicates with `zeroext4.exe` over JSON / Named Event IPC without linking GPLv2 native code.
+- **Desktop GUI (`.\build\gui\ZeroExt4Gui.exe`)**: Auto-detects disks and `.img` files, inspects JBD2 journal status, browses files with `Mode` and `UID:GID` metadata without WinFsp, switches RO / Overlay / RW modes (default `L:` drive preference, `--case-sensitive`, configurable POSIX `--uid`/`--gid`/`--fmode`/`--dmode`, English/Japanese UI, Dark/Light theme), stays in the system tray, and communicates with `zeroext4.exe` over JSON / Named Event IPC without linking GPLv2 native code.
 - **CLI Examples**:
 
 ```powershell

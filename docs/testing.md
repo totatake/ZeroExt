@@ -31,7 +31,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 
 ## 2. C/C++ 単体・結合テスト (`ctest` / `zeroext4_tests.exe`)
 
-[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **51 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
+[tests/test_main.c](../tests/test_main.c) には 6 つの CTest スイート（計 **54 テスト関数**）が登録されています。`zeroext4_tests.exe --suite <name>` でスイート単位の実行も可能です。
 
 ### 2.1 `win32_io` ([tests/test_win32_io.c](../tests/test_win32_io.c))
 
@@ -79,6 +79,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_case_insensitive_collision_priority` | `/Foo.txt`・`/foo.txt` 共存下での厳密一致優先・フォールバック時の決定論的順序解決 ＆ `ext4_vfs_get_ci_collision_count` 検証 |
 | `test_ext4_format_boundaries_phase3` | 1KB ブロック 380 断片の `eh_depth >= 2` 多段木＋`fsck-lite` 検証、非ゼロ汚染済み `UNINIT` エクステントの RO/RW ゼロ埋め直読、`inline_data` の RO フォールバック読取＆`--rw` 書込展開検証 |
 | `test_rw_standard_stateless_coherence` | 標準 `--rw`（ステートレス経路）における連続 64 回 4KB 書込/読込、別ハンドル書込即時可視性、`truncate` および事後 `fsck-lite` 健全性検証 |
+| `test_create_uid_gid_modes_and_inheritance` | `--uid`/`--gid`/`--inherit-owner`/`--fmode`/`--dmode` 指定作成、`setgid` ディレクトリ継承、`--rw` 再マウント永続性検証 |
 
 ### 2.4 `winfsp_callbacks` ([tests/test_winfsp_callbacks.c](../tests/test_winfsp_callbacks.c))
 
@@ -90,6 +91,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_winfsp_get_dir_info_by_name_and_large_readdir` | `PassQueryDirectoryFileName = 1` ＋ `FspGetDirInfoByName` 単一検索および多件数ディレクトリページネーション検証 |
 | `test_winfsp_safe_unmount_target` | `zeroext4 unmount` 時のターゲット対象検証（非 ZeroExt4 / 非 WinFsp ドライブの誤解除抑止） |
 | `test_winfsp_symlink_reparse_points_and_namespace_guards` | `ReparsePoints = 1`、`GetSecurityByName`/`ResolveReparsePoints`/`GetReparsePoint`/`SetReparsePoint`（相対・POSIX 絶対・ディレクトリ symlink・循環・ホスト越境遮断）、`ReadDirectory` 後処理、`CON`/`nul.txt`/禁止文字作成・リネーム拒否検証 |
+| `test_winfsp_overlay_case_only_rename` | Overlay 上での `Create` → `Rename`（WinFsp 大文字化 FCB パス・`ReplaceIfExists` FALSE/TRUE）→ `GetDirInfoByName` 実表記返却 → `ReadDirectory` → `Read`、およびディレクトリケース変更リネーム検証 |
 
 ### 2.5 `extent_and_overlay` ([tests/test_extent_and_overlay.c](../tests/test_extent_and_overlay.c))
 
@@ -104,6 +106,7 @@ CI（[.github/workflows/ci.yml](../.github/workflows/ci.yml)）およびリリ�
 | `test_overlay_hashmap_scalability_and_deterministic_inodes` | 650+ ファイル作成・リネーム・再マウント時の O(1) 双方向ハッシュマップおよび合成 inode 安定性／決定論性検証 |
 | `test_overlay_tools_status_diff_validate_export_reset` | `overlay_tools_scan`/`validate`（孤立 whiteout・残留 tmp 検出）・`export_tar`（USTAR/`manifest.json`）・`reset_upper`（マーカー保持＋未識別ディレクトリ拒否）検証 |
 | `test_overlay_symlink_and_windows_namespace_guards` | Overlay における Lower symlink 読取／Whiteout 削除許可・Copy-up/書込/リネーム `-ENOTSUP` 拒否、Windows 予約名 (`CON`, `AUX`, `com1.log`)・禁止文字ガード検証 |
+| `test_overlay_case_only_rename` | Upper-only / Lower-only ファイル＆ディレクトリのケースのみリネーム（`replace=0/1`）、自己削除・自己ホワイトアウト抑止、事後 `unlink` マスク検証 |
 
 ### 2.6 `perfetto_trace` ([tests/test_perfetto_trace.c](../tests/test_perfetto_trace.c))
 
