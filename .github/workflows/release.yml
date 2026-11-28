@@ -40,10 +40,12 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $stage = Join-Path $env:RUNNER_TEMP "ZeroExt4-$tag-win-x64"
           $dist  = Join-Path $PWD "dist"
-          New-Item -ItemType Directory -Force -Path $stage, $dist | Out-Null
+          $stageDocsGuides = Join-Path $stage "docs\guides"
+          New-Item -ItemType Directory -Force -Path $stage, $stageDocsGuides, $dist | Out-Null
 
           Copy-Item -Path ".\build\gui\*" -Destination $stage -Recurse -Force
           Copy-Item -Path ".\LICENSE", ".\THIRD_PARTY_NOTICES.md", ".\README.md", ".\README.ja.md" -Destination $stage -Force
+          Copy-Item -Path ".\docs\guides\usage.md" -Destination $stageDocsGuides -Force
 
           $zipPath = Join-Path $dist "ZeroExt4-$tag-win-x64.zip"
           Compress-Archive -Path "$stage\*" -DestinationPath $zipPath -Force
