@@ -5,7 +5,7 @@
 両プロジェクトは共通して `WinFsp` 上で動作しつつも、設計の主軸が異なる。`Ext4Windows` が `lwext4` のジャーナル再生・トランザクション書込や親ディレクトリの POSIX UID/GID/mode 継承を備えた **汎用・直接 Read-Write ユーティリティ指向** であるのに対し、`ZeroExt4` は大容量モデル・データセットの高速読取と ext4 非破壊性を最優先とした **Read-Only（および Lower 厳密 RO の `--overlay`）特化設計** を採っている。
 
 - 解析手法: 両リポジトリの実装ソースコードの静的構造比較（`Ext4Windows`: `CMakeLists.txt`, `src/ext4_filesystem.hpp/.cpp`, `src/blockdev_partition.cpp`, `src/blockdev_file.cpp`, `src/partition_scanner.cpp`, `src/main.cpp`, `src/server.cpp`, `src/gui/gui_main.cpp` vs `ZeroExt4`: [winfsp_driver.c](../../src/driver/winfsp_driver.c), [win32_io.c](../../src/io/win32_io.c), [extent_map.c](../../src/extent/extent_map.c), [op_init.c](../../src/vfs/op_init.c), [op_open.c](../../src/vfs/op_open.c), [op_read.c](../../src/vfs/op_read.c), [op_write.c](../../src/vfs/op_write.c), [op_readdir.c](../../src/vfs/op_readdir.c), [overlay_vfs.c](../../src/overlay/overlay_vfs.c)）
-- `ZeroExt4` の実測ベンチマーク・トレース根拠: [性能評価レポート](performance-evaluation.md)（`v0.10.0`〜`v0.10.1`）および [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md)
+- `ZeroExt4` の実測ベンチマーク・トレース根拠: [性能評価レポート](performance-evaluation.md)（`v0.10.2` / `2026-11-28` 再計測）および [Perfetto トレース解析・最適化レポート](perfetto-trace-analysis.md)
 - 比較の前提: 本書に記載した性能数値は `ZeroExt4` の実測ベンチマーク／トレース計測値であり、`Ext4Windows` 側の特性は対象時点（`v1.3.0` / `31b83e2`）のソースコード構造に基づくアーキテクチャ分析結果です（今後のバージョンで設計変更や最適化が行われる可能性があります）。
 
 ---
@@ -44,8 +44,8 @@ flowchart LR
     subgraph ZeroExt4["ZeroExt4 (2-Tier I/O バイパス・並列ロックレス経路)"]
         direction TB
         ZSys["winfsp-x64.sys (StartDispatcher(0) / PassQueryDirectoryFileName=1)"]
-        ZHot["Warm 経路 (RO 既定 FileInfoTimeout=INFINITE)\nNT Cache Manager (CcCopyRead / Mm) 直結\n=> 10,664 MB/s / 263K IOPS"]
-        ZCold["Cold 経路 (cached_extents + 16シャード extent_cache)\nO(log N) 二分探索 → ロックレス win32_io_pread_direct\nFILE_FLAG_OVERLAPPED + FLS イベント (NVMe QD>1)\n=> 実 SSD 1,506 MB/s (VFS 8T 32.5 GB/s)"]
+        ZHot["Warm 経路 (RO 既定 FileInfoTimeout=INFINITE)\nNT Cache Manager (CcCopyRead / Mm) 直結\n=> 10,536 MB/s / 258K IOPS"]
+        ZCold["Cold 経路 (cached_extents + 16シャード extent_cache)\nO(log N) 二分探索 → ロックレス win32_io_pread_direct\nFILE_FLAG_OVERLAPPED + FLS イベント (NVMe QD>1)\n=> 実 SSD 1,386 MB/s (VFS 8T 30.6 GB/s)"]
         ZMeta["メタデータ経路: 16シャード正/負 Dentry + 単一パス Open/Write Stat + FspGetDirInfoByName"]
         ZSys -->|"キャッシュヒット"| ZHot
         ZSys -->|"Cold / Unbuf"| ZCold
@@ -57,7 +57,7 @@ flowchart LR
 
 - **`Ext4Windows`**: `Ext4Windows/src/ext4_filesystem.cpp`（L359）でモードに関わらず `volume_params.FileInfoTimeout = 1000;` と固定している。WinFsp の仕様上、`FileInfoTimeout` が有限値（`1000 ms`）のままだと Windows NT Cache Manager（`CcCopyRead`）による継続的なページキャッシュ共有・バイパスが有効になりにくく、繰り返し読み取りや `mmap` でもユーザー空間の `OnRead` コールバック往復が発生しやすい。
 - **`ZeroExt4`**: [winfsp_driver.c](../../src/driver/winfsp_driver.c#L880-L885) にて、Read-Only マウント時は既定で `FileInfoTimeout = (UINT32)-1`（`INFINITE`）を設定し、カーネル側の Cache Manager (`Cc`) / Memory Manager (`Mm`) と直接協調させている（外部更新を追従したい特殊用途には `--file-info-timeout` で上書き可能、RW / 書込可能 `--overlay` では整合性のため `1000` を維持）。
-- **定量効果**: Step 2 の A/B 比較において、`1000 ms` → `INFINITE` だけで `FspRead` コールバック呼び出し回数が `17,736` → `131` 回（**-99.3%**）へ激減し、同一 NVMe SSD 計測で Warm Seq `10,664.4 MB/s` / Warm 4KB Rnd `1,026.7 MB/s` (`262,828 IOPS`) と **Windows Native NTFS 同等以上（`1.04x〜1.06x`）** に到達している（[性能評価レポート §3.3](performance-evaluation.md#33-同一-ssd-5-方式比較から得られた技術的知見step-14-および-v0100v0101-の効果)、[Perfetto トレース解析・最適化レポート §5.2](perfetto-trace-analysis.md#52-step-2-ro-時-fileinfotimeout--infinite-効果検証結果)）。
+- **定量効果**: Step 2 の A/B 比較において、`1000 ms` → `INFINITE` だけで `FspRead` コールバック呼び出し回数が `17,736` → `131` 回（**-99.3%**）へ激減し、同一 NVMe SSD 計測で Warm Seq `10,535.7 MB/s` / Warm 4KB Rnd `1,007.9 MB/s` (`258,023 IOPS`) と **Windows Native NTFS 同等以上（`1.03x〜1.07x`）** に到達している（[性能評価レポート §3.3](performance-evaluation.md#33-同一-ssd-5-方式比較から得られた技術的知見step-14-および最新分離の効果)、[Perfetto トレース解析・最適化レポート §5.2](perfetto-trace-analysis.md#52-step-2-ro-時-fileinfotimeout--infinite-効果検証結果)）。
 
 ### 2.2 並列スレッドモデルとロック設計（単一スレッド＋単一 Mutex vs マルチスレッド＋ロックレス直読）
 
@@ -67,7 +67,7 @@ flowchart LR
 - **`ZeroExt4`**:
   - [winfsp_driver.c](../../src/driver/winfsp_driver.c#L1213) で `StartDispatcher(mh->fs, 0)`（WinFsp 既定のマルチスレッドディスパッチャ）を起動する。
   - Read-Only および `--overlay` 下位層の読み取り（既定 Direct Extent I/O ON）では、[op_read.c](../../src/vfs/op_read.c#L97-L125) と [extent_map.c](../../src/extent/extent_map.c#L321-L384) が開いたハンドル内の `cached_extents`（初回のみ 16 シャード `extent_cache` を参照）に対して **VFS ロック（`ctx->rwlock` / `ctx->fs_lock`）もブロックキャッシュロックも一切取得せず** `ext4_extent_pread()` → `win32_io_pread_direct()` を並列実行する。
-  - その結果、VFS インプロセス 8 スレッド計測でも直列化を起こさず **`32,458.9 MB/s`（`519,342 IOPS`）** までスケールしている（[性能評価レポート §2.2](performance-evaluation.md#22-vfs-単体層インプロセス測定zeroext4_benchexeenable_direct_io0-vs-1)）。
+  - その結果、VFS インプロセス 8 スレッド計測でも直列化を起こさず **`30,573.7 MB/s`（`489,180 IOPS`）** までスケールしている（[性能評価レポート §2.2](performance-evaluation.md#22-vfs-単体層インプロセス測定zeroext4_benchexe2026-11-28-再計測)）。
 
 ### 2.3 Cold / 物理ディスク I/O パス（毎回 Open/Seek/Malloc 同期 I/O vs Extent 二分探索＋`OVERLAPPED` 一括直読）
 
@@ -79,7 +79,7 @@ Cold 状態（キャッシュ未ヒット、あるいは `FILE_FLAG_NO_BUFFERING
 2. **ブロックデバイス I/O 層（同期 I/O・512B 粒度・毎回ヒープ確保 vs `FILE_FLAG_OVERLAPPED`＋FLS＋ゼロコピー）**:
    - `Ext4Windows` のパーティション経路（`Ext4Windows/src/blockdev_partition.cpp` L28, L72-L74, L102-L148）は `BLOCK_SIZE = 512` かつ `FILE_FLAG_NO_BUFFERING`（`FILE_FLAG_OVERLAPPED` **未指定**）でハンドルを開き、`part_bread` のたびに **`SetFilePointerEx` → `_aligned_malloc` → 同期 `ReadFile` → `memcpy` → `_aligned_free`** を実行している。またイメージファイル経路（`Ext4Windows/src/blockdev_file.cpp` L64-L77）も CRT の `_fseeki64` + `fread` による同期 512B 単位 I/O である。
    - Windows カーネルは `FILE_FLAG_OVERLAPPED` なしのハンドルへの I/O を `FileObject->Lock` で直列化するため NVMe の Queue Depth > 1 を活かせず、さらに `part_bread` 1 回ごとの CRT ヒープ確保／解放が負荷になる。
-   - 対して `ZeroExt4` の [win32_io.c](../../src/io/win32_io.c#L729-L745) はすべてのストレージハンドルを **`FILE_FLAG_OVERLAPPED`＋`FILE_SKIP_SET_EVENT_ON_HANDLE`** で開き、FLS（`FlsAlloc`）にキャッシュしたスレッド固有イベントを再利用して非同期並列 `ReadFile` を発行する。`win32_io_pread_direct()`（[win32_io.c](../../src/io/win32_io.c#L994-L1008)）はアライン適合時にゼロコピー直読し、キャッシュ層自体も **32 シャード（64B キャッシュライン整列）＋`SRWLOCK` Shared 参照＋CLOCK インプレース置換**（ロック内 `malloc`/`free` ゼロ）で保護されている。これにより同一 NVMe SSD 上の Cold 実 SSD 読込でも **`1,506.2 MB/s`**（`WSL2 9P` 比 `9.11x`）を達成している。
+   - 対して `ZeroExt4` の [win32_io.c](../../src/io/win32_io.c#L729-L745) はすべてのストレージハンドルを **`FILE_FLAG_OVERLAPPED`＋`FILE_SKIP_SET_EVENT_ON_HANDLE`** で開き、FLS（`FlsAlloc`）にキャッシュしたスレッド固有イベントを再利用して非同期並列 `ReadFile` を発行する。`win32_io_pread_direct()`（[win32_io.c](../../src/io/win32_io.c#L994-L1008)）はアライン適合時にゼロコピー直読し、キャッシュ層自体も **32 シャード（64B キャッシュライン整列）＋`SRWLOCK` Shared 参照＋CLOCK インプレース置換**（ロック内 `malloc`/`free` ゼロ）で保護されている。これにより同一 NVMe SSD 上の Cold 実 SSD 読込でも **`1,386.2 MB/s`**（`WSL2 9P` 比 `10.89x`、`--no-direct-io` 比 `20.00x`）を達成している。
 
 ### 2.4 メタデータ探索・ディレクトリ列挙（1 ファイル 6〜7 回再探索 vs Dentry キャッシュ＋単一パス Stat＋`GetDirInfoByName`）
 
@@ -102,7 +102,7 @@ Cold 状態（キャッシュ未ヒット、あるいは `FILE_FLAG_NO_BUFFERING
 
 > [!NOTE]
 > **`ZeroExt4` の `--rw` モードにおける位置づけとトレードオフ**:
-> `ZeroExt4` も `--rw` による直接 Read-Write マウントに対応していますが、RO 専用の `FileInfoTimeout = INFINITE` および Direct Extent I/O（`extent_cache` 経由のロックレス直読）は整合性保護のため `--rw` では無効（`--rw --direct-io` 併用は `-EINVAL` で拒否）となっています。`v0.10.1` 以降、既定の `--rw` は安全性最優先で上流 `e2fsprogs` (`ext2fs_file_read`/`write`) 準拠としており、必要に応じてオプトインの `--rw --rw-fast-io` を併用することでバッチ連続エクステント書込・`fs_lock` 外並列一括読込（VFS RW 書込最大 **`4,091.9 MB/s`**・8T 読込 **`32.9 GB/s`**）を利用できます（[性能評価レポート §2.2・§2.3](performance-evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext4--wsl---mount---vhd)）。
+> `ZeroExt4` も `--rw` による直接 Read-Write マウントに対応していますが、RO 専用の `FileInfoTimeout = INFINITE` および Direct Extent I/O（`extent_cache` 経由のロックレス直読）は整合性保護のため `--rw` では無効（`--rw --direct-io` 併用は `-EINVAL` で拒否）となっています。`v0.10.1` 以降、既定の `--rw` は安全性最優先で上流 `e2fsprogs` (`ext2fs_file_read`/`write`) 準拠としており、必要に応じてオプトインの `--rw --rw-fast-io` を併用することでバッチ連続エクステント書込・`fs_lock` 外並列一括読込（VFS RW 書込最大 **`3,714.0 MB/s`**・8T 読込 **`29.6 GB/s`**）を利用できます（[性能評価レポート §2.2・§2.3](performance-evaluation.md#23-同一-nvme-ssd-5-方式比較windows-native-ntfs--zeroext4--wsl---mount---vhd)）。
 > それでも Linux 側を一切変更したくない用途では `--overlay` を第一推奨とし、`--rw` は直接書込・保守用途として提供する棲み分けです。
 
 ---

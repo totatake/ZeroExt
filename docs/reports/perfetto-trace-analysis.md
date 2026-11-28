@@ -161,7 +161,7 @@ Priority 1 で `ReadFile` 待ちが解消すると、これまで `ReadFile` の
   - `win32_io.cache_lock` 取得回数: `2.47 回/op`（`145,414 / 58,779`）→ **`4.57 回/op`**（`179,740 / 39,363`）へ増加。
   - `ReadFile`・`cache_lock` を差し引いた **純 VFS CPU 時間**: `1.24 µs/op`（総時間の `6.7%`）→ **`9.89 µs/op`（総時間の `38.1%` / `389.3 ms`）へ約 8 倍増加**。
 - **コード上の原因**:
-  - [ext4_vfs_lower_read](../../src/vfs/op_read.c#L48-L60) の標準フォールバック経路は、read 1 回ごとに `ext2fs_file_open`（ヒープ確保＋inode 読込）→ `ext2fs_file_llseek` → `ext2fs_file_read`（4 KB ブロック単位ループ）→ `ext2fs_file_close` を毎回やり直している。このため `64 KB` 読込であっても常に 4 KB × 16 回の `ReadFile` に分割され、実ディスク（`FILE_FLAG_NO_BUFFERING`）でスループットが低下する直接原因になっている（[性能評価レポート §3.3](performance-evaluation.md#33-同一-ssd-5-方式比較から得られた技術的知見step-14-の効果)）。
+  - [ext4_vfs_lower_read](../../src/vfs/op_read.c#L48-L60) の標準フォールバック経路は、read 1 回ごとに `ext2fs_file_open`（ヒープ確保＋inode 読込）→ `ext2fs_file_llseek` → `ext2fs_file_read`（4 KB ブロック単位ループ）→ `ext2fs_file_close` を毎回やり直している。このため `64 KB` 読込であっても常に 4 KB × 16 回の `ReadFile` に分割され、実ディスク（`FILE_FLAG_NO_BUFFERING`）でスループットが低下する直接原因になっている（[性能評価レポート §3.3](performance-evaluation.md#33-同一-ssd-5-方式比較から得られた技術的知見step-14-および最新分離の効果)）。
   - また書込側 [ext4_vfs_write](../../src/vfs/op_write.c#L28-L58) も `ext2fs_file_open/close` 完了直後に、改めて `ext2fs_read_inode_full` ＋ `ext2fs_write_inode_full` を実行しており、inode 更新が重複している。
 
 **改善方針**
