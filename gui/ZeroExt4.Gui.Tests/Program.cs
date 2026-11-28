@@ -292,6 +292,33 @@ namespace ZeroExt4.Gui.Tests
             Assert(!ZeroExt4ArgBuilder.BuildMountArgs(roReq).Contains("--rw-fast-io"), "RO must not pass --rw-fast-io");
             Assert(!ZeroExt4ArgBuilder.BuildMountArgs(ovReq).Contains("--rw-fast-io"), "Overlay must not pass --rw-fast-io");
 
+            // Ownership & permission options
+            rwReq.CreateUid = 1000;
+            rwReq.CreateGid = 1001;
+            rwReq.CreateFileModeOctal = "0600";
+            rwReq.CreateDirModeOctal = "0750";
+            List<string> rwOwnerArgs = ZeroExt4ArgBuilder.BuildMountArgs(rwReq);
+            Assert(rwOwnerArgs.Contains("--uid") && rwOwnerArgs.Contains("1000"), "RW custom --uid");
+            Assert(rwOwnerArgs.Contains("--gid") && rwOwnerArgs.Contains("1001"), "RW custom --gid");
+            Assert(rwOwnerArgs.Contains("--fmode") && rwOwnerArgs.Contains("0600"), "RW custom --fmode");
+            Assert(rwOwnerArgs.Contains("--dmode") && rwOwnerArgs.Contains("0750"), "RW custom --dmode");
+
+            rwReq.InheritOwner = true;
+            List<string> rwInheritArgs = ZeroExt4ArgBuilder.BuildMountArgs(rwReq);
+            Assert(rwInheritArgs.Contains("--inherit-owner"), "RW --inherit-owner");
+            Assert(!rwInheritArgs.Contains("--uid") && !rwInheritArgs.Contains("--gid"), "--inherit-owner suppresses explicit uid/gid");
+
+            roReq.CreateUid = 1000;
+            roReq.CreateFileModeOctal = "0600";
+            Assert(!ZeroExt4ArgBuilder.BuildMountArgs(roReq).Contains("--uid"), "RO must not pass --uid");
+            Assert(!ZeroExt4ArgBuilder.BuildMountArgs(roReq).Contains("--fmode"), "RO must not pass --fmode");
+
+            ushort parsedMode;
+            Assert(ZeroExt4ArgBuilder.TryParseOctalPermission("0644", out parsedMode) && parsedMode == 0x1A4, "parse 0644");
+            Assert(ZeroExt4ArgBuilder.TryParseOctalPermission("755", out parsedMode) && parsedMode == 0x1ED, "parse 755");
+            Assert(!ZeroExt4ArgBuilder.TryParseOctalPermission("0888", out _), "reject non-octal 0888");
+            Assert(!ZeroExt4ArgBuilder.TryParseOctalPermission("0000", out _), "reject zero mode");
+
             List<string> docArgs = ZeroExt4ArgBuilder.BuildDoctorArgs(@"D:\test.img", 2, @"D:\ov", caseSensitive: true, json: true);
             AssertEqual("doctor", docArgs[0], "doctor subcommand");
             Assert(docArgs.Contains("--source") && docArgs.Contains(@"D:\test.img"), "doctor source");
@@ -306,9 +333,13 @@ namespace ZeroExt4.Gui.Tests
             Assert(ovDiffArgs.Contains("--upper") && ovDiffArgs.Contains(@"D:\ov"), "overlay upper");
             Assert(ovDiffArgs.Contains("--lower") && ovDiffArgs.Contains(@"D:\test.img"), "overlay lower");
 
-            List<string> ovExportArgs = ZeroExt4ArgBuilder.BuildOverlayExportArgs(@"D:\ov", @"D:\out.tar", @"D:\test.img", 2, false, true);
+            List<string> ovExportArgs = ZeroExt4ArgBuilder.BuildOverlayExportArgs(
+                @"D:\ov", @"D:\out.tar", @"D:\test.img", 2, false, true,
+                createUid: 1000, createGid: 1000, inheritOwner: false, fmodeOctal: "0640", dmodeOctal: "0750");
             AssertEqual("export", ovExportArgs[1], "overlay export sub");
             Assert(ovExportArgs.Contains("--output") && ovExportArgs.Contains(@"D:\out.tar"), "overlay output tar");
+            Assert(ovExportArgs.Contains("--uid") && ovExportArgs.Contains("1000"), "overlay export --uid");
+            Assert(ovExportArgs.Contains("--fmode") && ovExportArgs.Contains("0640"), "overlay export --fmode");
 
             List<string> ovResetArgs = ZeroExt4ArgBuilder.BuildOverlayResetArgs(@"D:\ov", yes: true, json: true);
             AssertEqual("reset", ovResetArgs[1], "overlay reset sub");
@@ -682,6 +713,16 @@ namespace ZeroExt4.Gui.Tests
                 Assert(!vm.CanMount, "Dirty partition RW mount must be blocked unless ForceDirty is enabled");
                 vm.ForceDirty = true;
                 Assert(vm.CanMount, "Dirty partition RW mount allowed only when ForceDirty is explicitly checked");
+                vm.CreateUidText = "abc";
+                Assert(!vm.CanMount, "Invalid UID blocks mount");
+                vm.CreateUidText = "1000";
+                vm.CreateFileModeText = "0999";
+                Assert(!vm.CanMount, "Invalid octal file mode blocks mount");
+                vm.CreateFileModeText = "0640";
+                Assert(vm.CanMount, "Valid UID and octal file mode allow mount");
+                Assert(vm.CliPreviewCommand.Contains("--uid 1000") && vm.CliPreviewCommand.Contains("--fmode 0640"), "CLI preview shows custom uid/fmode");
+                vm.CreateUidText = string.Empty;
+                vm.CreateFileModeText = "0644";
                 vm.ForceDirty = false;
 
                 // Preset with RW saved for a dirty partition must automatically coerce to ReadOnly
@@ -904,8 +945,14 @@ namespace ZeroExt4.Gui.Tests
             {
                 var client = new ZeroExt4CoreClient(() => exe);
                 await client.CreateImageAsync(imgPath, 8, "FSCK_GUI");
-                CoreCommandResult wr = await client.RunCommandAsync(new[] { "write", imgPath, "/sample.txt", "phase3-fsck-lite-check" });
+                CoreCommandResult wr = await client.RunCommandAsync(new[] { "write", imgPath, "/sample.txt", "phase3-fsck-lite-check", "--uid", "1000", "--gid", "1002", "--mode", "0640" });
                 AssertEqual(0, wr.ExitCode, "write exit for fsck-lite");
+
+                LsResponse lsChk = await client.ListDirectoryAsync(imgPath, "/", 0);
+                LsEntry? sampleEntry = lsChk.Entries.FirstOrDefault(e => e.Name == "sample.txt");
+                Assert(sampleEntry != null && sampleEntry.Uid == 1000U && sampleEntry.Gid == 1002U && (sampleEntry.Mode & 0xFFFU) == 0x1A0U,
+                    "write --uid/--gid/--mode persisted in ls --json");
+                AssertEqual("1000:1002", sampleEntry!.OwnerFormatted, "LsEntry.OwnerFormatted");
 
                 FsckLiteReport report = await client.RunFsckLiteAsync(imgPath);
                 Assert(report.Healthy, "fsck-lite live report must be healthy");

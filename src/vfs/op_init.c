@@ -693,6 +693,12 @@ int ext4_vfs_mount(const ext4_mount_config_t *cfg, ext4_vfs_ctx_t **out_ctx) {
     ctx->enable_rw_fast_io = (!lower_ro && cfg->enable_rw_fast_io) ? 1 : 0;
     ctx->has_file_info_timeout = cfg->has_file_info_timeout ? 1 : 0;
     ctx->file_info_timeout = cfg->file_info_timeout;
+    ctx->create_uid = cfg->create_uid;
+    ctx->create_gid = cfg->create_gid;
+    ctx->has_create_gid = cfg->has_create_gid ? 1 : 0;
+    ctx->inherit_owner = cfg->inherit_owner ? 1 : 0;
+    ctx->create_fmode = cfg->create_fmode ? (uint16_t)(cfg->create_fmode & 07777U) : 0644U;
+    ctx->create_dmode = cfg->create_dmode ? (uint16_t)(cfg->create_dmode & 07777U) : 0755U;
     ctx->journal_state = probe.journal_state;
     ctx->partition_offset = part_offset;
     ctx->partition_size = part_size;

@@ -191,6 +191,17 @@ namespace ZeroExt4.Gui.Services
                 args.Add("--case-sensitive");
             }
 
+            if (req.Mode == MountMode.ReadWrite || req.Mode == MountMode.Overlay)
+            {
+                AppendOwnershipAndModeArgs(
+                    args,
+                    req.CreateUid,
+                    req.CreateGid,
+                    req.InheritOwner,
+                    req.CreateFileModeOctal,
+                    req.CreateDirModeOctal);
+            }
+
             if (req.CacheBlocks > 0 && req.CacheBlocks != 2048)
             {
                 args.Add("--cache-blocks");
@@ -234,10 +245,16 @@ namespace ZeroExt4.Gui.Services
             uint? partitionNumber = null,
             bool caseSensitive = false,
             bool diff = false,
-            bool json = true)
+            bool json = true,
+            uint? createUid = null,
+            uint? createGid = null,
+            bool inheritOwner = false,
+            string? fmodeOctal = null,
+            string? dmodeOctal = null)
         {
             var args = new List<string> { "overlay", diff ? "diff" : "status", "--upper", upperDir };
             AppendOverlayCommonArgs(args, lowerSource, partitionNumber, caseSensitive, json);
+            AppendOwnershipAndModeArgs(args, createUid, createGid, inheritOwner, fmodeOctal, dmodeOctal);
             return args;
         }
 
@@ -259,7 +276,12 @@ namespace ZeroExt4.Gui.Services
             string? lowerSource = null,
             uint? partitionNumber = null,
             bool caseSensitive = false,
-            bool json = true)
+            bool json = true,
+            uint? createUid = null,
+            uint? createGid = null,
+            bool inheritOwner = false,
+            string? fmodeOctal = null,
+            string? dmodeOctal = null)
         {
             var args = new List<string>
             {
@@ -268,7 +290,64 @@ namespace ZeroExt4.Gui.Services
                 "--output", outputTarPath,
             };
             AppendOverlayCommonArgs(args, lowerSource, partitionNumber, caseSensitive, json);
+            AppendOwnershipAndModeArgs(args, createUid, createGid, inheritOwner, fmodeOctal, dmodeOctal);
             return args;
+        }
+
+        public static bool TryParseOctalPermission(string? text, out ushort mode)
+        {
+            mode = 0;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            string s = text.Trim();
+            if (s.StartsWith("0o", StringComparison.OrdinalIgnoreCase))
+            {
+                s = s.Substring(2);
+            }
+            if (s.Length == 0 || s.Length > 5) return false;
+            uint val = 0;
+            foreach (char ch in s)
+            {
+                if (ch < '0' || ch > '7') return false;
+                val = (val << 3) + (uint)(ch - '0');
+                if (val > 0xFFFU) return false;
+            }
+            if (val == 0) return false;
+            mode = (ushort)val;
+            return true;
+        }
+
+        private static void AppendOwnershipAndModeArgs(
+            List<string> args,
+            uint? createUid,
+            uint? createGid,
+            bool inheritOwner,
+            string? fmodeOctal,
+            string? dmodeOctal)
+        {
+            if (inheritOwner)
+            {
+                args.Add("--inherit-owner");
+            }
+            if (createUid.HasValue && (!inheritOwner && createUid.Value != 0))
+            {
+                args.Add("--uid");
+                args.Add(createUid.Value.ToString(CultureInfo.InvariantCulture));
+            }
+            if (createGid.HasValue && !inheritOwner)
+            {
+                args.Add("--gid");
+                args.Add(createGid.Value.ToString(CultureInfo.InvariantCulture));
+            }
+            if (TryParseOctalPermission(fmodeOctal, out ushort fmode) && fmode != 0x1A4 /* 0644 */)
+            {
+                args.Add("--fmode");
+                args.Add("0" + Convert.ToString(fmode, 8).PadLeft(3, '0'));
+            }
+            if (TryParseOctalPermission(dmodeOctal, out ushort dmode) && dmode != 0x1ED /* 0755 */)
+            {
+                args.Add("--dmode");
+                args.Add("0" + Convert.ToString(dmode, 8).PadLeft(3, '0'));
+            }
         }
 
         public static List<string> BuildOverlayResetArgs(

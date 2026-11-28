@@ -507,7 +507,7 @@ static NTSTATUS FspCreate_impl(FSP_FILE_SYSTEM *FileSystem, PWSTR FileName, UINT
         }
     }
 
-    rc = ext4_vfs_create(ctx, path_utf8, is_dir, is_dir ? 0755 : 0644, FileAttributes, &ino);
+    rc = ext4_vfs_create(ctx, path_utf8, is_dir, 0, FileAttributes, &ino);
     if (rc != 0) return ext4_errno_to_ntstatus(rc);
 
     rc = ext4_vfs_open_stat(ctx, path_utf8, 1, &handle, FileInfo ? &st : NULL);

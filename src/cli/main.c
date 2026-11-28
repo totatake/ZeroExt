@@ -98,18 +98,22 @@ static void print_usage(void) {
         "  zeroext4 fsck-lite <image_or_disk> [--partition <N>] [--json]\n"
         "  zeroext4 doctor [--source <image_or_disk>] [--partition <N>] [--overlay <ntfs_upper_dir>] [--case-sensitive] [--json]\n"
         "  zeroext4 overlay <status|diff|validate|export|reset> --upper <ntfs_upper_dir> [--lower <image_or_disk>] [--partition <N>]\n"
-        "                  [--case-sensitive] [--output <archive.tar>] [--yes] [--json]\n"
+        "                  [--case-sensitive] [--output <archive.tar>] [--uid <N>] [--gid <N>] [--inherit-owner]\n"
+        "                  [--fmode <octal>] [--dmode <octal>] [--yes] [--json]\n"
         "  zeroext4 mkfs <image_path> --size-mb <N> [--label <label>]\n"
         "  zeroext4 ls <image_path> [<ext4_path>] [--partition <N>] [--json]\n"
         "  zeroext4 stat <image_path> <ext4_path> [--partition <N>]\n"
         "  zeroext4 cat <image_path> <ext4_path> [--partition <N>]\n"
         "  zeroext4 write <image_path> <ext4_path> <text_or_host_file> [--from-file] [--partition <N>]\n"
-        "  zeroext4 mkdir <image_path> <ext4_path> [--partition <N>]\n"
+        "                [--uid <N>] [--gid <N>] [--inherit-owner] [--mode <octal> | --fmode <octal>]\n"
+        "  zeroext4 mkdir <image_path> <ext4_path> [--partition <N>] [--uid <N>] [--gid <N>] [--inherit-owner]\n"
+        "                [--mode <octal> | --dmode <octal>]\n"
         "  zeroext4 rm <image_path> <ext4_path> [--partition <N>]\n"
         "  zeroext4 mv <image_path> <src_path> <dst_path> [--partition <N>]\n"
         "  zeroext4 extents <image_or_disk> <ext4_path> [--partition <N>]\n"
         "  zeroext4 mount --source <image_or_disk> --mountpoint <L:|dir> [--partition <N>] [--rw | --overlay <ntfs_upper_dir>]\n"
-        "                [--rw-fast-io] [--case-sensitive] [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>]\n"
+        "                [--rw-fast-io] [--uid <N>] [--gid <N>] [--inherit-owner] [--fmode <octal>] [--dmode <octal>]\n"
+        "                [--case-sensitive] [--no-direct-io | --direct-io] [--file-info-timeout <ms|infinite>]\n"
         "                [--ro-fallback] [--force-dirty] [--ignore-csum-errors] [--cache-blocks <N>] [--debug] [--stop-event <name>]\n"
         "                [--json-events] [--stats-interval <ms>] [--trace <output_json>] [--trace-events <N>]\n"
         "  zeroext4 unmount <L:>     (remove a stale drive letter left by a terminated mount)\n"
@@ -126,6 +130,48 @@ static uint32_t parse_u32_opt(int argc, char **argv, const char *flag, uint32_t 
         }
     }
     return def_val;
+}
+
+static int parse_u32_strict_opt(int argc, char **argv, const char *flag,
+                                int *out_present, uint32_t *out_val) {
+    *out_present = 0;
+    for (int i = 0; i + 1 < argc; i++) {
+        if (strcmp(argv[i], flag) == 0) {
+            const char *s = argv[i + 1];
+            char *endp = NULL;
+            unsigned long long v;
+            if (!s || s[0] == '\0' || s[0] == '-' || s[0] == '+') return -EINVAL;
+            errno = 0;
+            v = _strtoui64(s, &endp, 10);
+            if (errno == ERANGE || !endp || *endp != '\0' || v > 0xFFFFFFFFULL) {
+                return -EINVAL;
+            }
+            *out_present = 1;
+            *out_val = (uint32_t)v;
+        }
+    }
+    return 0;
+}
+
+static int parse_octal_mode_opt(int argc, char **argv, const char *flag,
+                                int *out_present, uint16_t *out_mode) {
+    *out_present = 0;
+    for (int i = 0; i + 1 < argc; i++) {
+        if (strcmp(argv[i], flag) == 0) {
+            const char *s = argv[i + 1];
+            char *endp = NULL;
+            unsigned long v;
+            if (!s || s[0] == '\0' || s[0] == '-' || s[0] == '+') return -EINVAL;
+            errno = 0;
+            v = strtoul(s, &endp, 8);
+            if (errno == ERANGE || !endp || *endp != '\0' || v == 0UL || v > 07777UL) {
+                return -EINVAL;
+            }
+            *out_present = 1;
+            *out_mode = (uint16_t)v;
+        }
+    }
+    return 0;
 }
 
 static const char *parse_str_opt(int argc, char **argv, const char *flag, const char *def_val) {
@@ -160,7 +206,13 @@ static const char *find_positional_skip_opts(int argc, char **argv, int start_id
             strcmp(argv[i], "--stop-event") == 0 ||
             strcmp(argv[i], "--stats-interval") == 0 ||
             strcmp(argv[i], "--trace") == 0 ||
-            strcmp(argv[i], "--trace-events") == 0) {
+            strcmp(argv[i], "--trace-events") == 0 ||
+            strcmp(argv[i], "--file-info-timeout") == 0 ||
+            strcmp(argv[i], "--uid") == 0 ||
+            strcmp(argv[i], "--gid") == 0 ||
+            strcmp(argv[i], "--mode") == 0 ||
+            strcmp(argv[i], "--fmode") == 0 ||
+            strcmp(argv[i], "--dmode") == 0) {
             i++;
             continue;
         }
@@ -636,6 +688,8 @@ typedef struct ls_json_entry {
     int      is_symlink;
     uint64_t size;
     uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
     uint32_t ino;
     uint32_t hard_links;
     uint64_t last_write_filetime;
@@ -668,6 +722,8 @@ static int ls_json_collect_cb(const char *name, const ext4_stat_t *st, void *use
         e->is_symlink = st->is_symlink ? 1 : 0;
         e->size = st->size;
         e->mode = st->mode;
+        e->uid = st->uid;
+        e->gid = st->gid;
         e->ino = st->ino;
         e->hard_links = st->hard_links;
         e->last_write_filetime = st->last_write_time;
@@ -716,6 +772,8 @@ static int cmd_ls(int argc, char **argv) {
                     const ls_json_entry_t *e = &list.items[i];
                     if (i > 0) putchar(',');
                     printf("{\"name\":"); print_json_str(e->name);
+                    printf(",\"uid\":%u", e->uid);
+                    printf(",\"gid\":%u", e->gid);
                     printf(",\"is_dir\":%s", e->is_dir ? "true" : "false");
                     printf(",\"is_symlink\":%s", e->is_symlink ? "true" : "false");
                     printf(",\"size\":%llu", (unsigned long long)e->size);
@@ -766,6 +824,7 @@ static int cmd_stat(int argc, char **argv) {
     rc = ext4_vfs_stat(ctx, path, &st);
     if (rc == 0) {
         printf("Path: %s\n", path);
+        printf("  UID:GID    : %u:%u\n", st.uid, st.gid);
         printf("  Inode      : %u\n", st.ino);
         printf("  Mode       : 0%o\n", st.mode);
         printf("  Size       : %llu\n", (unsigned long long)st.size);
@@ -829,6 +888,25 @@ static int cmd_write(int argc, char **argv) {
     }
     const char *src = argv[2];
     const char *path = argv[3];
+    int has_uid = 0, has_gid = 0, has_mode = 0, has_fmode = 0;
+    uint32_t uid = 0, gid = 0;
+    uint16_t mode_val = 0, fmode_val = 0;
+    int inherit_owner = has_flag(argc, argv, "--inherit-owner");
+
+    if (parse_u32_strict_opt(argc, argv, "--uid", &has_uid, &uid) != 0 ||
+        parse_u32_strict_opt(argc, argv, "--gid", &has_gid, &gid) != 0) {
+        fprintf(stderr, "Error: invalid --uid or --gid value (expected 0..4294967295).\n");
+        return 1;
+    }
+    if (parse_octal_mode_opt(argc, argv, "--mode", &has_mode, &mode_val) != 0 ||
+        parse_octal_mode_opt(argc, argv, "--fmode", &has_fmode, &fmode_val) != 0) {
+        fprintf(stderr, "Error: invalid --mode/--fmode value (expected non-zero octal 0001..7777).\n");
+        return 1;
+    }
+    if (!has_fmode && has_mode) {
+        has_fmode = 1;
+        fmode_val = mode_val;
+    }
     const char *payload = argv[4];
     int from_file = has_flag(argc, argv, "--from-file");
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
@@ -878,11 +956,16 @@ static int cmd_write(int argc, char **argv) {
         fprintf(stderr, "Mount RW failed: %d\n", rc);
         return 1;
     }
+    ctx->create_uid = uid;
+    ctx->create_gid = gid;
+    ctx->has_create_gid = has_gid ? 1 : 0;
+    ctx->inherit_owner = inherit_owner ? 1 : 0;
+    if (has_fmode) ctx->create_fmode = fmode_val;
 
     ext4_file_handle_t *h = NULL;
     rc = ext4_vfs_open(ctx, path, 1, &h);
     if (rc == -ENOENT) {
-        rc = ext4_vfs_create(ctx, path, 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL);
+        rc = ext4_vfs_create(ctx, path, 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL);
         if (rc == 0) {
             rc = ext4_vfs_open(ctx, path, 1, &h);
         }
@@ -918,10 +1001,36 @@ static int cmd_mkdir(int argc, char **argv) {
         return 1;
     }
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
+    int has_uid = 0, has_gid = 0, has_mode = 0, has_dmode = 0;
+    uint32_t uid = 0, gid = 0;
+    uint16_t mode_val = 0, dmode_val = 0;
+    int inherit_owner = has_flag(argc, argv, "--inherit-owner");
+
+    if (parse_u32_strict_opt(argc, argv, "--uid", &has_uid, &uid) != 0 ||
+        parse_u32_strict_opt(argc, argv, "--gid", &has_gid, &gid) != 0) {
+        fprintf(stderr, "Error: invalid --uid or --gid value (expected 0..4294967295).\n");
+        return 1;
+    }
+    if (parse_octal_mode_opt(argc, argv, "--mode", &has_mode, &mode_val) != 0 ||
+        parse_octal_mode_opt(argc, argv, "--dmode", &has_dmode, &dmode_val) != 0) {
+        fprintf(stderr, "Error: invalid --mode/--dmode value (expected non-zero octal 0001..7777).\n");
+        return 1;
+    }
+    if (!has_dmode && has_mode) {
+        has_dmode = 1;
+        dmode_val = mode_val;
+    }
+
     ext4_vfs_ctx_t *ctx = NULL;
     int rc = mount_helper(argv[2], part, 0, &ctx);
     if (rc != 0) return 1;
-    rc = ext4_vfs_mkdir(ctx, argv[3], 0755, NULL);
+    ctx->create_uid = uid;
+    ctx->create_gid = gid;
+    ctx->has_create_gid = has_gid ? 1 : 0;
+    ctx->inherit_owner = inherit_owner ? 1 : 0;
+    if (has_dmode) ctx->create_dmode = dmode_val;
+
+    rc = ext4_vfs_mkdir(ctx, argv[3], 0, NULL);
     ext4_vfs_unmount(ctx);
     if (rc != 0) {
         fprintf(stderr, "mkdir failed: %d\n", rc);
@@ -1043,6 +1152,10 @@ static int cmd_mount(int argc, char **argv) {
     int direct_io = has_flag(argc, argv, "--direct-io");
     int no_direct_io = has_flag(argc, argv, "--no-direct-io");
     int case_sensitive = has_flag(argc, argv, "--case-sensitive");
+    int inherit_owner = has_flag(argc, argv, "--inherit-owner");
+    int has_uid = 0, has_gid = 0, has_fmode = 0, has_dmode = 0;
+    uint32_t create_uid = 0, create_gid = 0;
+    uint16_t create_fmode = 0, create_dmode = 0;
     int json_events = has_flag(argc, argv, "--json-events");
     uint32_t debug_log = has_flag(argc, argv, "--debug") ? (uint32_t)-1 : 0;
     HANDLE stop_event = NULL;
@@ -1050,6 +1163,22 @@ static int cmd_mount(int argc, char **argv) {
 
     if (json_events) {
         setvbuf(stdout, NULL, _IONBF, 0);
+    }
+
+    if (parse_u32_strict_opt(argc, argv, "--uid", &has_uid, &create_uid) != 0 ||
+        parse_u32_strict_opt(argc, argv, "--gid", &has_gid, &create_gid) != 0) {
+        const char *msg = "Error: invalid --uid or --gid value (expected 0..4294967295).";
+        fprintf(stderr, "%s\n", msg);
+        emit_mount_error_json(json_events, "args", -EINVAL, msg);
+        return 1;
+    }
+
+    if (parse_octal_mode_opt(argc, argv, "--fmode", &has_fmode, &create_fmode) != 0 ||
+        parse_octal_mode_opt(argc, argv, "--dmode", &has_dmode, &create_dmode) != 0) {
+        const char *msg = "Error: invalid --fmode or --dmode value (expected non-zero octal 0001..7777, e.g. 0644 or 0755).";
+        fprintf(stderr, "%s\n", msg);
+        emit_mount_error_json(json_events, "args", -EINVAL, msg);
+        return 1;
     }
 
     if (!src || !mp) {
@@ -1169,6 +1298,12 @@ static int cmd_mount(int argc, char **argv) {
     cfg.enable_rw_fast_io = rw_fast_io ? 1 : 0;
     cfg.has_file_info_timeout = has_fi_timeout;
     cfg.file_info_timeout = fi_timeout_ms;
+    cfg.create_uid = create_uid;
+    cfg.create_gid = create_gid;
+    cfg.has_create_gid = has_gid ? 1 : 0;
+    cfg.inherit_owner = inherit_owner ? 1 : 0;
+    cfg.create_fmode = has_fmode ? create_fmode : 0;
+    cfg.create_dmode = has_dmode ? create_dmode : 0;
 
     ext4_vfs_ctx_t *ctx = NULL;
     int rc = ext4_vfs_mount(&cfg, &ctx);
@@ -1641,6 +1776,11 @@ static int cmd_overlay(int argc, char **argv) {
     const char *output_path = parse_str_opt(argc, argv, "--output", NULL);
     uint32_t part = parse_u32_opt(argc, argv, "--partition", 0);
     int case_sensitive = has_flag(argc, argv, "--case-sensitive");
+    int inherit_owner = has_flag(argc, argv, "--inherit-owner");
+    int has_uid = 0, has_gid = 0, has_fmode = 0, has_dmode = 0;
+    uint32_t ov_uid = 0, ov_gid = 0;
+    uint16_t ov_fmode = 0, ov_dmode = 0;
+    overlay_export_options_t ov_opts;
     int yes = has_flag(argc, argv, "--yes");
     int json = has_flag(argc, argv, "--json");
 
@@ -1648,6 +1788,24 @@ static int cmd_overlay(int argc, char **argv) {
         fprintf(stderr, "Missing required --upper <ntfs_upper_dir> option.\n");
         return 1;
     }
+
+    if (parse_u32_strict_opt(argc, argv, "--uid", &has_uid, &ov_uid) != 0 ||
+        parse_u32_strict_opt(argc, argv, "--gid", &has_gid, &ov_gid) != 0) {
+        fprintf(stderr, "Error: invalid --uid or --gid value (expected 0..4294967295).\n");
+        return 1;
+    }
+    if (parse_octal_mode_opt(argc, argv, "--fmode", &has_fmode, &ov_fmode) != 0 ||
+        parse_octal_mode_opt(argc, argv, "--dmode", &has_dmode, &ov_dmode) != 0) {
+        fprintf(stderr, "Error: invalid --fmode or --dmode value (expected non-zero octal 0001..7777).\n");
+        return 1;
+    }
+    memset(&ov_opts, 0, sizeof(ov_opts));
+    ov_opts.default_uid = ov_uid;
+    ov_opts.default_gid = ov_gid;
+    ov_opts.has_default_gid = has_gid ? 1 : 0;
+    ov_opts.inherit_owner = inherit_owner ? 1 : 0;
+    ov_opts.default_fmode = has_fmode ? ov_fmode : 0;
+    ov_opts.default_dmode = has_dmode ? ov_dmode : 0;
 
     ext4_vfs_ctx_t *lower_ctx = NULL;
     overlay_lower_identity_t lower_id;
@@ -1674,7 +1832,7 @@ static int cmd_overlay(int argc, char **argv) {
     if (strcmp(sub, "status") == 0 || strcmp(sub, "diff") == 0) {
         int collect = (strcmp(sub, "diff") == 0) ? 1 : 0;
         overlay_diff_report_t rep;
-        int rc = overlay_tools_scan(upper_dir, lower_ctx, expected_ptr, collect, &rep);
+        int rc = overlay_tools_scan_ex(upper_dir, lower_ctx, expected_ptr, &ov_opts, collect, &rep);
         if (rc != 0) {
             fprintf(stderr, "overlay %s failed (err=%d).\n", sub, rc);
             if (lower_ctx) ext4_vfs_unmount(lower_ctx);
@@ -1697,6 +1855,8 @@ static int cmd_overlay(int argc, char **argv) {
                 printf(",\"is_dir\":%s", e->is_dir ? "true" : "false");
                 printf(",\"size\":%llu", (unsigned long long)e->size);
                 printf(",\"mode\":%u", (unsigned)e->mode);
+                printf(",\"uid\":%u", (unsigned)e->uid);
+                printf(",\"gid\":%u", (unsigned)e->gid);
                 printf(",\"mtime\":%llu}", (unsigned long long)e->mtime_unix);
             }
             printf("]}\n");
@@ -1788,7 +1948,7 @@ static int cmd_overlay(int argc, char **argv) {
             return 1;
         }
         overlay_export_summary_t sum;
-        int rc = overlay_tools_export_tar(upper_dir, lower_ctx, expected_ptr, output_path, &sum);
+        int rc = overlay_tools_export_tar_ex(upper_dir, lower_ctx, expected_ptr, &ov_opts, output_path, &sum);
         if (lower_ctx) ext4_vfs_unmount(lower_ctx);
         if (rc != 0) {
             fprintf(stderr, "overlay export failed (err=%d).\n", rc);

@@ -42,7 +42,28 @@ int ext4_vfs_symlink(ext4_vfs_ctx_t *ctx, const char *link_path, const char *tar
                     }
                 }
                 if (retval == 0) {
+                    struct ext2_inode_large parent_st;
+                    uint32_t new_uid = 0, new_gid = 0;
                     ext4_dentry_cache_invalidate(ctx);
+                    memset(&parent_st, 0, sizeof(parent_st));
+                    if (ext2fs_read_inode_full(ctx->fs, parent_ino,
+                                               (struct ext2_inode *)&parent_st, sizeof(parent_st)) == 0) {
+                        ext4_vfs_resolve_new_owner(ctx, &parent_st, &new_uid, &new_gid);
+                        if (new_uid != 0U || new_gid != 0U) {
+                            ext2_ino_t sym_ino = 0;
+                            if (ext2fs_lookup(ctx->fs, parent_ino, name, (int)strlen(name), NULL, &sym_ino) == 0 &&
+                                sym_ino != 0) {
+                                struct ext2_inode_large sym_st;
+                                memset(&sym_st, 0, sizeof(sym_st));
+                                if (ext2fs_read_inode_full(ctx->fs, sym_ino,
+                                                           (struct ext2_inode *)&sym_st, sizeof(sym_st)) == 0) {
+                                    ext4_inode_set_owner(&sym_st, new_uid, new_gid);
+                                    ext2fs_write_inode_full(ctx->fs, sym_ino,
+                                                            (struct ext2_inode *)&sym_st, sizeof(sym_st));
+                                }
+                            }
+                        }
+                    }
                 }
                 rc = ext4_errcode_to_errno(retval);
             }

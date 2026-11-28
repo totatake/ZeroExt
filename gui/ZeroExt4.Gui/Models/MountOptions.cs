@@ -42,6 +42,11 @@ namespace ZeroExt4.Gui.Models
         public bool EnableDirectIo { get; set; } = true;
         public bool EnableRwFastIo { get; set; }
         public bool CaseSensitive { get; set; }
+        public uint? CreateUid { get; set; }
+        public uint? CreateGid { get; set; }
+        public bool InheritOwner { get; set; }
+        public string CreateFileModeOctal { get; set; } = "0644";
+        public string CreateDirModeOctal { get; set; } = "0755";
         public uint CacheBlocks { get; set; } = 2048;
         public bool RoFallbackOnDirty { get; set; } = true;
         public bool ForceDirty { get; set; }

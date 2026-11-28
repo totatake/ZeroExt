@@ -74,31 +74,44 @@ int ext4_vfs_mkdir(ext4_vfs_ctx_t *ctx, const char *path, uint16_t mode, ext2_in
         }
     }
 
-    retval = ext2fs_new_inode(ctx->fs, parent_ino, LINUX_S_IFDIR | (mode ? mode : 0755), ctx->fs->inode_map, &new_ino);
-    if (retval) {
-        rc = ext4_errcode_to_errno(retval);
-        goto out;
-    }
-
-    retval = ext2fs_mkdir(ctx->fs, parent_ino, new_ino, name);
-    if (retval == EXT2_ET_DIR_NO_SPACE) {
-        retval = ext2fs_expand_dir(ctx->fs, parent_ino);
-        if (retval == 0) {
-            retval = ext2fs_mkdir(ctx->fs, parent_ino, new_ino, name);
+    {
+        uint16_t eff_mode = mode ? (uint16_t)(mode & 07777U)
+                                 : (ctx->create_dmode ? ctx->create_dmode : 0755U);
+        if (parent_st.i_mode & LINUX_S_ISGID) {
+            eff_mode |= LINUX_S_ISGID;
         }
-    }
-    if (retval) {
-        rc = ext4_errcode_to_errno(retval);
-        goto out;
-    }
-    ext4_dentry_cache_invalidate(ctx);
 
-    if (mode != 0 && mode != 0755) {
-        struct ext2_inode_large dir_st;
-        memset(&dir_st, 0, sizeof(dir_st));
-        if (ext2fs_read_inode_full(ctx->fs, new_ino, (struct ext2_inode *)&dir_st, sizeof(dir_st)) == 0) {
-            dir_st.i_mode = (uint16_t)(LINUX_S_IFDIR | (mode & 07777));
-            ext2fs_write_inode_full(ctx->fs, new_ino, (struct ext2_inode *)&dir_st, sizeof(dir_st));
+        retval = ext2fs_new_inode(ctx->fs, parent_ino, LINUX_S_IFDIR | eff_mode, ctx->fs->inode_map, &new_ino);
+        if (retval) {
+            rc = ext4_errcode_to_errno(retval);
+            goto out;
+        }
+
+        retval = ext2fs_mkdir(ctx->fs, parent_ino, new_ino, name);
+        if (retval == EXT2_ET_DIR_NO_SPACE) {
+            retval = ext2fs_expand_dir(ctx->fs, parent_ino);
+            if (retval == 0) {
+                retval = ext2fs_mkdir(ctx->fs, parent_ino, new_ino, name);
+            }
+        }
+        if (retval) {
+            rc = ext4_errcode_to_errno(retval);
+            goto out;
+        }
+        ext4_dentry_cache_invalidate(ctx);
+
+        {
+            uint32_t new_uid = 0, new_gid = 0;
+            ext4_vfs_resolve_new_owner(ctx, &parent_st, &new_uid, &new_gid);
+            if (eff_mode != 0755U || new_uid != 0U || new_gid != 0U) {
+                struct ext2_inode_large dir_st;
+                memset(&dir_st, 0, sizeof(dir_st));
+                if (ext2fs_read_inode_full(ctx->fs, new_ino, (struct ext2_inode *)&dir_st, sizeof(dir_st)) == 0) {
+                    dir_st.i_mode = (uint16_t)(LINUX_S_IFDIR | (eff_mode & 07777U));
+                    ext4_inode_set_owner(&dir_st, new_uid, new_gid);
+                    ext2fs_write_inode_full(ctx->fs, new_ino, (struct ext2_inode *)&dir_st, sizeof(dir_st));
+                }
+            }
         }
     }
 

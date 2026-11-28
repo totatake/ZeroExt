@@ -996,15 +996,25 @@ static int test_overlay_tools_status_diff_validate_export_reset(void) {
     cfg.source_path = img_path;
     cfg.read_only = 0;
     cfg.case_insensitive = 1;
+    cfg.create_uid = 1000U;
+    cfg.create_gid = 1001U;
+    cfg.has_create_gid = 1;
+    cfg.create_fmode = 0755U;
+    cfg.create_dmode = 0750U;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
-    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/mod.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/mod.txt", 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/mod.txt", 1, &h));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "before", 0, 6, 0, &w, NULL));
     ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/home_user", 0, NULL));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/delme.txt", 0, 0644, FILE_ATTRIBUTE_ARCHIVE, NULL));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
     ctx = NULL;
 
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.case_insensitive = 1;
     cfg.overlay_upper_dir = upper_dir;
     TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/mod.txt", 1, &h));
@@ -1014,6 +1024,8 @@ static int test_overlay_tools_status_diff_validate_export_reset(void) {
     TEST_ASSERT_EQ_INT(0, ext4_vfs_open(ctx, "/added.txt", 1, &h));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_write(ctx, h->ino, "new-data", 0, 8, 0, &w, NULL));
     ext4_vfs_close_handle(h);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/home_user/sub_new", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/home_user/sub_new/child.txt", 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_unlink(ctx, "/delme.txt"));
     TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
     ctx = NULL;
@@ -1025,12 +1037,42 @@ static int test_overlay_tools_status_diff_validate_export_reset(void) {
 
     {
         overlay_diff_report_t rep;
-        TEST_ASSERT_EQ_INT(0, overlay_tools_scan(upper_dir, ctx, NULL, 1, &rep));
-        TEST_ASSERT_EQ_INT(1, (long long)rep.summary.added_count);
-        TEST_ASSERT_EQ_INT(1, (long long)rep.summary.modified_count);
+        overlay_export_options_t eopts;
+        int saw_mod = 0, saw_root_add = 0, saw_sub_child = 0;
+        memset(&eopts, 0, sizeof(eopts));
+        eopts.inherit_owner = 1;
+        eopts.default_fmode = 0640U;
+        eopts.default_dmode = 0750U;
+
+        TEST_ASSERT_EQ_INT(0, overlay_tools_scan_ex(upper_dir, ctx, NULL, &eopts, 1, &rep));
+        TEST_ASSERT_EQ_INT(3, (long long)rep.summary.added_count);
+        TEST_ASSERT_EQ_INT(2, (long long)rep.summary.modified_count); /* /mod.txt and /home_user dir */
         TEST_ASSERT_EQ_INT(1, (long long)rep.summary.deleted_count);
         TEST_ASSERT_EQ_INT(20, (long long)rep.summary.total_upper_bytes);
-        TEST_ASSERT_EQ_INT(3, (long long)rep.entry_count);
+        for (size_t i = 0; i < rep.entry_count; i++) {
+            const overlay_diff_entry_t *e = &rep.entries[i];
+            if (strcmp(e->path, "/mod.txt") == 0) {
+                saw_mod = 1;
+                TEST_ASSERT_EQ_INT(OV_DIFF_MODIFIED, e->kind);
+                TEST_ASSERT_EQ_INT(1000, (long long)e->uid);
+                TEST_ASSERT_EQ_INT(1001, (long long)e->gid);
+                TEST_ASSERT_EQ_INT(0755, (int)(e->mode & 07777));
+            } else if (strcmp(e->path, "/added.txt") == 0) {
+                saw_root_add = 1;
+                TEST_ASSERT_EQ_INT(OV_DIFF_ADDED, e->kind);
+                TEST_ASSERT_EQ_INT(0, (long long)e->uid);
+                TEST_ASSERT_EQ_INT(0, (long long)e->gid);
+                TEST_ASSERT_EQ_INT(0640, (int)(e->mode & 07777));
+            } else if (strcmp(e->path, "/home_user/sub_new/child.txt") == 0) {
+                saw_sub_child = 1;
+                TEST_ASSERT_EQ_INT(OV_DIFF_ADDED, e->kind);
+                /* Nearest existing lower ancestor is /home_user (1000:1001) */
+                TEST_ASSERT_EQ_INT(1000, (long long)e->uid);
+                TEST_ASSERT_EQ_INT(1001, (long long)e->gid);
+                TEST_ASSERT_EQ_INT(0640, (int)(e->mode & 07777));
+            }
+        }
+        TEST_ASSERT(saw_mod && saw_root_add && saw_sub_child);
         overlay_tools_free_diff_report(&rep);
     }
 
@@ -1056,14 +1098,18 @@ static int test_overlay_tools_status_diff_validate_export_reset(void) {
         overlay_tools_free_validate_report(&vrep);
     }
 
-    /* Export tar and check USTAR headers */
+    /* Export tar and check USTAR headers (root uname/gname on manifest, preserved numeric 1000:1001 on files/mod.txt) */
     {
         overlay_export_summary_t esum;
+        overlay_export_options_t eopts;
         uint8_t *hdr = (uint8_t *)calloc(1, 512);
         FILE *tfp;
+        int found_mod_hdr = 0;
+        memset(&eopts, 0, sizeof(eopts));
+        eopts.inherit_owner = 1;
         TEST_ASSERT(hdr != NULL);
-        TEST_ASSERT_EQ_INT(0, overlay_tools_export_tar(upper_dir, ctx, NULL, tar_path, &esum));
-        TEST_ASSERT(esum.exported_entries >= 3);
+        TEST_ASSERT_EQ_INT(0, overlay_tools_export_tar_ex(upper_dir, ctx, NULL, &eopts, tar_path, &esum));
+        TEST_ASSERT(esum.exported_entries >= 5);
         TEST_ASSERT(esum.archive_bytes >= 1536);
 
         tfp = fopen(tar_path, "rb");
@@ -1071,6 +1117,29 @@ static int test_overlay_tools_status_diff_validate_export_reset(void) {
         TEST_ASSERT_EQ_INT(512, (long long)fread(hdr, 1, 512, tfp));
         TEST_ASSERT(strcmp((const char *)hdr, "manifest.json") == 0);
         TEST_ASSERT(memcmp(hdr + 257, "ustar", 5) == 0);
+        TEST_ASSERT(strcmp((const char *)(hdr + 265), "root") == 0);
+        TEST_ASSERT(strcmp((const char *)(hdr + 297), "root") == 0);
+
+        rewind(tfp);
+        while (fread(hdr, 1, 512, tfp) == 512) {
+            if (hdr[0] == '\0') break;
+            unsigned long long fsz = strtoull((const char *)(hdr + 124), NULL, 8);
+            if (strcmp((const char *)hdr, "files/mod.txt") == 0) {
+                unsigned long t_mode = strtoul((const char *)(hdr + 100), NULL, 8);
+                unsigned long t_uid = strtoul((const char *)(hdr + 108), NULL, 8);
+                unsigned long t_gid = strtoul((const char *)(hdr + 116), NULL, 8);
+                TEST_ASSERT_EQ_INT(0755, (int)t_mode);
+                TEST_ASSERT_EQ_INT(1000, (int)t_uid);
+                TEST_ASSERT_EQ_INT(1001, (int)t_gid);
+                /* Non-root numeric uid/gid leaves uname/gname empty so tar extracts exact numeric IDs */
+                TEST_ASSERT_EQ_INT(0, (int)hdr[265]);
+                TEST_ASSERT_EQ_INT(0, (int)hdr[297]);
+                found_mod_hdr = 1;
+            }
+            unsigned long long blocks = (fsz + 511ULL) / 512ULL;
+            if (blocks > 0) fseek(tfp, (long)(blocks * 512ULL), SEEK_CUR);
+        }
+        TEST_ASSERT(found_mod_hdr);
         fclose(tfp);
         free(hdr);
     }

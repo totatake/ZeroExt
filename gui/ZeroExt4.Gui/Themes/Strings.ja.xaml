@@ -175,6 +175,7 @@
     <sys:String x:Key="Str_ColName">名前（フォルダはダブルクリックで開く）</sys:String>
     <sys:String x:Key="Str_ColSize">サイズ</sys:String>
     <sys:String x:Key="Str_ColMode">Mode</sys:String>
+    <sys:String x:Key="Str_ColOwner">UID:GID</sys:String>
     <sys:String x:Key="Str_ColInode">Inode</sys:String>
     <sys:String x:Key="Str_ColModified">更新日時</sys:String>
     <sys:String x:Key="Str_TypeDir">フォルダ</sys:String>
@@ -381,4 +382,15 @@
     <sys:String x:Key="Str_OverlayExportDoneFmt">{0} 件 ({1}) を {2} へエクスポートしました</sys:String>
     <sys:String x:Key="Str_OverlayResetDoneFmt">リセット完了（{0} 件を削除、.wh.__ext4_lower_id は保持）</sys:String>
     <sys:String x:Key="Str_OverlayResetBlockedMounted">この Upperdir を使用中の Overlay マウントが存在するためリセットできません。先にアンマウントしてください。</sys:String>
+
+    <!-- POSIX Ownership & Mode Defaults -->
+    <sys:String x:Key="Str_PosixOwnerTitle">新規作成ファイルの POSIX 所有者・パーミッション設定</sys:String>
+    <sys:String x:Key="Str_PosixOwnerNote">既定値: UID=0, GID=0（空欄時は 0）、ファイル=0644、フォルダ=0755。--rw 新規作成時および Overlay 差分/.tar エクスポート時に適用されます（変更ファイルは Lower ext4 の uid/gid/mode を保持）。</sys:String>
+    <sys:String x:Key="Str_InheritOwnerCheck">親フォルダの UID / GID を自動継承する (--inherit-owner)</sys:String>
+    <sys:String x:Key="Str_PosixUidLabel">UID:</sys:String>
+    <sys:String x:Key="Str_PosixGidLabel">GID:</sys:String>
+    <sys:String x:Key="Str_PosixFmodeLabel">File Mode:</sys:String>
+    <sys:String x:Key="Str_PosixDmodeLabel">Dir Mode:</sys:String>
+    <sys:String x:Key="Str_ValInvalidUidGid">UID・GID は 0 以上の整数（0..4294967295、空欄で 0）を指定してください。</sys:String>
+    <sys:String x:Key="Str_ValInvalidPosixMode">File / Dir Mode は 0 以外の 8 進数パーミッション（0001..7777、例: 0644 / 0755）を指定してください。</sys:String>
 </ResourceDictionary>

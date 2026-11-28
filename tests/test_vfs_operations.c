@@ -2985,6 +2985,115 @@ static int test_rw_standard_stateless_coherence(void) {
     return 0;
 }
 
+static int test_create_uid_gid_modes_and_inheritance(void) {
+    char img_path[MAX_PATH];
+    ext4_mount_config_t cfg;
+    ext4_vfs_ctx_t *ctx = NULL;
+    ext4_stat_t st;
+    fsck_lite_report_t rep;
+
+    test_make_temp_path(img_path, sizeof(img_path), "vfs_owner_modes.img");
+    DeleteFileA(img_path);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkfs(img_path, 8ULL * 1024ULL * 1024ULL, "OWNTEST"));
+
+    /* 1. Default mount: 0:0, file 0644 (READONLY -> 0444), dir 0755 */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/def_file.txt", 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/ro_file.txt", 0, 0, FILE_ATTRIBUTE_READONLY, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/def_dir", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/def_file.txt", &st));
+    TEST_ASSERT_EQ_INT(0, (int)st.uid);
+    TEST_ASSERT_EQ_INT(0, (int)st.gid);
+    TEST_ASSERT_EQ_INT(0644, (int)(st.mode & 07777));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/ro_file.txt", &st));
+    TEST_ASSERT_EQ_INT(0444, (int)(st.mode & 07777));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/def_dir", &st));
+    TEST_ASSERT_EQ_INT(0755, (int)(st.mode & 07777));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 2. Explicit 32-bit >65535 UID/GID, custom fmode/dmode, symlink owner, and setgid dir */
+    cfg.create_uid = 70000U;
+    cfg.create_gid = 80000U;
+    cfg.has_create_gid = 1;
+    cfg.create_fmode = 0640U;
+    cfg.create_dmode = 0750U;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/user_home", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/user_home/secret.key", 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_symlink(ctx, "/user_home/link_secret", "secret.key"));
+    /* Create a setgid directory owned by 70000:80000 */
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/sgid_dir", 02775U, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 3. Remount with inherit_owner = 1: children inside /user_home inherit 70000:80000, while / stays 0:0 */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.inherit_owner = 1;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/user_home", &st));
+    TEST_ASSERT_EQ_INT(70000, (long long)st.uid);
+    TEST_ASSERT_EQ_INT(80000, (long long)st.gid);
+    TEST_ASSERT_EQ_INT(0750, (int)(st.mode & 07777));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/user_home/secret.key", &st));
+    TEST_ASSERT_EQ_INT(70000, (long long)st.uid);
+    TEST_ASSERT_EQ_INT(80000, (long long)st.gid);
+    TEST_ASSERT_EQ_INT(0640, (int)(st.mode & 07777));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/user_home/link_secret", &st));
+    TEST_ASSERT_EQ_INT(70000, (long long)st.uid);
+    TEST_ASSERT_EQ_INT(80000, (long long)st.gid);
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/user_home/inherited.txt", 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/user_home/inherited_sub", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/root_child.txt", 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/user_home/inherited.txt", &st));
+    TEST_ASSERT_EQ_INT(70000, (long long)st.uid);
+    TEST_ASSERT_EQ_INT(80000, (long long)st.gid);
+    TEST_ASSERT_EQ_INT(0644, (int)(st.mode & 07777));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/user_home/inherited_sub", &st));
+    TEST_ASSERT_EQ_INT(70000, (long long)st.uid);
+    TEST_ASSERT_EQ_INT(80000, (long long)st.gid);
+    TEST_ASSERT_EQ_INT(0755, (int)(st.mode & 07777));
+
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/root_child.txt", &st));
+    TEST_ASSERT_EQ_INT(0, (int)st.uid);
+    TEST_ASSERT_EQ_INT(0, (int)st.gid);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    /* 4. POSIX setgid propagation when --gid is NOT explicitly given */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.source_path = img_path;
+    cfg.read_only = 0;
+    cfg.create_uid = 1000U;
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mount(&cfg, &ctx));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_create(ctx, "/sgid_dir/team.txt", 0, 0, FILE_ATTRIBUTE_ARCHIVE, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_mkdir(ctx, "/sgid_dir/team_sub", 0, NULL));
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/sgid_dir/team.txt", &st));
+    TEST_ASSERT_EQ_INT(1000, (long long)st.uid);
+    TEST_ASSERT_EQ_INT(80000, (long long)st.gid);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_stat(ctx, "/sgid_dir/team_sub", &st));
+    TEST_ASSERT_EQ_INT(1000, (long long)st.uid);
+    TEST_ASSERT_EQ_INT(80000, (long long)st.gid);
+    TEST_ASSERT((st.mode & LINUX_S_ISGID) != 0);
+    TEST_ASSERT_EQ_INT(0, ext4_vfs_unmount(ctx));
+    ctx = NULL;
+
+    TEST_ASSERT_EQ_INT(0, ext4_fsck_lite_run(img_path, 0, 0, 4096, &rep));
+    TEST_ASSERT_EQ_INT(1, rep.healthy);
+    ext4_fsck_lite_free_report(&rep);
+
+    DeleteFileA(img_path);
+    return 0;
+}
+
 int run_suite_vfs_operations(void) {
     int suite_failures = 0;
     RUN_TEST(test_vfs_crud_large_extent_and_persistence);
@@ -3008,5 +3117,6 @@ int run_suite_vfs_operations(void) {
     RUN_TEST(test_case_insensitive_collision_priority);
     RUN_TEST(test_ext4_format_boundaries_phase3);
     RUN_TEST(test_rw_standard_stateless_coherence);
+    RUN_TEST(test_create_uid_gid_modes_and_inheritance);
     return suite_failures;
 }

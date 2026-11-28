@@ -175,6 +175,7 @@
     <sys:String x:Key="Str_ColName">Name (double-click folder to open)</sys:String>
     <sys:String x:Key="Str_ColSize">Size</sys:String>
     <sys:String x:Key="Str_ColMode">Mode</sys:String>
+    <sys:String x:Key="Str_ColOwner">UID:GID</sys:String>
     <sys:String x:Key="Str_ColInode">Inode</sys:String>
     <sys:String x:Key="Str_ColModified">Modified</sys:String>
     <sys:String x:Key="Str_TypeDir">Folder</sys:String>
@@ -381,4 +382,15 @@
     <sys:String x:Key="Str_OverlayExportDoneFmt">Exported {0} entries ({1}) to {2}</sys:String>
     <sys:String x:Key="Str_OverlayResetDoneFmt">Reset complete ({0} items removed; .wh.__ext4_lower_id preserved)</sys:String>
     <sys:String x:Key="Str_OverlayResetBlockedMounted">Cannot reset while an active Overlay mount is using this Upperdir. Unmount it first.</sys:String>
+
+    <!-- POSIX Ownership & Mode Defaults -->
+    <sys:String x:Key="Str_PosixOwnerTitle">POSIX Ownership &amp; Permissions for Newly Created Files</sys:String>
+    <sys:String x:Key="Str_PosixOwnerNote">Defaults: UID=0, GID=0 (blank = 0), file mode=0644, dir mode=0755. Used for --rw new files/dirs and Overlay diff/.tar export (modified files preserve lower ext4 uid/gid/mode).</sys:String>
+    <sys:String x:Key="Str_InheritOwnerCheck">Inherit parent directory UID / GID (--inherit-owner)</sys:String>
+    <sys:String x:Key="Str_PosixUidLabel">UID:</sys:String>
+    <sys:String x:Key="Str_PosixGidLabel">GID:</sys:String>
+    <sys:String x:Key="Str_PosixFmodeLabel">File Mode:</sys:String>
+    <sys:String x:Key="Str_PosixDmodeLabel">Dir Mode:</sys:String>
+    <sys:String x:Key="Str_ValInvalidUidGid">UID and GID must be non-negative integers (0..4294967295) or left blank for 0.</sys:String>
+    <sys:String x:Key="Str_ValInvalidPosixMode">File / Dir Mode must be a valid non-zero octal permission (0001..7777, e.g. 0644 or 0755).</sys:String>
 </ResourceDictionary>

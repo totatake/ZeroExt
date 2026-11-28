@@ -21,8 +21,19 @@ typedef struct overlay_diff_entry {
     int                 is_dir;
     uint64_t            size;
     uint32_t            mode;
+    uint32_t            uid;
+    uint32_t            gid;
     uint64_t            mtime_unix;
 } overlay_diff_entry_t;
+
+typedef struct overlay_export_options {
+    uint32_t default_uid;      /* Default UID for ADDED / standalone UPPER entries (default 0) */
+    uint32_t default_gid;      /* Default GID for ADDED / standalone UPPER entries (default 0) */
+    int      has_default_gid;  /* 1 = explicit --gid specified (overrides setgid GID inheritance) */
+    int      inherit_owner;    /* 1 = inherit UID/GID from nearest existing lower ancestor dir */
+    uint16_t default_fmode;    /* Default permission bits for ADDED regular files (0 => 0644) */
+    uint16_t default_dmode;    /* Default permission bits for ADDED directories (0 => 0755) */
+} overlay_export_options_t;
 
 typedef struct overlay_diff_summary {
     uint64_t added_count;
@@ -74,6 +85,13 @@ int overlay_tools_scan(const char *upper_dir_utf8,
                        int collect_entries,
                        overlay_diff_report_t *out_report);
 
+int overlay_tools_scan_ex(const char *upper_dir_utf8,
+                          ext4_vfs_ctx_t *lower_ctx_opt,
+                          const overlay_lower_identity_t *expected_opt,
+                          const overlay_export_options_t *opts_opt,
+                          int collect_entries,
+                          overlay_diff_report_t *out_report);
+
 void overlay_tools_free_diff_report(overlay_diff_report_t *report);
 
 int overlay_tools_validate(const char *upper_dir_utf8,
@@ -88,6 +106,13 @@ int overlay_tools_export_tar(const char *upper_dir_utf8,
                              const overlay_lower_identity_t *expected_opt,
                              const char *output_tar_utf8,
                              overlay_export_summary_t *out_summary);
+
+int overlay_tools_export_tar_ex(const char *upper_dir_utf8,
+                                ext4_vfs_ctx_t *lower_ctx_opt,
+                                const overlay_lower_identity_t *expected_opt,
+                                const overlay_export_options_t *opts_opt,
+                                const char *output_tar_utf8,
+                                overlay_export_summary_t *out_summary);
 
 int overlay_tools_reset_upper(const char *upper_dir_utf8,
                               int keep_marker,

@@ -762,7 +762,17 @@ static void fill_stat_from_upper(ext4_vfs_ctx_t *ctx, const char *norm_path,
 
     out_st->ino = overlay_assign_ino(ctx, norm_path, lower_ino);
     out_st->is_dir = (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
-    out_st->mode = (uint16_t)(out_st->is_dir ? 0040755 : 0100644);
+    {
+        uint16_t dmode = (ctx && ctx->create_dmode) ? ctx->create_dmode : 0755U;
+        uint16_t fmode = (ctx && ctx->create_fmode) ? ctx->create_fmode : 0644U;
+        if (!out_st->is_dir && (fad.dwFileAttributes & FILE_ATTRIBUTE_READONLY)) {
+            fmode = (uint16_t)(fmode & 07555U);
+        }
+        out_st->mode = (uint16_t)(out_st->is_dir ? (0040000U | (dmode & 07777U))
+                                                 : (0100000U | (fmode & 07777U)));
+        out_st->uid = ctx ? ctx->create_uid : 0U;
+        out_st->gid = ctx ? ctx->create_gid : 0U;
+    }
     out_st->file_attributes = fad.dwFileAttributes;
     if (out_st->is_dir) {
         out_st->size = 0;
@@ -773,7 +783,7 @@ static void fill_stat_from_upper(ext4_vfs_ctx_t *ctx, const char *norm_path,
         out_st->alloc_size = ((out_st->size + 4095ULL) / 4096ULL) * 4096ULL;
         out_st->hard_links = 1;
     }
-    if (ctx->read_only) {
+    if (ctx && ctx->read_only) {
         out_st->file_attributes |= FILE_ATTRIBUTE_READONLY;
     }
     out_st->creation_time = ft_to_u64(&fad.ftCreationTime);

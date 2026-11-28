@@ -64,6 +64,35 @@ void ext4_inode_touch_times(struct ext2_inode_large *ino_st, int touch_atime,
     }
 }
 
+void ext4_inode_set_owner(struct ext2_inode_large *ino_st, uint32_t uid, uint32_t gid) {
+    if (!ino_st) return;
+    ino_st->i_uid = (uint16_t)(uid & 0xFFFFU);
+    ino_st->osd2.linux2.l_i_uid_high = (uint16_t)((uid >> 16) & 0xFFFFU);
+    ino_st->i_gid = (uint16_t)(gid & 0xFFFFU);
+    ino_st->osd2.linux2.l_i_gid_high = (uint16_t)((gid >> 16) & 0xFFFFU);
+}
+
+void ext4_vfs_resolve_new_owner(const ext4_vfs_ctx_t *ctx,
+                                const struct ext2_inode_large *parent_st,
+                                uint32_t *out_uid, uint32_t *out_gid) {
+    uint32_t uid = ctx ? ctx->create_uid : 0U;
+    uint32_t gid = ctx ? ctx->create_gid : 0U;
+
+    if (ctx && parent_st) {
+        uint32_t p_uid = parent_st->i_uid | ((uint32_t)parent_st->osd2.linux2.l_i_uid_high << 16);
+        uint32_t p_gid = parent_st->i_gid | ((uint32_t)parent_st->osd2.linux2.l_i_gid_high << 16);
+        if (ctx->inherit_owner) {
+            uid = p_uid;
+            gid = p_gid;
+        } else if ((parent_st->i_mode & LINUX_S_ISGID) && !ctx->has_create_gid) {
+            gid = p_gid;
+        }
+    }
+
+    if (out_uid) *out_uid = uid;
+    if (out_gid) *out_gid = gid;
+}
+
 void ext4_fill_stat_from_inode(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                                const struct ext2_inode_large *ino_st,
                                const char *leaf_name, ext4_stat_t *out_st) {

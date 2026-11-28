@@ -22,7 +22,7 @@ int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t 
     }
     if (ctx->read_only) return -EROFS;
     if (is_dir) {
-        return ext4_vfs_mkdir(ctx, path, mode ? mode : 0755, out_ino);
+        return ext4_vfs_mkdir(ctx, path, mode, out_ino);
     }
 
     rc = ext4_vfs_normalize_path(path, norm, sizeof(norm));
@@ -61,7 +61,7 @@ int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t 
         }
     }
 
-    if (mode == 0) mode = 0644;
+    if (mode == 0) mode = ctx->create_fmode ? ctx->create_fmode : 0644U;
     if (win_attrs != INVALID_FILE_ATTRIBUTES && (win_attrs & FILE_ATTRIBUTE_READONLY)) {
         mode &= (uint16_t)(~0222);
     }
@@ -74,6 +74,11 @@ int ext4_vfs_create(ext4_vfs_ctx_t *ctx, const char *path, int is_dir, uint16_t 
 
     memset(&ino_st, 0, sizeof(ino_st));
     ino_st.i_mode = (uint16_t)(LINUX_S_IFREG | (mode & 07777));
+    {
+        uint32_t new_uid = 0, new_gid = 0;
+        ext4_vfs_resolve_new_owner(ctx, &parent_st, &new_uid, &new_gid);
+        ext4_inode_set_owner(&ino_st, new_uid, new_gid);
+    }
     ino_st.i_links_count = 1;
     ino_st.i_generation = 1;
     ino_st.i_extra_isize = (EXT2_INODE_SIZE(ctx->fs->super) > EXT2_GOOD_OLD_INODE_SIZE)

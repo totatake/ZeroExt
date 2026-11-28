@@ -81,7 +81,8 @@ const char *overlay_diff_kind_name(overlay_diff_kind_t kind) {
 
 static int diff_report_add_entry(overlay_diff_report_t *rep, overlay_diff_kind_t kind,
                                  const char *path, int is_dir, uint64_t size,
-                                 uint32_t mode, uint64_t mtime_unix) {
+                                 uint32_t mode, uint32_t uid, uint32_t gid,
+                                 uint64_t mtime_unix) {
     if (rep->entry_count == rep->entry_cap) {
         size_t ncap = rep->entry_cap ? rep->entry_cap * 2 : 64;
         overlay_diff_entry_t *nb = (overlay_diff_entry_t *)realloc(rep->entries, ncap * sizeof(*nb));
@@ -97,9 +98,69 @@ static int diff_report_add_entry(overlay_diff_report_t *rep, overlay_diff_kind_t
         e->is_dir = is_dir ? 1 : 0;
         e->size = size;
         e->mode = mode;
+        e->uid = uid;
+        e->gid = gid;
         e->mtime_unix = mtime_unix;
     }
     return 0;
+}
+
+static void resolve_added_owner_and_mode(ext4_vfs_ctx_t *lower_ctx,
+                                         const char *parent_norm,
+                                         int opaque_ancestor,
+                                         int is_dir,
+                                         DWORD win_attrs,
+                                         const overlay_export_options_t *opts,
+                                         uint32_t *out_uid,
+                                         uint32_t *out_gid,
+                                         uint32_t *out_mode) {
+    uint32_t uid = opts ? opts->default_uid : 0U;
+    uint32_t gid = opts ? opts->default_gid : 0U;
+    uint16_t fmode = (opts && opts->default_fmode) ? (uint16_t)(opts->default_fmode & 07777U) : 0644U;
+    uint16_t dmode = (opts && opts->default_dmode) ? (uint16_t)(opts->default_dmode & 07777U) : 0755U;
+    int parent_setgid = 0;
+
+    if (lower_ctx && !opaque_ancestor && parent_norm && parent_norm[0] == '/') {
+        char probe_path[1024];
+        strcpy_s(probe_path, sizeof(probe_path), parent_norm);
+        for (;;) {
+            ext4_stat_t pst;
+            if (ext4_vfs_lower_stat(lower_ctx, probe_path, &pst) == 0 && pst.is_dir) {
+                if (opts && opts->inherit_owner) {
+                    uid = pst.uid;
+                    gid = pst.gid;
+                } else if ((pst.mode & LINUX_S_ISGID) && !(opts && opts->has_default_gid)) {
+                    gid = pst.gid;
+                }
+                if (pst.mode & LINUX_S_ISGID) {
+                    parent_setgid = 1;
+                }
+                break;
+            }
+            if (strcmp(probe_path, "/") == 0) break;
+            {
+                char *slash = strrchr(probe_path, '/');
+                if (!slash) break;
+                if (slash == probe_path) {
+                    probe_path[1] = '\0';
+                } else {
+                    *slash = '\0';
+                }
+            }
+        }
+    }
+
+    if (is_dir) {
+        if (parent_setgid) dmode |= LINUX_S_ISGID;
+        *out_mode = 0040000U | (uint32_t)(dmode & 07777U);
+    } else {
+        if (win_attrs != INVALID_FILE_ATTRIBUTES && (win_attrs & FILE_ATTRIBUTE_READONLY)) {
+            fmode = (uint16_t)(fmode & 07555U);
+        }
+        *out_mode = 0100000U | (uint32_t)(fmode & 07777U);
+    }
+    *out_uid = uid;
+    *out_gid = gid;
 }
 
 typedef struct ov_walk_frame {
@@ -109,8 +170,8 @@ typedef struct ov_walk_frame {
 } ov_walk_frame_t;
 
 static int scan_upper_recursive(const wchar_t *dir_w, const char *dir_norm, int opaque_ancestor,
-                                ext4_vfs_ctx_t *lower_ctx, int collect_entries,
-                                int depth, overlay_diff_report_t *rep) {
+                                ext4_vfs_ctx_t *lower_ctx, const overlay_export_options_t *opts,
+                                int collect_entries, int depth, overlay_diff_report_t *rep) {
     ov_walk_frame_t *fr;
     HANDLE hfind;
     int cur_dir_opaque = opaque_ancestor;
@@ -162,7 +223,10 @@ static int scan_upper_recursive(const wchar_t *dir_w, const char *dir_norm, int 
         if (strcmp(leaf, OV_TOOLS_OPAQUE_NAME) == 0) {
             rep->summary.opaque_dir_count++;
             if (collect_entries) {
-                rc = diff_report_add_entry(rep, OV_DIFF_OPAQUE_DIR, dir_norm, 1, 0, 0040755, mtime_unix);
+                uint32_t o_uid = 0, o_gid = 0, o_mode = 0040755U;
+                resolve_added_owner_and_mode(lower_ctx, dir_norm, opaque_ancestor, 1,
+                                             FILE_ATTRIBUTE_DIRECTORY, opts, &o_uid, &o_gid, &o_mode);
+                rc = diff_report_add_entry(rep, OV_DIFF_OPAQUE_DIR, dir_norm, 1, 0, o_mode, o_uid, o_gid, mtime_unix);
                 if (rc != 0) break;
             }
             continue;
@@ -174,7 +238,7 @@ static int scan_upper_recursive(const wchar_t *dir_w, const char *dir_norm, int 
                 join_logical_child(dir_norm, target_leaf, child_norm, sizeof(child_norm));
                 rep->summary.deleted_count++;
                 if (collect_entries) {
-                    rc = diff_report_add_entry(rep, OV_DIFF_DELETED, child_norm, 0, 0, 0, mtime_unix);
+                    rc = diff_report_add_entry(rep, OV_DIFF_DELETED, child_norm, 0, 0, 0, 0, 0, mtime_unix);
                     if (rc != 0) break;
                 }
             }
@@ -191,13 +255,19 @@ static int scan_upper_recursive(const wchar_t *dir_w, const char *dir_norm, int 
 
         {
             overlay_diff_kind_t kind = OV_DIFF_UPPER;
-            uint32_t mode = is_dir ? 0040755U : 0100644U;
+            uint32_t mode = 0;
+            uint32_t uid = 0;
+            uint32_t gid = 0;
+            resolve_added_owner_and_mode(lower_ctx, dir_norm, cur_dir_opaque, is_dir,
+                                         fr->fd.dwFileAttributes, opts, &uid, &gid, &mode);
             if (lower_ctx) {
                 ext4_stat_t lst;
                 if (!cur_dir_opaque && ext4_vfs_lower_stat(lower_ctx, child_norm, &lst) == 0) {
                     kind = OV_DIFF_MODIFIED;
                     rep->summary.modified_count++;
                     mode = lst.mode;
+                    uid = lst.uid;
+                    gid = lst.gid;
                 } else {
                     kind = OV_DIFF_ADDED;
                     rep->summary.added_count++;
@@ -207,14 +277,14 @@ static int scan_upper_recursive(const wchar_t *dir_w, const char *dir_norm, int 
             }
 
             if (collect_entries) {
-                rc = diff_report_add_entry(rep, kind, child_norm, is_dir, fsize, mode, mtime_unix);
+                rc = diff_report_add_entry(rep, kind, child_norm, is_dir, fsize, mode, uid, gid, mtime_unix);
                 if (rc != 0) break;
             }
         }
 
         if (is_dir) {
             rc = scan_upper_recursive(fr->child_w, child_norm, cur_dir_opaque,
-                                      lower_ctx, collect_entries, depth + 1, rep);
+                                      lower_ctx, opts, collect_entries, depth + 1, rep);
             if (rc != 0) break;
         }
     } while (FindNextFileW(hfind, &fr->fd));
@@ -224,11 +294,12 @@ static int scan_upper_recursive(const wchar_t *dir_w, const char *dir_norm, int 
     return rc;
 }
 
-int overlay_tools_scan(const char *upper_dir_utf8,
-                       ext4_vfs_ctx_t *lower_ctx_opt,
-                       const overlay_lower_identity_t *expected_opt,
-                       int collect_entries,
-                       overlay_diff_report_t *out_report) {
+int overlay_tools_scan_ex(const char *upper_dir_utf8,
+                          ext4_vfs_ctx_t *lower_ctx_opt,
+                          const overlay_lower_identity_t *expected_opt,
+                          const overlay_export_options_t *opts_opt,
+                          int collect_entries,
+                          overlay_diff_report_t *out_report) {
     wchar_t full_w[1024];
     DWORD attrs;
     int rc;
@@ -248,11 +319,19 @@ int overlay_tools_scan(const char *upper_dir_utf8,
         return -ENOTDIR;
     }
 
-    rc = scan_upper_recursive(full_w, "/", 0, lower_ctx_opt, collect_entries, 0, out_report);
+    rc = scan_upper_recursive(full_w, "/", 0, lower_ctx_opt, opts_opt, collect_entries, 0, out_report);
     if (rc != 0) {
         overlay_tools_free_diff_report(out_report);
     }
     return rc;
+}
+
+int overlay_tools_scan(const char *upper_dir_utf8,
+                       ext4_vfs_ctx_t *lower_ctx_opt,
+                       const overlay_lower_identity_t *expected_opt,
+                       int collect_entries,
+                       overlay_diff_report_t *out_report) {
+    return overlay_tools_scan_ex(upper_dir_utf8, lower_ctx_opt, expected_opt, NULL, collect_entries, out_report);
 }
 
 void overlay_tools_free_diff_report(overlay_diff_report_t *report) {
@@ -485,49 +564,96 @@ static int tar_write_zero_pad(FILE *fp, size_t data_len, uint64_t *io_total) {
 }
 
 static void tar_build_header(uint8_t hdr[512], const char *name, char typeflag,
-                             uint32_t mode, uint64_t size, uint64_t mtime_unix) {
+                             uint32_t mode, uint32_t uid, uint32_t gid,
+                             uint64_t size, uint64_t mtime_unix) {
     unsigned int sum = 0;
+    uint32_t oct_uid = (uid <= 07777777U) ? uid : 07777777U;
+    uint32_t oct_gid = (gid <= 07777777U) ? gid : 07777777U;
     memset(hdr, 0, 512);
     strncpy_s((char *)hdr, 100, name, _TRUNCATE);
     _snprintf_s((char *)(hdr + 100), 8, _TRUNCATE, "%07o", mode & 07777U);
-    _snprintf_s((char *)(hdr + 108), 8, _TRUNCATE, "%07o", 0U);
-    _snprintf_s((char *)(hdr + 116), 8, _TRUNCATE, "%07o", 0U);
+    _snprintf_s((char *)(hdr + 108), 8, _TRUNCATE, "%07o", (unsigned)oct_uid);
+    _snprintf_s((char *)(hdr + 116), 8, _TRUNCATE, "%07o", (unsigned)oct_gid);
     _snprintf_s((char *)(hdr + 124), 12, _TRUNCATE, "%011llo", (unsigned long long)size);
     _snprintf_s((char *)(hdr + 136), 12, _TRUNCATE, "%011llo", (unsigned long long)mtime_unix);
     memset(hdr + 148, ' ', 8);
     hdr[156] = (uint8_t)typeflag;
     memcpy(hdr + 257, "ustar\0", 6);
     memcpy(hdr + 263, "00", 2);
-    strcpy_s((char *)(hdr + 265), 32, "zeroext4");
-    strcpy_s((char *)(hdr + 297), 32, "zeroext4");
+    if (uid == 0U) {
+        strcpy_s((char *)(hdr + 265), 32, "root");
+    }
+    if (gid == 0U) {
+        strcpy_s((char *)(hdr + 297), 32, "root");
+    }
     for (int i = 0; i < 512; i++) sum += hdr[i];
     _snprintf_s((char *)(hdr + 148), 8, _TRUNCATE, "%06o", sum);
     hdr[154] = '\0';
     hdr[155] = ' ';
 }
 
-static int tar_write_pax_if_long(FILE *fp, const char *tar_path, uint64_t mtime_unix, uint64_t *io_total) {
+static size_t format_pax_kv(char *out, size_t out_sz, const char *key, const char *val) {
+    size_t klen = strlen(key);
+    size_t vlen = strlen(val);
+    size_t total_len = 0;
+    for (int pass = 0; pass < 3; pass++) {
+        size_t body = 1U + klen + 1U + vlen + 1U; /* " key=val\n" */
+        size_t digits = 1U;
+        size_t tmp = total_len ? total_len : (body + 4U);
+        while (tmp >= 10U) { digits++; tmp /= 10U; }
+        total_len = digits + body;
+    }
+    _snprintf_s(out, out_sz, _TRUNCATE, "%zu %s=%s\n", total_len, key, val);
+    return strlen(out);
+}
+
+static int tar_write_pax_if_needed(FILE *fp, const char *tar_path,
+                                   uint32_t uid, uint32_t gid,
+                                   uint64_t mtime_unix, uint64_t *io_total) {
     size_t plen = strlen(tar_path);
-    if (plen <= 99U) return 0;
+    int need_path = (plen > 99U) ? 1 : 0;
+    int need_uid = (uid > 07777777U) ? 1 : 0;
+    int need_gid = (gid > 07777777U) ? 1 : 0;
+    if (!need_path && !need_uid && !need_gid) return 0;
 
     {
-        char rec[1400];
+        char rec[1600];
+        char line[1450];
+        char num[32];
         char pax_name[128];
         uint8_t pax_hdr[512];
-        size_t total_len = 0;
-        for (int pass = 0; pass < 3; pass++) {
-            size_t body = strlen(" path=") + plen + 1U;
-            size_t digits = 1;
-            size_t tmp = total_len ? total_len : (body + 4U);
-            while (tmp >= 10U) { digits++; tmp /= 10U; }
-            total_len = digits + body;
+        size_t pos = 0;
+        rec[0] = '\0';
+
+        if (need_path) {
+            size_t n = format_pax_kv(line, sizeof(line), "path", tar_path);
+            if (pos + n < sizeof(rec)) {
+                memcpy(rec + pos, line, n + 1U);
+                pos += n;
+            }
         }
-        _snprintf_s(rec, sizeof(rec), _TRUNCATE, "%zu path=%s\n", total_len, tar_path);
+        if (need_uid) {
+            _snprintf_s(num, sizeof(num), _TRUNCATE, "%u", (unsigned)uid);
+            size_t n = format_pax_kv(line, sizeof(line), "uid", num);
+            if (pos + n < sizeof(rec)) {
+                memcpy(rec + pos, line, n + 1U);
+                pos += n;
+            }
+        }
+        if (need_gid) {
+            _snprintf_s(num, sizeof(num), _TRUNCATE, "%u", (unsigned)gid);
+            size_t n = format_pax_kv(line, sizeof(line), "gid", num);
+            if (pos + n < sizeof(rec)) {
+                memcpy(rec + pos, line, n + 1U);
+                pos += n;
+            }
+        }
+
         _snprintf_s(pax_name, sizeof(pax_name), _TRUNCATE, "PaxHeaders/%u", (unsigned)GetCurrentProcessId());
-        tar_build_header(pax_hdr, pax_name, 'x', 0644U, (uint64_t)strlen(rec), mtime_unix);
+        tar_build_header(pax_hdr, pax_name, 'x', 0644U, 0U, 0U, (uint64_t)pos, mtime_unix);
         if (tar_write_all(fp, pax_hdr, 512, io_total) != 0) return -EIO;
-        if (tar_write_all(fp, rec, strlen(rec), io_total) != 0) return -EIO;
-        if (tar_write_zero_pad(fp, strlen(rec), io_total) != 0) return -EIO;
+        if (tar_write_all(fp, rec, pos, io_total) != 0) return -EIO;
+        if (tar_write_zero_pad(fp, pos, io_total) != 0) return -EIO;
     }
     return 0;
 }
@@ -619,10 +745,12 @@ static int build_manifest_json(const overlay_diff_report_t *rep, char **out_json
         sb_append(&sb, ", \"path\": ");
         sb_append_json_str(&sb, e->path);
         _snprintf_s(num, sizeof(num), _TRUNCATE,
-                    ", \"is_dir\": %s, \"size\": %llu, \"mode\": %u, \"mtime\": %llu}%s\n",
+                    ", \"is_dir\": %s, \"size\": %llu, \"mode\": %u, \"uid\": %u, \"gid\": %u, \"mtime\": %llu}%s\n",
                     e->is_dir ? "true" : "false",
                     (unsigned long long)e->size,
                     (unsigned)e->mode,
+                    (unsigned)e->uid,
+                    (unsigned)e->gid,
                     (unsigned long long)e->mtime_unix,
                     (i + 1 < rep->entry_count) ? "," : "");
         sb_append(&sb, num);
@@ -648,11 +776,12 @@ static int join_upper_rel_w(const wchar_t *upper_w, const char *norm_path, wchar
     return 0;
 }
 
-int overlay_tools_export_tar(const char *upper_dir_utf8,
-                             ext4_vfs_ctx_t *lower_ctx_opt,
-                             const overlay_lower_identity_t *expected_opt,
-                             const char *output_tar_utf8,
-                             overlay_export_summary_t *out_summary) {
+int overlay_tools_export_tar_ex(const char *upper_dir_utf8,
+                                ext4_vfs_ctx_t *lower_ctx_opt,
+                                const overlay_lower_identity_t *expected_opt,
+                                const overlay_export_options_t *opts_opt,
+                                const char *output_tar_utf8,
+                                overlay_export_summary_t *out_summary) {
     overlay_diff_report_t rep;
     wchar_t upper_w[1024];
     wchar_t out_w[1024];
@@ -672,7 +801,7 @@ int overlay_tools_export_tar(const char *upper_dir_utf8,
     if (rc != 0) return rc;
     if (ext4_utf8_to_wide(output_tar_utf8, out_w, _countof(out_w)) != 0) return -EINVAL;
 
-    rc = overlay_tools_scan(upper_dir_utf8, lower_ctx_opt, expected_opt, 1, &rep);
+    rc = overlay_tools_scan_ex(upper_dir_utf8, lower_ctx_opt, expected_opt, opts_opt, 1, &rep);
     if (rc != 0) return rc;
 
     rc = build_manifest_json(&rep, &manifest, &manifest_len);
@@ -698,7 +827,7 @@ int overlay_tools_export_tar(const char *upper_dir_utf8,
     /* 1. Write manifest.json */
     {
         uint8_t hdr[512];
-        tar_build_header(hdr, "manifest.json", '0', 0644U, (uint64_t)manifest_len, 0);
+        tar_build_header(hdr, "manifest.json", '0', 0644U, 0U, 0U, (uint64_t)manifest_len, 0);
         rc = tar_write_all(fp, hdr, 512, &total_bytes);
         if (rc == 0) rc = tar_write_all(fp, manifest, manifest_len, &total_bytes);
         if (rc == 0) rc = tar_write_zero_pad(fp, manifest_len, &total_bytes);
@@ -719,9 +848,10 @@ int overlay_tools_export_tar(const char *upper_dir_utf8,
             if (rel[0] == '\0') continue;
             if (e->is_dir) {
                 _snprintf_s(tar_path, sizeof(tar_path), _TRUNCATE, "files/%s/", rel);
-                rc = tar_write_pax_if_long(fp, tar_path, e->mtime_unix, &total_bytes);
+                rc = tar_write_pax_if_needed(fp, tar_path, e->uid, e->gid, e->mtime_unix, &total_bytes);
                 if (rc != 0) break;
-                tar_build_header(hdr, tar_path, '5', e->mode ? e->mode : 0755U, 0, e->mtime_unix);
+                tar_build_header(hdr, tar_path, '5', e->mode ? e->mode : 0755U,
+                                 e->uid, e->gid, 0, e->mtime_unix);
                 rc = tar_write_all(fp, hdr, 512, &total_bytes);
                 if (rc == 0) exported_cnt++;
             } else {
@@ -746,9 +876,10 @@ int overlay_tools_export_tar(const char *upper_dir_utf8,
                 remaining = (uint64_t)fsz.QuadPart;
 
                 _snprintf_s(tar_path, sizeof(tar_path), _TRUNCATE, "files/%s", rel);
-                rc = tar_write_pax_if_long(fp, tar_path, e->mtime_unix, &total_bytes);
+                rc = tar_write_pax_if_needed(fp, tar_path, e->uid, e->gid, e->mtime_unix, &total_bytes);
                 if (rc == 0) {
-                    tar_build_header(hdr, tar_path, '0', e->mode ? e->mode : 0644U, remaining, e->mtime_unix);
+                    tar_build_header(hdr, tar_path, '0', e->mode ? e->mode : 0644U,
+                                     e->uid, e->gid, remaining, e->mtime_unix);
                     rc = tar_write_all(fp, hdr, 512, &total_bytes);
                 }
                 while (rc == 0 && remaining > 0) {
@@ -791,6 +922,14 @@ int overlay_tools_export_tar(const char *upper_dir_utf8,
 
     overlay_tools_free_diff_report(&rep);
     return rc;
+}
+
+int overlay_tools_export_tar(const char *upper_dir_utf8,
+                             ext4_vfs_ctx_t *lower_ctx_opt,
+                             const overlay_lower_identity_t *expected_opt,
+                             const char *output_tar_utf8,
+                             overlay_export_summary_t *out_summary) {
+    return overlay_tools_export_tar_ex(upper_dir_utf8, lower_ctx_opt, expected_opt, NULL, output_tar_utf8, out_summary);
 }
 
 static int reset_delete_tree_w(const wchar_t *path_w, uint64_t *io_removed) {

@@ -300,6 +300,12 @@ namespace ZeroExt4.Gui.Models
         [JsonPropertyName("mode")]
         public uint Mode { get; set; }
 
+        [JsonPropertyName("uid")]
+        public uint Uid { get; set; }
+
+        [JsonPropertyName("gid")]
+        public uint Gid { get; set; }
+
         [JsonPropertyName("ino")]
         public uint Inode { get; set; }
 
@@ -319,6 +325,9 @@ namespace ZeroExt4.Gui.Models
 
         [JsonIgnore]
         public string ModeOctal => Convert.ToString(Mode & 0xFFF, 8).PadLeft(4, '0');
+
+        [JsonIgnore]
+        public string OwnerFormatted => $"{Uid}:{Gid}";
 
         [JsonIgnore]
         public string ModifiedFormatted
@@ -535,6 +544,12 @@ namespace ZeroExt4.Gui.Models
 
         [JsonPropertyName("mode")]
         public uint Mode { get; set; }
+
+        [JsonPropertyName("uid")]
+        public uint Uid { get; set; }
+
+        [JsonPropertyName("gid")]
+        public uint Gid { get; set; }
 
         [JsonPropertyName("mtime")]
         public ulong MtimeUnix { get; set; }

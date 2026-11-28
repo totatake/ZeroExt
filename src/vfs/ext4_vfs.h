@@ -37,6 +37,12 @@ typedef struct ext4_mount_config {
     int         enable_rw_fast_io;    /* 1 = opt-in batched extent read/write in --rw mode (default 0: upstream e2fsprogs) */
     int         has_file_info_timeout; /* 1 = use explicit file_info_timeout below */
     uint32_t    file_info_timeout;     /* WinFsp FileInfoTimeout ms, or (uint32_t)-1 for INFINITE */
+    uint32_t    create_uid;            /* Default UID for newly created inodes (default 0) */
+    uint32_t    create_gid;            /* Default GID for newly created inodes (default 0) */
+    int         has_create_gid;        /* 1 = explicit --gid specified (overrides setgid GID inheritance) */
+    int         inherit_owner;         /* 1 = inherit UID/GID from parent directory on create/mkdir/symlink */
+    uint16_t    create_fmode;          /* Default permission bits for new regular files (0 => 0644) */
+    uint16_t    create_dmode;          /* Default permission bits for new directories (0 => 0755) */
 } ext4_mount_config_t;
 
 typedef struct ext4_vfs_ctx {
@@ -52,6 +58,12 @@ typedef struct ext4_vfs_ctx {
     int                       enable_rw_fast_io;
     int                       has_file_info_timeout;
     uint32_t                  file_info_timeout;
+    uint32_t                  create_uid;
+    uint32_t                  create_gid;
+    int                       has_create_gid;
+    int                       inherit_owner;
+    uint16_t                  create_fmode;
+    uint16_t                  create_dmode;
     ext4_journal_state_t      journal_state;
     char                      source_path[1024];
     uint64_t                  partition_offset;
@@ -132,6 +144,10 @@ uint64_t ext4_vfs_get_ci_collision_count(ext4_vfs_ctx_t *ctx);
 void ext4_fill_stat_from_inode(ext4_vfs_ctx_t *ctx, ext2_ino_t ino,
                                const struct ext2_inode_large *ino_st,
                                const char *leaf_name, ext4_stat_t *out_st);
+void ext4_inode_set_owner(struct ext2_inode_large *ino_st, uint32_t uid, uint32_t gid);
+void ext4_vfs_resolve_new_owner(const ext4_vfs_ctx_t *ctx,
+                                const struct ext2_inode_large *parent_st,
+                                uint32_t *out_uid, uint32_t *out_gid);
 uint64_t ext4_now_filetime(void);
 void ext4_inode_touch_times(struct ext2_inode_large *ino_st, int touch_atime,
                             int touch_mtime, int touch_ctime);

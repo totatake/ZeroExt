@@ -185,6 +185,11 @@ namespace ZeroExt4.Gui.ViewModels
         private bool _enableDirectIo = true;
         private bool _enableRwFastIo;
         private bool _caseSensitive;
+        private string _createUidText = string.Empty;
+        private string _createGidText = string.Empty;
+        private bool _inheritOwner;
+        private string _createFileModeText = "0644";
+        private string _createDirModeText = "0755";
         private string _cacheBlocksText = "2048";
         private bool _roFallbackOnDirty = true;
         private bool _forceDirty;
@@ -565,6 +570,7 @@ namespace ZeroExt4.Gui.ViewModels
                     OnPropertyChanged(nameof(IsReadOnlyMode));
                     OnPropertyChanged(nameof(IsOverlayMode));
                     OnPropertyChanged(nameof(IsReadWriteMode));
+                    OnPropertyChanged(nameof(IsWriteCapableMode));
                     OnPropertyChanged(nameof(DirectIoEditable));
                     OnPropertyChanged(nameof(EffectiveDirectIo));
                     OnPropertyChanged(nameof(ShowDirtyRwWarning));
@@ -577,6 +583,8 @@ namespace ZeroExt4.Gui.ViewModels
         public bool IsReadOnlyMode => SelectedMode == MountMode.ReadOnly;
         public bool IsOverlayMode => SelectedMode == MountMode.Overlay;
         public bool IsReadWriteMode => SelectedMode == MountMode.ReadWrite;
+        public bool IsWriteCapableMode => SelectedMode == MountMode.ReadWrite || SelectedMode == MountMode.Overlay;
+        public bool IsExplicitUidGidEnabled => !InheritOwner;
 
         public bool DirectIoEditable => SelectedMode != MountMode.ReadWrite;
         public bool EffectiveDirectIo => DirectIoEditable && EnableDirectIo;
@@ -741,6 +749,67 @@ namespace ZeroExt4.Gui.ViewModels
             }
         }
 
+        public string CreateUidText
+        {
+            get => _createUidText;
+            set
+            {
+                if (SetProperty(ref _createUidText, value))
+                {
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
+        public string CreateGidText
+        {
+            get => _createGidText;
+            set
+            {
+                if (SetProperty(ref _createGidText, value))
+                {
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
+        public bool InheritOwner
+        {
+            get => _inheritOwner;
+            set
+            {
+                if (SetProperty(ref _inheritOwner, value))
+                {
+                    OnPropertyChanged(nameof(IsExplicitUidGidEnabled));
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
+        public string CreateFileModeText
+        {
+            get => _createFileModeText;
+            set
+            {
+                if (SetProperty(ref _createFileModeText, value))
+                {
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
+        public string CreateDirModeText
+        {
+            get => _createDirModeText;
+            set
+            {
+                if (SetProperty(ref _createDirModeText, value))
+                {
+                    NotifyMountStateChanged();
+                }
+            }
+        }
+
         public string CacheBlocksText
         {
             get => _cacheBlocksText;
@@ -898,6 +967,31 @@ namespace ZeroExt4.Gui.ViewModels
                 if (!uint.TryParse(CacheBlocksText, out uint cb) || cb == 0)
                 {
                     return LocalizationService.Get("Str_ValInvalidCacheBlocks");
+                }
+
+                if (IsWriteCapableMode)
+                {
+                    if (!InheritOwner)
+                    {
+                        if (!string.IsNullOrWhiteSpace(CreateUidText) && !uint.TryParse(CreateUidText.Trim(), out _))
+                        {
+                            return LocalizationService.Get("Str_ValInvalidUidGid");
+                        }
+                        if (!string.IsNullOrWhiteSpace(CreateGidText) && !uint.TryParse(CreateGidText.Trim(), out _))
+                        {
+                            return LocalizationService.Get("Str_ValInvalidUidGid");
+                        }
+                    }
+                    if (!string.IsNullOrWhiteSpace(CreateFileModeText) &&
+                        !ZeroExt4ArgBuilder.TryParseOctalPermission(CreateFileModeText, out _))
+                    {
+                        return LocalizationService.Get("Str_ValInvalidPosixMode");
+                    }
+                    if (!string.IsNullOrWhiteSpace(CreateDirModeText) &&
+                        !ZeroExt4ArgBuilder.TryParseOctalPermission(CreateDirModeText, out _))
+                    {
+                        return LocalizationService.Get("Str_ValInvalidPosixMode");
+                    }
                 }
 
                 return string.Empty;
@@ -1331,6 +1425,12 @@ namespace ZeroExt4.Gui.ViewModels
             {
                 cacheBlocks = 2048;
             }
+            uint? parsedUid = !string.IsNullOrWhiteSpace(CreateUidText) && uint.TryParse(CreateUidText.Trim(), out uint u)
+                ? u
+                : null;
+            uint? parsedGid = !string.IsNullOrWhiteSpace(CreateGidText) && uint.TryParse(CreateGidText.Trim(), out uint g)
+                ? g
+                : null;
 
             return new MountRequest
             {
@@ -1342,6 +1442,11 @@ namespace ZeroExt4.Gui.ViewModels
                 EnableDirectIo = DirectIoEditable && EnableDirectIo,
                 EnableRwFastIo = SelectedMode == MountMode.ReadWrite && EnableRwFastIo,
                 CaseSensitive = CaseSensitive,
+                CreateUid = parsedUid,
+                CreateGid = parsedGid,
+                InheritOwner = InheritOwner,
+                CreateFileModeOctal = string.IsNullOrWhiteSpace(CreateFileModeText) ? "0644" : CreateFileModeText.Trim(),
+                CreateDirModeOctal = string.IsNullOrWhiteSpace(CreateDirModeText) ? "0755" : CreateDirModeText.Trim(),
                 CacheBlocks = cacheBlocks,
                 RoFallbackOnDirty = RoFallbackOnDirty,
                 ForceDirty = ForceDirty,
@@ -1383,12 +1488,18 @@ namespace ZeroExt4.Gui.ViewModels
             OverlayActionNotice = string.Empty;
             try
             {
+                MountRequest curReq = BuildCurrentMountRequest();
                 OverlayStatusResponse resp = await _coreClient.GetOverlayDiffAsync(
                     OverlayUpperDir.Trim(),
                     SelectedPartition?.ParentDisk.DevicePath,
                     SelectedPartition?.Info.PartitionNumber,
                     CaseSensitive,
-                    diff: true);
+                    diff: true,
+                    createUid: curReq.CreateUid,
+                    createGid: curReq.CreateGid,
+                    inheritOwner: curReq.InheritOwner,
+                    fmodeOctal: curReq.CreateFileModeOctal,
+                    dmodeOctal: curReq.CreateDirModeOctal);
 
                 _marshalToUi(() =>
                 {
@@ -1429,12 +1540,18 @@ namespace ZeroExt4.Gui.ViewModels
             OverlayActionNotice = string.Empty;
             try
             {
+                MountRequest curReq = BuildCurrentMountRequest();
                 OverlayExportResponse resp = await _coreClient.ExportOverlayAsync(
                     OverlayUpperDir.Trim(),
                     outputTarPath,
                     SelectedPartition?.ParentDisk.DevicePath,
                     SelectedPartition?.Info.PartitionNumber,
-                    CaseSensitive);
+                    CaseSensitive,
+                    createUid: curReq.CreateUid,
+                    createGid: curReq.CreateGid,
+                    inheritOwner: curReq.InheritOwner,
+                    fmodeOctal: curReq.CreateFileModeOctal,
+                    dmodeOctal: curReq.CreateDirModeOctal);
 
                 string notice = LocalizationService.Format(
                     "Str_OverlayExportDoneFmt",
@@ -1666,6 +1783,11 @@ namespace ZeroExt4.Gui.ViewModels
                 _enableDirectIo = preset.EnableDirectIo;
                 _enableRwFastIo = preset.EnableRwFastIo;
                 _caseSensitive = preset.CaseSensitive;
+                _createUidText = preset.CreateUid.HasValue ? preset.CreateUid.Value.ToString() : string.Empty;
+                _createGidText = preset.CreateGid.HasValue ? preset.CreateGid.Value.ToString() : string.Empty;
+                _inheritOwner = preset.InheritOwner;
+                _createFileModeText = string.IsNullOrWhiteSpace(preset.CreateFileModeOctal) ? "0644" : preset.CreateFileModeOctal;
+                _createDirModeText = string.IsNullOrWhiteSpace(preset.CreateDirModeOctal) ? "0755" : preset.CreateDirModeOctal;
                 _cacheBlocksText = (preset.CacheBlocks > 0 ? preset.CacheBlocks : 2048).ToString();
                 _roFallbackOnDirty = preset.RoFallbackOnDirty;
                 if (IsReadWriteBlockedByHealth && _selectedMode == MountMode.ReadWrite)
@@ -1678,6 +1800,7 @@ namespace ZeroExt4.Gui.ViewModels
                 OnPropertyChanged(nameof(IsReadOnlyMode));
                 OnPropertyChanged(nameof(IsOverlayMode));
                 OnPropertyChanged(nameof(IsReadWriteMode));
+                OnPropertyChanged(nameof(IsWriteCapableMode));
                 OnPropertyChanged(nameof(DirectIoEditable));
                 OnPropertyChanged(nameof(EffectiveDirectIo));
                 OnPropertyChanged(nameof(ShowDirtyRwWarning));
@@ -1689,6 +1812,12 @@ namespace ZeroExt4.Gui.ViewModels
                 OnPropertyChanged(nameof(EnableDirectIo));
                 OnPropertyChanged(nameof(EnableRwFastIo));
                 OnPropertyChanged(nameof(CaseSensitive));
+                OnPropertyChanged(nameof(CreateUidText));
+                OnPropertyChanged(nameof(CreateGidText));
+                OnPropertyChanged(nameof(InheritOwner));
+                OnPropertyChanged(nameof(IsExplicitUidGidEnabled));
+                OnPropertyChanged(nameof(CreateFileModeText));
+                OnPropertyChanged(nameof(CreateDirModeText));
                 OnPropertyChanged(nameof(CacheBlocksText));
                 OnPropertyChanged(nameof(RoFallbackOnDirty));
             }
@@ -1698,18 +1827,30 @@ namespace ZeroExt4.Gui.ViewModels
                 _enableDirectIo = true;
                 _enableRwFastIo = false;
                 _caseSensitive = false;
+                _createUidText = string.Empty;
+                _createGidText = string.Empty;
+                _inheritOwner = false;
+                _createFileModeText = "0644";
+                _createDirModeText = "0755";
                 _roFallbackOnDirty = true;
                 _forceDirty = false;
                 OnPropertyChanged(nameof(SelectedMode));
                 OnPropertyChanged(nameof(IsReadOnlyMode));
                 OnPropertyChanged(nameof(IsOverlayMode));
                 OnPropertyChanged(nameof(IsReadWriteMode));
+                OnPropertyChanged(nameof(IsWriteCapableMode));
                 OnPropertyChanged(nameof(DirectIoEditable));
                 OnPropertyChanged(nameof(EffectiveDirectIo));
                 OnPropertyChanged(nameof(ShowDirtyRwWarning));
                 OnPropertyChanged(nameof(EnableDirectIo));
                 OnPropertyChanged(nameof(EnableRwFastIo));
                 OnPropertyChanged(nameof(CaseSensitive));
+                OnPropertyChanged(nameof(CreateUidText));
+                OnPropertyChanged(nameof(CreateGidText));
+                OnPropertyChanged(nameof(InheritOwner));
+                OnPropertyChanged(nameof(IsExplicitUidGidEnabled));
+                OnPropertyChanged(nameof(CreateFileModeText));
+                OnPropertyChanged(nameof(CreateDirModeText));
                 OnPropertyChanged(nameof(RoFallbackOnDirty));
                 OnPropertyChanged(nameof(ForceDirty));
             }
@@ -1719,6 +1860,12 @@ namespace ZeroExt4.Gui.ViewModels
         {
             if (SelectedPartition == null) return;
             if (!uint.TryParse(CacheBlocksText, out uint cb) || cb == 0) cb = 2048;
+            uint? parsedUid = !string.IsNullOrWhiteSpace(CreateUidText) && uint.TryParse(CreateUidText.Trim(), out uint u)
+                ? u
+                : null;
+            uint? parsedGid = !string.IsNullOrWhiteSpace(CreateGidText) && uint.TryParse(CreateGidText.Trim(), out uint g)
+                ? g
+                : null;
 
             _settings.VolumePresets[SelectedPartition.UniqueKey] = new VolumePreset
             {
@@ -1729,6 +1876,11 @@ namespace ZeroExt4.Gui.ViewModels
                 EnableDirectIo = EnableDirectIo,
                 EnableRwFastIo = EnableRwFastIo,
                 CaseSensitive = CaseSensitive,
+                CreateUid = parsedUid,
+                CreateGid = parsedGid,
+                InheritOwner = InheritOwner,
+                CreateFileModeOctal = string.IsNullOrWhiteSpace(CreateFileModeText) ? "0644" : CreateFileModeText.Trim(),
+                CreateDirModeOctal = string.IsNullOrWhiteSpace(CreateDirModeText) ? "0755" : CreateDirModeText.Trim(),
                 CacheBlocks = cb,
                 RoFallbackOnDirty = RoFallbackOnDirty,
             };

@@ -785,6 +785,49 @@
                                                            Margin="20,0,0,8"
                                                            Visibility="{Binding IsOverlayMode, Converter={StaticResource BoolToVis}}" />
 
+                                                <Border Background="{DynamicResource CardAltBackgroundBrush}"
+                                                        BorderBrush="{DynamicResource BorderBrush}"
+                                                        BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,4,0,10"
+                                                        Visibility="{Binding IsWriteCapableMode, Converter={StaticResource BoolToVis}}">
+                                                    <StackPanel>
+                                                        <TextBlock Text="{DynamicResource Str_PosixOwnerTitle}"
+                                                                   FontWeight="SemiBold" FontSize="12.5" Margin="0,0,0,4" />
+                                                        <TextBlock Text="{DynamicResource Str_PosixOwnerNote}"
+                                                                   FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"
+                                                                   TextWrapping="Wrap" Margin="0,0,0,6" />
+                                                        <CheckBox Content="{DynamicResource Str_InheritOwnerCheck}"
+                                                                  IsChecked="{Binding InheritOwner}" Margin="0,0,0,6" />
+                                                        <WrapPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                            <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                                                                <TextBlock Text="{DynamicResource Str_PosixUidLabel}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                                <TextBox Width="74" FontFamily="Consolas"
+                                                                         IsEnabled="{Binding IsExplicitUidGidEnabled}"
+                                                                         ToolTip="Default: 0 (root)"
+                                                                         Text="{Binding CreateUidText, UpdateSourceTrigger=PropertyChanged}" />
+                                                            </StackPanel>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                                                                <TextBlock Text="{DynamicResource Str_PosixGidLabel}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                                <TextBox Width="74" FontFamily="Consolas"
+                                                                         IsEnabled="{Binding IsExplicitUidGidEnabled}"
+                                                                         ToolTip="Default: 0 (root)"
+                                                                         Text="{Binding CreateGidText, UpdateSourceTrigger=PropertyChanged}" />
+                                                            </StackPanel>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                                                                <TextBlock Text="{DynamicResource Str_PosixFmodeLabel}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                                <TextBox Width="68" FontFamily="Consolas"
+                                                                         ToolTip="Octal file mode (default: 0644)"
+                                                                         Text="{Binding CreateFileModeText, UpdateSourceTrigger=PropertyChanged}" />
+                                                            </StackPanel>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                                <TextBlock Text="{DynamicResource Str_PosixDmodeLabel}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                                <TextBox Width="68" FontFamily="Consolas"
+                                                                         ToolTip="Octal directory mode (default: 0755)"
+                                                                         Text="{Binding CreateDirModeText, UpdateSourceTrigger=PropertyChanged}" />
+                                                            </StackPanel>
+                                                        </WrapPanel>
+                                                    </StackPanel>
+                                                </Border>
+
                                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
                                                     <TextBlock Text="{DynamicResource Str_CacheBlocksLabel}" VerticalAlignment="Center" Margin="0,0,8,0" />
                                                     <TextBox Width="90" Text="{Binding CacheBlocksText, UpdateSourceTrigger=PropertyChanged}" />
@@ -1033,6 +1076,7 @@
                                     <DataGridTextColumn Header="{DynamicResource Str_ColName}" Binding="{Binding Name}" Width="*" />
                                     <DataGridTextColumn Header="{DynamicResource Str_ColSize}" Binding="{Binding SizeFormatted}" Width="110" />
                                     <DataGridTextColumn Header="{DynamicResource Str_ColMode}" Binding="{Binding ModeOctal}" Width="80" />
+                                    <DataGridTextColumn Header="{DynamicResource Str_ColOwner}" Binding="{Binding OwnerFormatted}" Width="90" />
                                     <DataGridTextColumn Header="{DynamicResource Str_ColInode}" Binding="{Binding Inode}" Width="85" />
                                     <DataGridTextColumn Header="{DynamicResource Str_ColModified}" Binding="{Binding ModifiedFormatted}" Width="145" />
                                 </DataGrid.Columns>

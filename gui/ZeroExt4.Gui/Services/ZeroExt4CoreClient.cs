@@ -137,10 +137,16 @@ namespace ZeroExt4.Gui.Services
             uint? partitionNumber = null,
             bool caseSensitive = false,
             bool diff = true,
+            uint? createUid = null,
+            uint? createGid = null,
+            bool inheritOwner = false,
+            string? fmodeOctal = null,
+            string? dmodeOctal = null,
             CancellationToken ct = default)
         {
             List<string> args = ZeroExt4ArgBuilder.BuildOverlayStatusArgs(
-                upperDir, lowerSource, partitionNumber, caseSensitive, diff, json: true);
+                upperDir, lowerSource, partitionNumber, caseSensitive, diff, json: true,
+                createUid, createGid, inheritOwner, fmodeOctal, dmodeOctal);
             CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
             if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
             {
@@ -176,10 +182,16 @@ namespace ZeroExt4.Gui.Services
             string? lowerSource = null,
             uint? partitionNumber = null,
             bool caseSensitive = false,
+            uint? createUid = null,
+            uint? createGid = null,
+            bool inheritOwner = false,
+            string? fmodeOctal = null,
+            string? dmodeOctal = null,
             CancellationToken ct = default)
         {
             List<string> args = ZeroExt4ArgBuilder.BuildOverlayExportArgs(
-                upperDir, outputTarPath, lowerSource, partitionNumber, caseSensitive, json: true);
+                upperDir, outputTarPath, lowerSource, partitionNumber, caseSensitive, json: true,
+                createUid, createGid, inheritOwner, fmodeOctal, dmodeOctal);
             CoreCommandResult res = await RunCommandAsync(args, ct).ConfigureAwait(false);
             if (res.ExitCode != 0 || string.IsNullOrWhiteSpace(res.StdOut))
             {
